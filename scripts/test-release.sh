@@ -379,6 +379,20 @@ check "notes: a section twice fails" grep -q "found 2" <(notes 1.0.0 "$(printf '
 check "notes: a section of headings only fails" grep -q "has no entries" <(notes 1.0.0 "$(printf '## [1.0.0] - 2026-01-02\n\n### Added\n\n')")
 check "notes: 1.0.0 does not match 1.0.01" grep -q "found 0" <(notes 1.0.0 "## [1.0.01] - 2026-01-02")
 
+# --- the lock on its own ---------------------------------------------------------------------
+
+# Two runs with the same pid in the same second (as on two machines) still make different lock commits: the second
+# is refused instead of finding its own commit already there.
+sandbox
+REPO_ROOT="$(checkout)"
+lock_once() { (take_lock >/dev/null 2>&1 && echo "$LOCK_COMMIT"); }
+first="$(lock_once)"
+second="$(lock_once)"
+check "lock: the first run takes it" [ -n "$first" ]
+check "lock: a second run with the same pid in the same second is refused" [ -z "$second" ]
+check "lock: the refusal leaves the first run's lock" [ "$(lock_rev)" = "$first" ]
+REPO_ROOT="$REPO"
+
 # --- the repository's own files --------------------------------------------------------------
 
 # The sandbox above uses its own package.json and CHANGELOG; these are the ones a real release reads. Unreleased may

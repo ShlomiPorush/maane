@@ -184,15 +184,20 @@ create_tag() {
 
 # Takes the release lock: pushes a commit made for this run to LOCK_REF, which git accepts only while the ref does not
 # exist (--force-with-lease with an empty expected value). Another run, or a run that was killed, holds it otherwise.
+# The commit message holds a random nonce: two runs on different machines with the same pid in the same second would
+# otherwise make the same commit, and git reports a push of the commit a ref already holds as up to date.
 take_lock() {
-  local tree
+  local tree held
   tree="$(git_ hash-object -t tree -w /dev/null)"
-  LOCK_COMMIT="$(git_ commit-tree "$tree" -m "Release lock: run ${GITHUB_RUN_ID:-by hand}, pid $$, at $(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+  LOCK_COMMIT="$(git_ commit-tree "$tree" -m "Release lock: run ${GITHUB_RUN_ID:-by hand}, pid $$, at $(date -u +%Y-%m-%dT%H:%M:%SZ), nonce $(random_hex)")"
   if ! git_ push --quiet --force-with-lease="$LOCK_REF:" origin "$LOCK_COMMIT:$LOCK_REF"; then
     LOCK_COMMIT=""
-    die "another release run holds $LOCK_REF on origin. Wait for it to finish. If no release runs (one was killed),
-       read who took it with: git fetch origin $LOCK_REF && git log -1 FETCH_HEAD
-       and remove it with: git push origin --delete $LOCK_REF"
+    held="$(git_ ls-remote origin "$LOCK_REF" | cut -f1)"
+    die "another release run holds $LOCK_REF (${held:-unknown}) on origin. Wait for it to finish.
+       If no release runs (one was killed), read who took it with:
+         git fetch origin $LOCK_REF && git log -1 FETCH_HEAD
+       then remove that lock, and only that one, with:
+         git push --force-with-lease=$LOCK_REF:${held:-<the commit above>} origin :$LOCK_REF"
   fi
 }
 
@@ -201,7 +206,8 @@ cleanup() {
   [ -z "$SRC_DIR" ] || rm -rf "$SRC_DIR"
   if [ -n "$LOCK_COMMIT" ]; then
     git_ push --quiet --force-with-lease="$LOCK_REF:$LOCK_COMMIT" origin ":$LOCK_REF" ||
-      echo "warning: could not remove $LOCK_REF on origin; remove it with: git push origin --delete $LOCK_REF" >&2
+      echo "warning: could not remove $LOCK_REF on origin. If no release runs, remove this run's lock with:
+  git push --force-with-lease=$LOCK_REF:$LOCK_COMMIT origin :$LOCK_REF" >&2
   fi
 }
 
