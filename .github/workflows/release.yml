@@ -1,0 +1,124 @@
+name: Release
+
+# Releases the next version from main on a button press. The commit must pass CI first: when the
+# latest attempt of the newest CI run of this commit on main (ci.yml, started by push or by hand)
+# succeeded, the release reuses it, waiting up to 30 minutes for one that is still running; an older
+# green run never counts. Otherwise, or when its result cannot be read, the release runs the whole CI
+# on the commit itself. scripts/ci-result.sh decides. Then scripts/release.sh, which pushes the
+# release commit and tag together, publishes the image to GHCR (version, then :latest) and creates
+# the GitHub Release from the CHANGELOG section; a reused result is checked once more by this
+# workflow right before it, and the release stops if a newer CI run or attempt appeared meanwhile.
+# With dry_run, the same jobs and checks run and release.sh publishes nothing. A run that stopped
+# halfway is finished by the next run, which ignores the bump: start a new run, since "Re-run failed
+# jobs" keeps the old commit and stops once the release commit is on main. That commit has no CI run
+# of its own, so the next run runs the CI itself. Deploys nothing: the owner deploys
+# (docs/deployment.md).
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version part to increase (ignored while an earlier release is unfinished)
+        type: choice
+        options: [patch, minor, major]
+        required: true
+      dry_run:
+        description: Check everything, publish nothing (for example before the first release)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  find:
+    name: Find a green CI run
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # ci-result.sh ends at most about two minutes after its 30-minute wait (three API calls of up to
+    # 35 seconds each), so it decides before this limit and a slow API gives the CI here, not a failed find.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      reuse: ${{ steps.find.outputs.reuse }}
+      run-id: ${{ steps.find.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Find
+        id: find
+        env:
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Any answer other than a green newest run gives reuse=false, and the CI runs here instead.
+        run: |
+          result="$RUNNER_TEMP/ci-result"
+          scripts/ci-result.sh --sha "$SHA" --wait >"$result"
+          cat "$result" >>"$GITHUB_OUTPUT"
+          grep -qxE 'reuse=(false|true)' "$result" || { echo "No result from ci-result.sh"; exit 1; }
+          if grep -qx 'reuse=true' "$result"; then
+            grep -qxE 'run_id=[0-9]+' "$result" || { echo "No run id from ci-result.sh"; exit 1; }
+          fi
+
+  verify:
+    name: Verify
+    needs: find
+    if: github.ref == 'refs/heads/main' && needs.find.outputs.reuse == 'false'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Release
+    needs: [find, verify]
+    # Releases only on main after a green CI: a reused run (and no CI here), or the CI run here. Any
+    # other state, such as a failed or cancelled find or CI, releases nothing. !cancelled() lets the
+    # job run when verify was skipped, and still lets a cancelled release stop.
+    if: >-
+      !cancelled() && github.ref == 'refs/heads/main' && needs.find.result == 'success' &&
+      ((needs.find.outputs.reuse == 'true' && needs.verify.result == 'skipped') ||
+      (needs.find.outputs.reuse == 'false' && needs.verify.result == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+      # The builder that stores provenance and an SBOM with the image.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Runs in a dry run too, so a dry run checks the reused result as a real release would.
+      - name: Check the reused CI run again
+        if: needs.find.outputs.reuse == 'true'
+        env:
+          VERIFIED_SHA: ${{ github.sha }}
+          RUN_ID: ${{ needs.find.outputs.run-id }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: scripts/ci-result.sh --sha "$VERIFIED_SHA" --expect-run "$RUN_ID"
+      - name: Release
+        # Inputs reach the script through the environment, never through ${{ }} in the script.
+        env:
+          BUMP: ${{ inputs.bump }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          VERIFIED_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
+          args=(--target ghcr --bump "$BUMP" --skip-verify --expect-sha "$VERIFIED_SHA")
+          [ "$DRY_RUN" != true ] || args+=(--dry-run)
+          scripts/release.sh "${args[@]}"
