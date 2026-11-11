@@ -9,7 +9,7 @@ Maane is a self-hosted helpdesk for email only. Mail reaches one Microsoft 365 s
 - Product requirements: `docs/requirements.md`
 - Foundation plan, decisions, order of work, and status: `docs/project-foundation.md`
 
-The foundation plan is the desired state. Items marked planned do not exist yet. Check the repository before assuming a file, command, or feature exists. Today the repository holds the workspace baseline (1a): manifests, the lockfile, `packages/shared` with the locale files, the toolchain image, the guards, `scripts/verify.sh`, CI, and Dependabot; the phase 0 Zendesk backup tool; the server and worker of foundation 1b (sign-in, setup, settings, audit log, job queue); the web UI of 1b (sign-in, setup, two-factor, account, users, settings, audit log), component-tested; the application image, the Compose files, `scripts/local.sh`, and `scripts/try-pr.sh`; and the end-to-end tests. No release workflow exists yet.
+The foundation plan is the desired state. Items marked planned do not exist yet. Check the repository before assuming a file, command, or feature exists. Today the repository holds the workspace baseline (1a): manifests, the lockfile, `packages/shared` with the locale files, the toolchain image, the guards, `scripts/verify.sh`, CI, and Dependabot; the phase 0 Zendesk backup tool; the server and worker of foundation 1b (sign-in, setup, settings, audit log, job queue); the web UI of 1b (sign-in, setup, two-factor, account, users, settings, audit log), component-tested; the application image, the Compose files, `scripts/local.sh`, and `scripts/try-pr.sh`; the end-to-end tests; and the release scripts, the Release workflow, and the deployment notes.
 
 UI follows the `v3-ui-style` skill.
 
@@ -21,7 +21,9 @@ Exists:
 - `config/tsconfig.base.json`: shared compiler settings. `biome.json` stays at the root (see Traps).
 - `docker/toolchain.Dockerfile`: Node, pnpm, git, jq, shellcheck, and shfmt for the scripts and CI.
 - `scripts/verify.sh`, and `scripts/lib/`: `common.sh` (shared helpers), `guards.sh` (repository guards), `test-guards.sh` (plants each violation in a scratch repository and expects its guard to fail).
-- `.github/`: `workflows/ci.yml`, `dependabot.yml`, the pull request template.
+- `scripts/release.sh` and its tests `scripts/test-release.sh`; `scripts/ci-result.sh` (the CI run a release reuses) and its tests `scripts/test-ci-result.sh`; `scripts/test-release-workflow.sh` (the Release workflow's wiring). `scripts/lib/guards.sh` runs the three tests.
+- `.github/`: `workflows/ci.yml`, `workflows/release.yml`, `dependabot.yml`, the pull request template.
+- `docs/deployment.md`: the owner's deployment notes (Traefik, generating `.env` once, the setup window, backup, the restore test, upgrades).
 
 - `packages/zendesk`: the Zendesk API client (the token goes only to the API origin; downloads follow redirects without it, HTTPS only, with a size limit), the archive format (`archive.ts`), one backup run (`backup.ts`), and the offline check (`check.ts`). `src/testing/stand-in.ts` is a stand-in Zendesk API with a second origin for files; tests never reach Zendesk.
 - `apps/zendesk-backup`: the phase 0 command line (`backup`, `check`), bundled by esbuild into `dist/zendesk-backup.mjs` for Node 24 and later. It reads the token from a terminal only and refuses an archive folder inside a Git working tree. How to run it: `docs/zendesk-backup.md`.
@@ -37,7 +39,7 @@ Exists:
 
 Planned, not created (see the architecture table in `docs/project-foundation.md`):
 
-- `scripts/release.sh` and the Release workflow.
+- Nothing in foundation 1b. Later phases are in the plan.
 
 ## Commands
 
@@ -48,14 +50,14 @@ All scripts are Bash for WSL or Linux with Docker. Node, pnpm, shellcheck, and s
 - The web UI alone: `in_toolchain "pnpm --filter @maane/web run typecheck"`, `... run test` (Vitest with happy-dom), `... run build`. `pnpm --filter @maane/web run dev` serves it on port 5173 and sends `/api` to a server on port 8090.
 - `scripts/local.sh <build|up|start|down|status|logs|nuke>`: the development stack on `http://127.0.0.1:8095` (`MAANE_PORT`). Its data directory (default on the Linux file system) holds the database and the generated `postgres.env` and `app.env`, created once and never rewritten. `down` keeps the data; `nuke` asks, then deletes it.
 - `scripts/try-pr.sh <number|status|restore>`: builds a pull request's head in a disposable worktree and runs it as the Compose project `maane-pr` on `http://127.0.0.1:8096` (`MAANE_PR_PORT`), with its own database, secrets, and a first admin whose sign-in `status` points to. `restore` removes all of it. One start or restore at a time: a second one refuses while the first holds the lock (`flock` on `~/.cache/maane/try-pr.lock`).
-- The planned contract for `scripts/release.sh` is in `docs/project-foundation.md`.
+- Releases: the **Release** workflow (Actions, Release, Run workflow on `main`; choose patch, minor, or major; `dry_run` checks everything and publishes nothing). It reuses the newest CI run of the commit on `main` when its latest attempt succeeded (waiting up to 30 minutes for one that still runs, never falling back to an older green run) and otherwise runs the whole CI on the commit through `workflow_call`. `scripts/ci-result.sh` decides, and checks a reused run again right before `scripts/release.sh --target ghcr --bump <patch|minor|major> [--skip-verify --expect-sha SHA] [--dry-run]`: the release commit of `package.json` and `CHANGELOG.md` with an annotated tag pushed together, the image `ghcr.io/shlomiporush/maane` (the version, then `latest`), and the GitHub Release from the `CHANGELOG.md` section. A run that stopped halfway is finished by the next run (a new Run workflow, not "Re-run failed jobs"). Never deploys. **Agents never release**: they run the workflow only with `dry_run`, and `scripts/release.sh` only with `--dry-run`.
 
 Verify in proportion to the risk, and report what ran and its result:
 
 - **Documentation only** (`docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`, `LICENSE`): `scripts/verify.sh --changed`, which then runs only the guards.
 - **Anything else**: the full `scripts/verify.sh` before opening the pull request.
 
-CI (`.github/workflows/ci.yml`) runs `Detect changes`, `Guards` always, `Checks` (`verify.sh --changed` against the base branch on pull requests, the full sweep on `main`, manual runs, and the weekly Monday sweep) unless only documentation changed, and `CI summary`, the one check to require.
+CI (`.github/workflows/ci.yml`) runs `Detect changes`, `Guards` always, `Checks` (`verify.sh --changed` against the base branch on pull requests, the full sweep on `main`, manual runs, the weekly Monday sweep, and runs the Release workflow calls) unless only documentation changed, and `CI summary`, the one check to require.
 
 ## Traps
 
@@ -88,7 +90,7 @@ CI (`.github/workflows/ci.yml`) runs `Detect changes`, `Guards` always, `Checks`
 - Every setting the owner manages is stored in the database with a default and edited in the admin UI. An environment variable may override one field and locks it in the UI. Only the database connection, file paths, deployment wiring, and keys live in the environment alone.
 - Organization scope is enforced on the server for every read and write. The send point itself refuses customer sends in listening mode.
 - Keep the repository root minimal. Every root file is listed and justified in `docs/project-foundation.md`.
-- Add user-visible or operational changes under `Unreleased` in `CHANGELOG.md`. Do not bump versions in pull requests; the release workflow does that.
+- Add user-visible or operational changes under `## [Unreleased]` in `CHANGELOG.md` (Keep a Changelog; `scripts/release.sh` reads that heading and the dated `## [x.y.z] - YYYY-MM-DD` sections). Do not bump versions in pull requests; the Release workflow does that.
 - Install with the lockfile (`pnpm install --frozen-lockfile`, done by the scripts).
 - Pin every GitHub Action to a full commit SHA with the version in a comment. A guard enforces it.
 - Commits use the GitHub noreply address as `user.email`. No AI or authorship attribution in commits, pull requests, Issues, or code.
@@ -108,5 +110,5 @@ Details and the container table are in `docs/project-foundation.md`, "Docker dec
 
 ## Safety
 
-- Production deployment, releases, merges, and every change in Microsoft 365, DNS, SMTP2GO, or Zendesk belong to the owner. Agents prepare safe commands and never run them against production.
+- Production deployment, releases, merges, and every change in Microsoft 365, DNS, SMTP2GO, or Zendesk belong to the owner. Agents prepare safe commands and never run them against production. Agents run the Release workflow only with `dry_run` and `scripts/release.sh` only with `--dry-run`, and never deploy.
 - Development and tests use stand-ins for Graph, SMTP2GO, failover SMTP, and Zendesk. Nothing real is sent from a development or test stack, except test sends to test addresses the owner provides in phase 3.
