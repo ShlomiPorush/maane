@@ -56,6 +56,8 @@ export class StandInZendesk {
   readonly forbiddenCollections = new Set<string>()
   /** False: the account has no side conversations add-on, and its routes answer 404. */
   sideConversationsAvailable = true
+  /** More side conversations listed for ticket 1 after its own; their events answer 404, which stops a run. */
+  readonly brokenSideConversations: string[] = []
   /** Ticket 1's side conversation, with one message that carries a file. */
   readonly sideFile: StandInFile = { id: 401, name: "side.txt", content: randomBytes(48), serve: "redirect" }
 
@@ -108,6 +110,20 @@ export class StandInZendesk {
     const ticket = this.tickets.get(ticketId)
     if (!ticket) throw new Error(`no ticket ${ticketId}`)
     ticket.comments.push(comment)
+    ticket.updatedAt = this.#tick()
+    this.ticketLog.push(ticketId)
+  }
+
+  /** The export returns the ticket again with the same updated_at, as Zendesk does for some system updates. */
+  relist(ticketId: number): void {
+    this.ticketLog.push(ticketId)
+  }
+
+  /** A status change, such as a deletion: a new version in the export. */
+  setStatus(ticketId: number, status: string): void {
+    const ticket = this.tickets.get(ticketId)
+    if (!ticket) throw new Error(`no ticket ${ticketId}`)
+    ticket.status = status
     ticket.updatedAt = this.#tick()
     this.ticketLog.push(ticketId)
   }
@@ -266,7 +282,8 @@ export class StandInZendesk {
     if (!this.sideConversationsAvailable || this.deletedDuringSave.has(ticketId)) {
       return send(res, 404, { error: "InvalidEndpoint" })
     }
-    const list = ticketId === 1 ? [{ id: "sc-1", subject: "Asking the supplier", state: "open" }] : []
+    const ids = ticketId === 1 ? ["sc-1", ...this.brokenSideConversations] : []
+    const list = ids.map((id) => ({ id, subject: "Asking the supplier", state: "open" }))
     send(res, 200, { side_conversations: list, next_page: null, count: list.length })
   }
 

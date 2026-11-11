@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises"
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -89,20 +89,31 @@ describe("ZendeskClient", () => {
       [`${api}/f`]: () => {
         n++
         if (n > 1) return new Response("whole")
-        // The first chunk is delivered, then the connection drops on the next read.
+        // The first chunk is delivered and reaches the file, then the connection drops on the next read.
         let pulls = 0
         const body = new ReadableStream<Uint8Array>({
-          pull(controller) {
+          async pull(controller) {
             pulls++
-            if (pulls === 1) controller.enqueue(new TextEncoder().encode("par"))
-            else controller.error(new TypeError("terminated"))
+            if (pulls === 1) return controller.enqueue(new TextEncoder().encode("par"))
+            for (let i = 0; i < 400 && !wrotePart; i++) {
+              wrotePart =
+                (await stat(join(dir, "f")).then(
+                  (s) => s.size,
+                  () => 0,
+                )) > 0
+              if (!wrotePart) await new Promise((resolve) => setTimeout(resolve, 5))
+            }
+            controller.error(new TypeError("terminated"))
           },
         })
         return new Response(body)
       },
     })
+    let wrotePart = false
     const client = new ZendeskClient({ apiOrigin: api, authorization: "x", fetch: fetchImpl, sleep: noWait })
     expect((await client.download(`${api}/f`, join(dir, "f"), 100, 5)).bytes).toBe(5)
+    expect(wrotePart).toBe(true)
+    expect(await readFile(join(dir, "f"), "utf8")).toBe("whole")
     expect(n).toBe(2)
   })
 

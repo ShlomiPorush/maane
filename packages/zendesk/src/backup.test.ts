@@ -184,6 +184,43 @@ describe("backup", () => {
     expect((await checkArchive(dir)).problems).toEqual([])
   })
 
+  it("records those files also when the export lists the ticket as deleted", async () => {
+    zendesk.failWhen = (path) => path.includes("/tickets/2/audits")
+    await expect(backup(2)).rejects.toThrow("500")
+    zendesk.failWhen = null
+    zendesk.setStatus(2, "deleted")
+    await backup()
+    expect((await manifest()).files["201"]).toBeDefined()
+    expect((await checkArchive(dir)).problems).toEqual([])
+  })
+
+  it("records the files of side conversation pages added before the ticket was deleted", async () => {
+    // Saved without side conversations; the next run adds sc-1's events page, then stops before its file.
+    zendesk.sideConversationsAvailable = false
+    await backup()
+    zendesk.sideConversationsAvailable = true
+    zendesk.brokenSideConversations.push("sc-broken")
+    await expect(backup()).rejects.toThrow("404")
+    expect((await manifest()).files["401"]).toBeUndefined()
+    // Ticket 1 is deleted before the next run.
+    zendesk.brokenSideConversations.length = 0
+    zendesk.deletedDuringSave.add(1)
+    await backup()
+    expect((await manifest()).files["401"]).toBeDefined()
+    expect((await checkArchive(dir)).problems).toEqual([])
+  })
+
+  it("still adds side conversations when the export returns the ticket with the same updated_at", async () => {
+    zendesk.sideConversationsAvailable = false
+    await backup()
+    zendesk.sideConversationsAvailable = true
+    zendesk.relist(1)
+    await backup()
+    expect((await manifest()).files["401"]?.status).toBe("ok")
+    const check = await checkArchive(dir)
+    expect(check.warnings.some((w) => w.includes("side conversations could not be read"))).toBe(false)
+  })
+
   it("replaces a stored copy whose size went wrong with a verified download", async () => {
     await backup()
     const sha = (await manifest()).files["101"]?.sha256 ?? ""

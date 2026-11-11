@@ -33,7 +33,10 @@ export interface TicketState {
   status: string
   /** `updated_at` of the version whose comments and audits are saved, or null. */
   savedFor: string | null
-  /** The ticket answered 404 when its comments were read: deleted after the export listed it. */
+  /**
+   * The ticket was deleted in Zendesk: it answered 404, or the export listed it as deleted. The files its saved pages
+   * list are in the manifest; nothing more is fetched for it.
+   */
   gone?: boolean
   /** The saved version has no side conversations because a run could not read them; a later run adds them. */
   sideConversationsMissing?: boolean

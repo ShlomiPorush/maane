@@ -133,11 +133,23 @@ export async function runBackup(options: BackupOptions): Promise<BackupResult> {
 
     const manifest = await archive.manifest()
     await reclaimLostFiles(archive, manifest)
+    const attempted = new Set<string>()
+    // A ticket the export lists as deleted may have pages saved by earlier runs, some by a run that stopped before it
+    // recorded their files: every file they list gets a manifest entry, once.
+    // A run that stops in this loop does it again: recording is repeatable.
+    let deleted = 0
+    for (const [ticketId, ticket] of Object.entries(state.tickets)) {
+      if (ticket.status !== "deleted" || ticket.gone) continue
+      await recordSavedFiles(options, manifest, ticketId, attempted)
+      ticket.gone = true
+      ticket.savedFor = ticket.updatedAt
+      deleted++
+    }
+    if (deleted > 0) await archive.saveState(state)
     const pending = Object.entries(state.tickets)
       .filter(([, ticket]) => ticket.status !== "deleted" && ticket.savedFor !== ticket.updatedAt)
       .sort(([a], [b]) => Number(a) - Number(b))
     log(`tickets to save: ${pending.length}`)
-    const attempted = new Set<string>()
     for (const [ticketId] of pending) {
       result.pages += await saveTicket(options, manifest, state, runState, ticketId, attempted)
       result.ticketsSaved++
@@ -283,6 +295,9 @@ function recordTickets(state: ArchiveState, records: unknown): void {
       status: typeof record.status === "string" ? record.status : "unknown",
       savedFor: known?.savedFor ?? null,
       ...(known?.gone ? { gone: known.gone } : {}),
+      // The export returns a ticket again for system updates that keep its updated_at: the saved version still lacks
+      // its side conversations.
+      ...(known?.sideConversationsMissing ? { sideConversationsMissing: true } : {}),
     }
   }
 }
@@ -339,14 +354,18 @@ async function saveTicket(
     }
   }
 
-  // A ticket deleted meanwhile may have pages from an earlier, interrupted run of this version: their files count too.
-  if (gone) attachments.push(...(await attachmentsOnDisk(archive, folder)))
   // Every file a saved page lists gets a manifest entry, also for a ticket deleted while it was saved: downloaded, or
   // failed with the reason.
   await recordFiles(options, manifest, ticketId, attachments, attempted)
-  if (gone) return markGone(options, state, ticketId, pages)
+  if (gone) {
+    // Pages of earlier, interrupted runs of this ticket list files too.
+    await recordSavedFiles(options, manifest, ticketId, attempted)
+    return markGone(options, state, ticketId, pages)
+  }
   await writeMarker(archive, folder, ticket.updatedAt, sides, now)
   ticket.savedFor = ticket.updatedAt
+  // A ticket restored in Zendesk after a 404 is saved again like any other.
+  delete ticket.gone
   ticket.sideConversationsMissing = sides.status === "unavailable" ? true : undefined
   await archive.saveState(state)
   return pages
@@ -402,6 +421,24 @@ async function recordFiles(
   await options.archive.saveManifest(manifest)
 }
 
+/**
+ * Records the files that the saved pages of every version of a deleted ticket list, also pages of a run that stopped
+ * before it recorded them. Files already saved are skipped.
+ */
+async function recordSavedFiles(
+  options: BackupOptions,
+  manifest: Manifest,
+  ticketId: string,
+  attempted: Set<string>,
+): Promise<void> {
+  const folder = `raw/tickets/${ticketId}`
+  const versions = await readdir(options.archive.path(folder)).catch(() => [] as string[])
+  const attachments: Attachment[] = []
+  for (const version of versions)
+    attachments.push(...(await attachmentsOnDisk(options.archive, `${folder}/${version}`)))
+  if (attachments.length > 0) await recordFiles(options, manifest, ticketId, attachments, attempted)
+}
+
 /** The files listed in pages already saved in a version folder: comment pages and side conversation events. */
 async function attachmentsOnDisk(archive: Archive, folder: string): Promise<Attachment[]> {
   const found: Attachment[] = []
@@ -451,6 +488,7 @@ async function backfillSideConversations(
     const attachments: Attachment[] = []
     const saved = await saveSideConversations(options, runState, ticketId, folder, attachments)
     if (saved === "gone") {
+      await recordSavedFiles(options, manifest, ticketId, attempted)
       await markGone(options, state, ticketId, 0)
       continue
     }

@@ -47,7 +47,7 @@ The check needs no token and no network. It reads one file at a time and confirm
 ## What the tool saves
 
 - **Raw records.** Each API page is stored as Zendesk sent it, byte for byte.
-- **Tickets.** The cursor-based incremental export, with each ticket's metrics (`include=metric_sets`). Deleted tickets appear with status `deleted`.
+- **Tickets.** The cursor-based incremental export, with each ticket's metrics (`include=metric_sets`). Deleted tickets appear with status `deleted`; files that pages saved before the deletion list still get a manifest entry.
 - **Users and organizations.** The cursor-based and the time-based incremental exports.
 - **Each ticket's newest version.** All comments, public comments and internal notes, with inline images listed (`include_inline_images=true`); the full audit history; and, when the account has the side conversations add-on, every side conversation with its events. Each run asks again whether side conversations can be read; a ticket deleted while it is saved does not turn them off for the others. An earlier version's pages stay in the archive when a ticket changes, and a saved version is never written over.
 - **Files.** Attachments and inline images of comments, and attachments of side conversation messages.
