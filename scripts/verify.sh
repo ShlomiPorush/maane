@@ -22,7 +22,7 @@ Usage: scripts/verify.sh [options]
                     only the changed packages and their dependents when every change is inside apps/ or
                     packages/; otherwise the full sweep.
   --guards-only     Only the repository guards and their tests.
-  --skip-integration  Skip the integration tests against a disposable PostgreSQL.
+  --skip-integration  Skip the integration tests against a disposable PostgreSQL and the container stack checks.
 EOF
 }
 
@@ -136,6 +136,53 @@ run_integration() {
   trap - EXIT
 }
 
+# The container stack: the image built from this checkout, started from the tracked development template with a data
+# directory and secrets new for this run, then health, readiness, runtime users, and hardening are checked.
+STACK_PROJECT="maane-verify-stack-$$"
+STACK_DIR=""
+stack() {
+  env -u COMPOSE_ENV_FILES MAANE_DATA_DIR="$STACK_DIR" MAANE_IMAGE_TAG=verify MAANE_PORT=0 \
+    MAANE_PUBLIC_URL=http://127.0.0.1:8095 \
+    docker compose --env-file /dev/null -p "$STACK_PROJECT" --project-directory "$REPO_ROOT" \
+    -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
+}
+
+cleanup_stack() {
+  [ -n "$STACK_DIR" ] || return 0
+  stack down --remove-orphans >/dev/null 2>&1 || true
+  remove_data_dir "$STACK_DIR"
+  STACK_DIR=""
+}
+
+fail_stack() {
+  stack ps -a || true
+  stack logs --tail 60 || true
+  die "$1"
+}
+
+run_stack() {
+  build_image verify "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
+  STACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-stack.XXXXXX")"
+  trap cleanup_stack EXIT
+  ensure_stack_env "$STACK_DIR"
+
+  info "Container stack: health, readiness, runtime users, and hardening ($STACK_PROJECT)"
+  stack up -d --remove-orphans --wait --wait-timeout 240 || fail_stack "the stack did not become healthy"
+  TOOLCHAIN_EXTRA_ARGS=(--network "${STACK_PROJECT}_default")
+  # shellcheck disable=SC2016 # expands inside the container
+  in_toolchain 'body="$(curl -fsS http://server:8080/healthz/ready)" && echo "    /healthz/ready: $body" &&
+    grep -q "\"database\":\"ok\"" <<<"$body"' || fail_stack "/healthz/ready does not report the database"
+  TOOLCHAIN_EXTRA_ARGS=()
+  check_non_root "$STACK_PROJECT" server worker postgres
+  check_hardening "$STACK_PROJECT" server worker
+
+  info "Stopping $STACK_PROJECT"
+  stack down --remove-orphans || die "the verification stack did not stop"
+  [ -z "$(stack ps -q)" ] || die "the verification stack still runs after stopping it"
+  cleanup_stack
+  trap - EXIT
+}
+
 main() {
   require_docker
   build_toolchain
@@ -163,7 +210,10 @@ main() {
   run_guards
   if [ $CHECKS -eq 1 ]; then
     run_checks "$filter"
-    if [ $INTEGRATION -eq 1 ]; then run_integration "$filter"; fi
+    if [ $INTEGRATION -eq 1 ]; then
+      run_integration "$filter"
+      run_stack
+    fi
   fi
   info "Verify passed"
 }
