@@ -79,5 +79,9 @@ describe("isPlaceholder", () => {
       expect(isPlaceholder(randomBytes(32).toString("hex"))).toBe(false)
       expect(isPlaceholder(randomBytes(32).toString("base64url"))).toBe(false)
     }
+    // Random values that happen to begin like a placeholder word are still random.
+    for (const prefix of ["YOUR_A", "your-", "example", "changeme"]) {
+      expect(isPlaceholder(`${prefix}${randomBytes(32).toString("base64url")}`), prefix).toBe(false)
+    }
   })
 })

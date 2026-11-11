@@ -85,6 +85,17 @@ const ADMIN_AUDIT: Record<string, string> = {
   "/admin/set-user-password": "user.set_password",
 }
 
+/** A user's actions on their own account whose audit row is written before the action. */
+const ACCOUNT_AUDIT: Record<string, string> = {
+  "/revoke-session": "session.revoke",
+  "/revoke-sessions": "session.revoke_all",
+  "/revoke-other-sessions": "session.revoke_others",
+  "/two-factor/generate-backup-codes": "account.backup_codes_new",
+}
+
+/** Admin routes whose body names a target user. */
+const TARGET_PATHS = new Set(Object.keys(ADMIN_AUDIT))
+
 /** Admin actions after which every session of the target user ends. */
 const END_SESSIONS_AFTER = new Set(["/admin/set-role", "/admin/set-user-password"])
 
@@ -144,8 +155,15 @@ function ipOf(request: Request | undefined): string | null {
   return request?.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() || null
 }
 
+/** A password within Better Auth's configured limits. */
+function validPassword(value: unknown): boolean {
+  return typeof value === "string" && value.length >= PASSWORD_MIN && value.length <= PASSWORD_MAX
+}
+
 export function createAuth(options: AuthOptions) {
   const { db, publicUrl, setup } = options
+  /** The user behind each sign-out request, from the before hook to the after hook. */
+  const signingOut = new WeakMap<Request, Actor>()
 
   const beforeRoute = createAuthMiddleware(async (c) => {
     // Server calls (auth.api.*) are not HTTP requests: the closed list limits browsers only.
@@ -167,6 +185,18 @@ export function createAuth(options: AuthOptions) {
       }
       if (body.email !== userEmail(body.username)) {
         throw refuse("BAD_REQUEST", "INVALID_EMAIL", "The e-mail must be the one Maane derives from the username.")
+      }
+      return
+    }
+    if (path === "/sign-out") {
+      // Who signs out, read before Better Auth ends the session, for the row written after it. A failed read never
+      // blocks signing out.
+      const leaving = await getAuthoritativeSessionFromCtx(c).catch(() => null)
+      if (leaving?.user) {
+        signingOut.set(c.request, {
+          userId: leaving.user.id,
+          label: String((leaving.user as { username?: string }).username ?? leaving.user.name),
+        })
       }
       return
     }
@@ -194,6 +224,15 @@ export function createAuth(options: AuthOptions) {
         throw refuse("BAD_REQUEST", "INVALID_ROLE", "The role must be admin or agent.")
       }
     }
+    // The admin plugin checks a password's maximum length on these routes, not its minimum.
+    const newPassword = path === "/admin/create-user" ? body.password : body.newPassword
+    if ((path === "/admin/create-user" || path === "/admin/set-user-password") && !validPassword(newPassword)) {
+      throw refuse(
+        "BAD_REQUEST",
+        "INVALID_PASSWORD",
+        `The password must be ${PASSWORD_MIN} to ${PASSWORD_MAX} characters.`,
+      )
+    }
     if (path === "/admin/create-user") {
       const data = (body.data ?? {}) as Record<string, unknown>
       const name = data.username
@@ -206,7 +245,22 @@ export function createAuth(options: AuthOptions) {
       }
       return // audited when the user row is created
     }
+    // The plugin turns a non-string userId into a string after this hook; only a plain string passes here, so the
+    // checks below always see the user the plugin will act on.
+    if (TARGET_PATHS.has(path) && (typeof body.userId !== "string" || body.userId.length === 0)) {
+      throw refuse("BAD_REQUEST", "INVALID_USER", "Choose a user.")
+    }
     const target = typeof body.userId === "string" ? body.userId : null
+    const accountAction = ACCOUNT_AUDIT[path]
+    if (accountAction) {
+      await writeAudit(db, actor, {
+        action: accountAction,
+        entityType: "user",
+        entityId: actor.userId,
+        ipAddress: ipOf(c.request),
+      })
+      return
+    }
     // The acting admin never changes their own role, and the plugin refuses banning oneself. The setup admin can be
     // neither demoted nor banned (owner's decision, 2026-11-11), so Maane always keeps one admin, also when two
     // admins act against each other at the same moment.
@@ -245,9 +299,9 @@ export function createAuth(options: AuthOptions) {
           await auth.api.revokeUserSessions({ body: { userId: target }, headers: c.request.headers })
         }
       } else if (c.path === "/sign-out") {
-        const session = (c.context as HookContext)?.context?.session
-        const actor = actorOf({ context: { session } })
-        if (actor) await writeAudit(db, actor, { action: "session.sign_out", entityType: "session" })
+        const actor = signingOut.get(c.request)
+        if (actor)
+          await writeAudit(db, actor, { action: "session.sign_out", entityType: "session", ipAddress: ipOf(c.request) })
       }
     } catch (error) {
       log.error("an after-route step failed", { path: c.path, ...errorFacts(error) })

@@ -79,9 +79,13 @@ run_checks() {
   info "Types, unit tests and builds${filter:+ ($filter)}"
   in_toolchain "pnpm -r $selector run typecheck && pnpm -r $selector run test && pnpm -r $selector --if-present run build"
   info "Database schema matches its migrations"
-  # A schema change without its migration would otherwise show only when the next migration is generated.
+  # A schema change without its migration would otherwise show only when the next migration is generated. The
+  # generator runs on a copy of the migrations, so a missing migration fails here without writing into the checkout.
   # shellcheck disable=SC2016 # expands inside the container
-  in_toolchain 'cd apps/server && out="$(pnpm exec drizzle-kit generate --config drizzle.config.ts --name schema-check 2>&1)";
+  # drizzle-kit prefixes "./" to --out, so the copy is named relative to apps/server.
+  in_toolchain 'copy="$(mktemp -d)" && cp -r apps/server/drizzle "$copy/drizzle" && cd apps/server &&
+    out="$(pnpm exec drizzle-kit generate --dialect postgresql --schema ./src/db/schema.ts \
+      --out "$(realpath --relative-to=. "$copy/drizzle")" --name schema-check 2>&1)"; rm -r -f -- "$copy";
     echo "$out" | tail -1; grep -q "No schema changes" <<<"$out"' ||
     die "apps/server/src/db/schema.ts has changes without a migration; run: pnpm --filter @maane/server db:generate --name <change>"
 }

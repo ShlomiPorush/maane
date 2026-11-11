@@ -55,11 +55,14 @@ const CSP = [
 export function createApp(ctx: AppContext) {
   const app = new Hono<Env>()
 
+  // On every answer, so no page of the UI is ever served without its Content Security Policy, however it is reached.
   app.use("*", async (c, next) => {
     await next()
+    c.header("Content-Security-Policy", CSP)
     c.header("X-Content-Type-Options", "nosniff")
     c.header("Referrer-Policy", "no-referrer")
     c.header("X-Frame-Options", "DENY")
+    if (c.res.headers.get("content-type")?.startsWith("text/html")) c.header("Cache-Control", "no-store")
   })
 
   app.get("/healthz/live", (c) => c.json({ ok: true, version: ctx.version }))
@@ -149,13 +152,10 @@ export function createApp(ctx: AppContext) {
   app.all("/api/*", (c) => c.json({ error: "not_found" }, 404))
 
   // The built UI: files as they are, every other path gets index.html (client-side routes).
-  app.use("/assets/*", serveStatic({ root: ctx.webDir }))
   app.get("*", serveStatic({ root: ctx.webDir }))
   app.get("*", async (c) => {
     const html = await readFile(join(ctx.webDir, "index.html"), "utf8").catch(() => null)
     if (html === null) return c.text("The web UI is not built.", 503)
-    c.header("Content-Security-Policy", CSP)
-    c.header("Cache-Control", "no-store")
     return c.html(html)
   })
 

@@ -295,6 +295,57 @@ describe("roles and admin actions", () => {
   })
 })
 
+describe("hostile admin requests and the audit log", () => {
+  it("refuses a target user that is not a plain string, so no check can be passed around", async () => {
+    const { b: first } = await firstAdmin()
+    const second = await newUser(first, "admin.five", "admin")
+    const [setupAdmin] = await database.db.select().from(authUser).where(eq(authUser.username, "first.admin"))
+    for (const path of ["/api/auth/admin/set-role", "/api/auth/admin/ban-user"]) {
+      const res = await second.b.call("POST", path, { userId: [setupAdmin?.id], role: "agent" })
+      expect(res.json.code, path).toBe("INVALID_USER")
+    }
+    const [after] = await database.db
+      .select()
+      .from(authUser)
+      .where(eq(authUser.id, setupAdmin?.id ?? ""))
+    expect(after).toMatchObject({ role: "admin", banned: false })
+  })
+
+  it("refuses a password shorter than the minimum on create-user and set-user-password", async () => {
+    const { b: admin } = await firstAdmin()
+    const short = testPassword().slice(0, 5)
+    const created = await admin.call("POST", "/api/auth/admin/create-user", {
+      email: userEmail("short.one"),
+      password: short,
+      name: "short.one",
+      role: "agent",
+      data: { username: "short.one" },
+    })
+    expect(created.json.code).toBe("INVALID_PASSWORD")
+    const agent = await newUser(admin, "agent.six", "agent")
+    const set = await admin.call("POST", "/api/auth/admin/set-user-password", { userId: agent.id, newPassword: short })
+    expect(set.json.code).toBe("INVALID_PASSWORD")
+  })
+
+  it("records sign-out, ending other sessions, and new backup codes", async () => {
+    const { b } = await firstAdmin()
+    expect((await b.call("POST", "/api/auth/two-factor/generate-backup-codes", { password })).status).toBe(200)
+    expect((await b.call("POST", "/api/auth/revoke-other-sessions", {})).status).toBe(200)
+    expect((await b.call("POST", "/api/auth/sign-out", {})).status).toBe(200)
+    const actions = (await database.db.select().from(auditLog)).map((r) => r.action)
+    expect(actions).toEqual(
+      expect.arrayContaining(["account.backup_codes_new", "session.revoke_others", "session.sign_out"]),
+    )
+  })
+
+  it("sends the Content Security Policy on every answer", async () => {
+    for (const path of ["/", "/index.html", "/login", "/api/setup/status"]) {
+      const response = await app.fetch(new Request(`http://127.0.0.1:8090${path}`))
+      expect(response.headers.get("content-security-policy"), path).toContain("script-src 'self'")
+    }
+  })
+})
+
 describe("Maane's API", () => {
   it("refuses a change without the page's header or from another origin", async () => {
     const { b } = await firstAdmin()

@@ -61,7 +61,7 @@ CI (`.github/workflows/ci.yml`) runs `Detect changes`, `Guards` always, `Checks`
 - New migration after a schema change: `in_toolchain "pnpm --filter @maane/server db:generate --name <change>"`. `scripts/verify.sh` fails when the schema and the migrations disagree. Never edit a generated migration.
 - **Better Auth is used only as it documents itself** (see Repository policies). The closed route list lives in `hooks.before` in `apps/server/src/auth/auth.ts`; a new Better Auth route stays closed until it is listed in one of the three groups, and `auth.integration.test.ts` fails when a listed path no longer exists.
 - Better Auth's session read does not refuse a banned user: the hook refuses one on every protected route, and `/api/v1` refuses one too. Keep both.
-- The setup admin (`setup_admin`) can be neither demoted nor banned (owner's decision, 2026-11-11). The accepted sign-in gaps are listed in "Foundation 1b design" in the foundation plan; each has a test that pins it.
+- The setup admin (`setup_admin`) can be neither demoted nor banned (owner's decision, 2026-11-11). The accepted sign-in gaps are listed in "Foundation 1b design" in the foundation plan. G7 and the setup admin protection have tests; G6 and the non-atomic follow-up steps are recorded there, not tested.
 - Better Auth keys its rate limits on the client address: integration tests give each browser its own documentation-range address (`nextIp()`), or 5 sign-ins exhaust the limit.
 - A test that needs a URL with a password builds it at run time; the guards refuse credentials in a URL literal unless the password is a placeholder (`$NAME`, `${...}`, `%s`, `<name>`, or asterisks).
 

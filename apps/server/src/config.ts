@@ -35,17 +35,20 @@ export class ConfigError extends Error {
 const FOREIGN_AUTH_VARIABLES = /^(BETTER_AUTH_|AUTH_SECRET$)/
 
 /**
- * A value copied from an example instead of generated: in angle brackets or `${...}`, a word such as "changeme",
- * "example", or "placeholder" at the start or after a separator, a bare word such as "secret", or one character
- * repeated. A random value never matches: the words need a separator before them, which hex lacks and base64
- * almost never forms.
+ * A value copied from an example instead of generated: in angle brackets or `${...}`, one character repeated, or a
+ * phrase of words such as "changeme", "your-secret-here", "example", or "placeholder", the whole value matching.
+ * The phrases hold only letters and separators, so a random value, which has digits or upper case, never matches.
  */
 export function isPlaceholder(value: string): boolean {
-  const v = value.trim().toLowerCase()
-  if (/^<.*>$/.test(v) || /^\$\{.*\}$/.test(v)) return true
-  if (/(^|[\s:._-])(change[-_ ]?me|example|placeholder|replace[-_ ]?me|your[-_ ][a-z])/.test(v)) return true
-  if (/^(secret|password|passw0rd|admin|test|dev|default|null|none)$/.test(v)) return true
-  return /^(.)\1*$/.test(v)
+  const v = value.trim()
+  if (/^<.*>$/.test(v) || /^\$\{.*\}$/.test(v) || /^(.)\1*$/.test(v)) return true
+  if (!/^[a-z _.-]+$/.test(v.toLowerCase()) || /[A-Z]/.test(v.slice(1))) return false
+  const phrase = v.toLowerCase()
+  return (
+    /^(change[-_ .]?me|replace[-_ .]?me|your[-_ .][a-z_ .-]*|example[a-z_ .-]*|placeholder[a-z_ .-]*)$/.test(phrase) ||
+    /^(secret|password|passw0rd|admin|test|dev|default|null|none|todo)$/.test(phrase) ||
+    /(^|[-_ .])(change[-_ .]?me|replace[-_ .]?me|placeholder|example)([-_ .]|$)/.test(phrase)
+  )
 }
 
 /**
