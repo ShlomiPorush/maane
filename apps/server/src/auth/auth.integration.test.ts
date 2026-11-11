@@ -92,6 +92,20 @@ describe("setup", () => {
     expect(await database.db.select().from(authUser)).toHaveLength(0)
   })
 
+  it("tells the signed-out page the default language, which an admin can change", async () => {
+    expect((await browser().call("GET", "/api/setup/status")).json.defaultLocale).toBe("he")
+    const { b } = await firstAdmin()
+    expect((await b.call("PUT", "/api/v1/settings", { "general.defaultLocale": "en" })).status).toBe(200)
+    expect((await browser().call("GET", "/api/setup/status")).json.defaultLocale).toBe("en")
+  })
+
+  it("tells the default language the environment sets", async () => {
+    const locked = createTestApp(database, { "general.defaultLocale": "en" })
+    await locked.ready
+    const res = await new TestBrowser(locked.fetch, nextIp()).call("GET", "/api/setup/status")
+    expect(res.json).toMatchObject({ hasUser: false, open: true, defaultLocale: "en" })
+  })
+
   it("refuses a sign-up whose e-mail is not the one derived from the username", async () => {
     const b = browser()
     const res = await b.call("POST", "/api/auth/sign-up/email", {
@@ -186,6 +200,17 @@ describe("roles and admin actions", () => {
     expect((await agent.b.call("GET", "/api/v1/settings")).status).toBe(403)
     const [row] = await database.db.select().from(authUser).where(eq(authUser.id, agent.id))
     expect(row).toMatchObject({ role: "agent", setupAdmin: false })
+  })
+
+  it("lists users with the fields the Users page reads: username, role, two-factor, ban, and the setup mark", async () => {
+    const { b: admin, name } = await firstAdmin()
+    await newUser(admin, "agent.list", "agent")
+    const res = await admin.call("GET", "/api/auth/admin/list-users?limit=100")
+    expect(res.status).toBe(200)
+    const byName = new Map(res.json.users.map((u: { username: string }) => [u.username, u]))
+    expect(byName.get(name)).toMatchObject({ role: "admin", setupAdmin: true, twoFactorEnabled: true })
+    expect(byName.get("agent.list")).toMatchObject({ role: "agent", setupAdmin: false, twoFactorEnabled: true })
+    expect(byName.get("agent.list")).toHaveProperty("banned")
   })
 
   it("refuses a role that is not admin or agent, and a list of roles", async () => {
