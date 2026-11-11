@@ -106,6 +106,9 @@ plant "a quoted uses key" "$pinned" .github/workflows/ci.yml \
 plant "a job that calls a workflow by tag" "$pinned" .github/workflows/call.yml \
   $'jobs:\n  a:\n    uses: owner/repo/.github/workflows/x.yml@main\n'
 plant "a URL password with an apostrophe" "$secret" docs/db.md "postgres""://maane:it's$(repeat x 8)@db/x"$'\n'
+plant "credentials with an uppercase scheme" "$secret" docs/db.md "HTTPS""://user:$(repeat x 12)@example.com"$'\n'
+plant "credentials with an unusual username" "$secret" docs/db.md "https""://user!name:$(repeat x 12)@example.com"$'\n'
+plant "a half placeholder" "$secret" docs/db.md "postgres""://maane:\$PASSWORD}@db"$'\n'
 plant "a shellcheck finding" "SC2086" scripts/lib/bad.sh $'#!/usr/bin/env bash\necho $1\n'
 plant "a badly formatted script" "not formatted" scripts/lib/ugly.sh $'#!/usr/bin/env bash\nif true; then\necho ok\nfi\n'
 # A script that holds a token and cannot be parsed: neither shellcheck's nor shfmt's message may repeat the line.
@@ -149,7 +152,10 @@ rm -rf "$scratch/docs/private"
 # Locale key drift: the English file gets a key the Hebrew file lacks.
 cp "$scratch/packages/shared/src/locales/en.json" "$scratch/en.json.orig"
 printf '{ "app": { "name": "Maane", "extra": "x" } }\n' >"$scratch/packages/shared/src/locales/en.json"
-expect_failure "a key only in en.json" "missing in he.json: app.extra"
+expect_failure "a key only in en.json" "key(s) differ between the locale files"
+# A token pasted as a key: valid JSON, so only the key check sees it, and CI output must not repeat the key.
+printf '{ "app": { "name": "Maane", "%s": "x" } }\n' "$token" >"$scratch/packages/shared/src/locales/en.json"
+expect_failure "a token as a locale key" "key(s) differ between the locale files" "$token"
 mv "$scratch/en.json.orig" "$scratch/packages/shared/src/locales/en.json"
 expect_pass "after the locale keys match again"
 
@@ -162,7 +168,7 @@ printf 'services:\n  server:\n    image: maane:dev\n' >"$scratch/docker/docker-c
 # shellcheck disable=SC2016 # the placeholders must stay literal
 printf '%s\n' 'Use 192.0.2.10 or 127.0.0.1. Version 1.2.3.4.5.' \
   'postgres://maane:${PASSWORD}@db postgres://maane:$PASSWORD@db postgres://maane:<password>@db' \
-  'postgres://maane:***@db' >"$scratch/docs/allowed.md"
+  'postgres://maane:***@db postgres://maane:%s@db postgres://maane:${password()}@db' >"$scratch/docs/allowed.md"
 printf 'MAANE_AUTH_SECRETS=\nDATABASE_URL=""\nPOSTGRES_PASSWORD='"''"' # generated\n' >"$scratch/.env.example"
 printf '\x89PNG\r\n\x1a\n\000\000' >"$scratch/docs/logo.png"
 expect_pass "on allowed forms"

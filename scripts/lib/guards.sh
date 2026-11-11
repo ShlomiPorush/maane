@@ -158,7 +158,8 @@ fi
 echo "--- No secret-like values"
 # High-confidence formats only: private key blocks, known token formats, credentials inside a URL.
 # Tests that need such a value assemble it at run time, so the literal text never matches.
-# In a URL, only a placeholder password passes: $NAME, ${NAME}, <name> or asterisks.
+# In a URL, only a placeholder password passes: $NAME, ${...} (a shell variable or a template expression), %s,
+# <name>, or asterisks. Any scheme case and any username characters count.
 secret_pattern='-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----'
 secret_pattern+='|\bgh[pousr]_[A-Za-z0-9]{36,}'
 secret_pattern+='|\bgithub_pat_[A-Za-z0-9_]{22,}'
@@ -168,8 +169,8 @@ secret_pattern+='|\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}'
 secret_pattern+='|\bAIza[0-9A-Za-z_-]{35}'
 secret_pattern+='|\bapi-[A-F0-9]{32}\b'
 secret_pattern+='|\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
-secret_pattern+='|\b[a-z][a-z0-9+.-]*://[A-Za-z0-9._%+-]+:'
-secret_pattern+='(?!(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|<[^\s<>@]*>|\*+)@)[^\s/@]+@'
+secret_pattern+='|\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:'
+secret_pattern+='(?!(?:\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^\s{}]+\}|%s|<[^\s<>@]*>|\*+)@)[^\s/@]+@'
 secrets="$(search -P -e "$secret_pattern" -- "${files[@]}")"
 if [ -n "$secrets" ]; then
   echo "A secret-like value is in the repository. Remove it, and replace it wherever it is used:"
@@ -221,7 +222,11 @@ node -e '
   const [a, b] = process.argv.slice(1).map((f) => new Set(keys(read(f))))
   const missing = (x, y, name) => [...x].filter((k) => !y.has(k)).map((k) => "  missing in " + name + ": " + k)
   const problems = [...missing(a, b, "he.json"), ...missing(b, a, "en.json")]
-  if (problems.length) { console.log(problems.join("\n")); process.exit(1) }
+  // In CI only the count: a key is file content, and a public CI log must not repeat it.
+  if (problems.length) {
+    console.log(process.env.CI ? "  " + problems.length + " key(s) differ between the locale files" : problems.join("\n"))
+    process.exit(1)
+  }
 ' "$ENGLISH_LOCALE" "$HEBREW_LOCALE" || {
   echo "en.json and he.json must be valid JSON with the same keys."
   fail=1
@@ -236,6 +241,9 @@ if [ ${#crlf_files[@]} -gt 0 ]; then
 fi
 
 echo "--- GitHub Actions pinned to a commit SHA"
+# A Docker action pinned by digest. Built in two parts so this line does not read as a URL with a password.
+digest_pinned='^docker:'
+digest_pinned+='//[^[:space:]]+@sha256:[0-9a-f]{64}$'
 # Read as YAML, so quoting and flow style cannot hide a `uses`.
 for file in "${files[@]}"; do
   [[ "$file" =~ ^\.github/(workflows/[^/]+|actions/.+/action)\.ya?ml$ ]] || continue
@@ -246,7 +254,7 @@ for file in "${files[@]}"; do
   fi
   while IFS= read -r action; do
     [ -z "$action" ] && continue
-    [[ "$action" =~ ^\./ || "$action" =~ ^docker://[^[:space:]]+@sha256:[0-9a-f]{64}$ ]] && continue
+    [[ "$action" =~ ^\./ || "$action" =~ $digest_pinned ]] && continue
     [[ "$action" =~ ^[^[:space:]@]+@[0-9a-f]{40}$ ]] && continue
     echo "  $file: $action is not pinned to a full commit SHA (put the version in a comment)"
     fail=1

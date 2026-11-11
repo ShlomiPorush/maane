@@ -51,7 +51,9 @@ done
 # "no changes".
 changed_files() {
   local committed untracked
-  committed="$(git -C "$REPO_ROOT" diff --name-only "$MERGE_BASE")" || die "git diff against $CHANGED_BASE failed"
+  # --no-renames lists both sides of a move, so moving code into docs/ is never a documentation-only change.
+  committed="$(git -C "$REPO_ROOT" diff --name-only --no-renames "$MERGE_BASE")" ||
+    die "git diff against $CHANGED_BASE failed"
   untracked="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || die "git ls-files failed"
   CHANGED="$(printf '%s\n%s\n' "$committed" "$untracked" | sed '/^$/d' | sort -u)"
 }
