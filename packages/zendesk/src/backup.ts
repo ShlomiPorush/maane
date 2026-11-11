@@ -134,15 +134,18 @@ export async function runBackup(options: BackupOptions): Promise<BackupResult> {
     const manifest = await archive.manifest()
     await reclaimLostFiles(archive, manifest)
     const attempted = new Set<string>()
-    // A ticket the export lists as deleted may have pages saved by earlier runs, some by a run that stopped before it
-    // recorded their files: every file they list gets a manifest entry, once.
-    // A run that stops in this loop does it again: recording is repeatable.
+    // A deleted ticket (listed as deleted, or gone after a 404, also in an archive from an earlier version of this tool)
+    // may have pages saved by earlier runs, some by a run that stopped before it recorded their files: every file
+    // they list gets a manifest entry, once. A run that stops in this loop does it again: recording is repeatable.
     let deleted = 0
     for (const [ticketId, ticket] of Object.entries(state.tickets)) {
-      if (ticket.status !== "deleted" || ticket.gone) continue
+      if ((ticket.status !== "deleted" && !ticket.gone) || ticket.filesRecorded) continue
       await recordSavedFiles(options, manifest, ticketId, attempted)
-      ticket.gone = true
-      ticket.savedFor = ticket.updatedAt
+      if (ticket.status === "deleted") {
+        ticket.gone = true
+        ticket.savedFor = ticket.updatedAt
+      }
+      ticket.filesRecorded = true
       deleted++
     }
     if (deleted > 0) await archive.saveState(state)
@@ -295,6 +298,7 @@ function recordTickets(state: ArchiveState, records: unknown): void {
       status: typeof record.status === "string" ? record.status : "unknown",
       savedFor: known?.savedFor ?? null,
       ...(known?.gone ? { gone: known.gone } : {}),
+      ...(known?.filesRecorded ? { filesRecorded: true } : {}),
       // The export returns a ticket again for system updates that keep its updated_at: the saved version still lacks
       // its side conversations.
       ...(known?.sideConversationsMissing ? { sideConversationsMissing: true } : {}),
@@ -366,6 +370,7 @@ async function saveTicket(
   ticket.savedFor = ticket.updatedAt
   // A ticket restored in Zendesk after a 404 is saved again like any other.
   delete ticket.gone
+  delete ticket.filesRecorded
   ticket.sideConversationsMissing = sides.status === "unavailable" ? true : undefined
   await archive.saveState(state)
   return pages
@@ -432,27 +437,41 @@ async function recordSavedFiles(
   attempted: Set<string>,
 ): Promise<void> {
   const folder = `raw/tickets/${ticketId}`
-  const versions = await readdir(options.archive.path(folder)).catch(() => [] as string[])
+  const versions = await list(options.archive.path(folder), "folders")
   const attachments: Attachment[] = []
   for (const version of versions)
     attachments.push(...(await attachmentsOnDisk(options.archive, `${folder}/${version}`)))
   if (attachments.length > 0) await recordFiles(options, manifest, ticketId, attachments, attempted)
 }
 
+/**
+ * The folders or the files in a folder; none when it does not exist. Any other error (no permission, a failing disk)
+ * stops the run, so a folder that could not be read is never taken for an empty one.
+ */
+async function list(path: string, kind: "folders" | "files"): Promise<string[]> {
+  try {
+    const entries = await readdir(path, { withFileTypes: true })
+    return entries.filter((e) => (kind === "folders" ? e.isDirectory() : e.isFile())).map((e) => e.name)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
+    throw error
+  }
+}
+
 /** The files listed in pages already saved in a version folder: comment pages and side conversation events. */
 async function attachmentsOnDisk(archive: Archive, folder: string): Promise<Attachment[]> {
   const found: Attachment[] = []
   const read = async (path: string) => JSON.parse(await readFile(archive.path(path), "utf8")) as unknown
-  const names = await readdir(archive.path(folder)).catch(() => [] as string[])
+  const names = await list(archive.path(folder), "files")
   for (const name of names.filter((n) => /^comments-\d+\.json$/.test(n))) {
     const page = (await read(`${folder}/${name}`)) as { comments?: ZendeskComment[] }
     for (const comment of page.comments ?? []) {
       for (const attachment of comment.attachments ?? []) found.push({ commentId: String(comment.id), attachment })
     }
   }
-  const sideIds = await readdir(archive.path(folder, "side_conversations")).catch(() => [] as string[])
+  const sideIds = await list(archive.path(folder, "side_conversations"), "folders")
   for (const sideId of sideIds) {
-    for (const name of await readdir(archive.path(folder, "side_conversations", sideId))) {
+    for (const name of await list(archive.path(folder, "side_conversations", sideId), "files")) {
       if (!/^events-\d+\.json$/.test(name)) continue
       const page = (await read(`${folder}/side_conversations/${sideId}/${name}`)) as {
         events?: ZendeskSideConversationEvent[]
@@ -507,6 +526,8 @@ async function markGone(options: BackupOptions, state: ArchiveState, ticketId: s
   if (!ticket) return pages
   options.log?.(`ticket ${ticketId}: gone (404); kept what was saved before`)
   ticket.gone = true
+  // Every caller records the files of the saved pages first.
+  ticket.filesRecorded = true
   ticket.savedFor = ticket.updatedAt
   await options.archive.saveState(state)
   return pages

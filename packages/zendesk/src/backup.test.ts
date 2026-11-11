@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { appendFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { appendFile, chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -189,6 +189,46 @@ describe("backup", () => {
     await expect(backup(2)).rejects.toThrow("500")
     zendesk.failWhen = null
     zendesk.setStatus(2, "deleted")
+    await backup()
+    expect((await manifest()).files["201"]).toBeDefined()
+    expect((await checkArchive(dir)).problems).toEqual([])
+  })
+
+  it("records those files in an archive where an earlier version marked the ticket gone without them", async () => {
+    zendesk.failWhen = (path) => path.includes("/tickets/2/audits")
+    await expect(backup(2)).rejects.toThrow("500")
+    zendesk.failWhen = null
+    // What an earlier version of the tool left: ticket 2 marked gone, its files not recorded.
+    const stateFile = join(dir, "state.json")
+    const state = JSON.parse(await readFile(stateFile, "utf8")) as {
+      tickets: Record<string, { gone?: boolean; savedFor: string | null; updatedAt: string }>
+    }
+    const ticket = state.tickets["2"]
+    if (!ticket) throw new Error("ticket 2 is not in the state")
+    ticket.gone = true
+    ticket.savedFor = ticket.updatedAt
+    await writeFile(stateFile, JSON.stringify(state))
+    const listed = zendesk.tickets.get(2)
+    if (listed) listed.gone = true
+    await backup()
+    expect((await manifest()).files["201"]).toBeDefined()
+    expect((await checkArchive(dir)).problems).toEqual([])
+  })
+
+  it("stops on a ticket folder it cannot read, and records its files once it can", async () => {
+    // Root reads every folder: the case needs an ordinary user, as the tests run in the toolchain.
+    if (process.getuid?.() === 0) return
+    zendesk.failWhen = (path) => path.includes("/tickets/2/audits")
+    await expect(backup(2)).rejects.toThrow("500")
+    zendesk.failWhen = null
+    zendesk.setStatus(2, "deleted")
+    const folder = join(dir, "raw", "tickets", "2")
+    await chmod(folder, 0o000)
+    try {
+      await expect(backup()).rejects.toThrow("EACCES")
+    } finally {
+      await chmod(folder, 0o700)
+    }
     await backup()
     expect((await manifest()).files["201"]).toBeDefined()
     expect((await checkArchive(dir)).problems).toEqual([])

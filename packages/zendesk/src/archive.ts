@@ -38,6 +38,8 @@ export interface TicketState {
    * list are in the manifest; nothing more is fetched for it.
    */
   gone?: boolean
+  /** For a deleted ticket: the files its saved pages list, from every version, are in the manifest. */
+  filesRecorded?: boolean
   /** The saved version has no side conversations because a run could not read them; a later run adds them. */
   sideConversationsMissing?: boolean
 }
