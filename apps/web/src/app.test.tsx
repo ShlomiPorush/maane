@@ -1,0 +1,241 @@
+// The app's routes in a DOM, against a stand-in for Maane's API and Better Auth's client: where each session state
+// and role lands (signed out, two-factor off, agent, admin), the setup screen's states, sign-in with its second
+// step, and a session that ends while a page is open. Texts are read from the locale files.
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { act } from "react"
+import { createRoot, type Root } from "react-dom/client"
+import { createMemoryRouter, RouterProvider } from "react-router"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { setTransport, type TransportRequest, type TransportResponse } from "./api/client.ts"
+import { I18nProvider, translate } from "./i18n/i18n.tsx"
+import { ROUTES } from "./routes.tsx"
+
+const auth = vi.hoisted(() => ({
+  listUsers: vi.fn(),
+  signInUsername: vi.fn(),
+  verifyTotp: vi.fn(),
+  verifyBackupCode: vi.fn(),
+  signUpEmail: vi.fn(),
+}))
+
+vi.mock("./api/auth.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./api/auth.ts")>()
+  return {
+    ...real,
+    authClient: {
+      useSession: () => ({ data: { session: { id: "current" } }, isPending: false }),
+      listSessions: () => Promise.resolve({ data: [], error: null }),
+      signOut: () => Promise.resolve({ data: {}, error: null }),
+      signIn: { username: auth.signInUsername },
+      signUp: { email: auth.signUpEmail },
+      twoFactor: { verifyTotp: auth.verifyTotp, verifyBackupCode: auth.verifyBackupCode },
+      admin: { listUsers: auth.listUsers },
+    },
+  }
+})
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const he = (key: string, vars?: Record<string, string | number>) => translate("he", key, vars)
+
+type Answers = Record<string, TransportResponse | ((request: TransportRequest) => TransportResponse)>
+
+let requests: TransportRequest[] = []
+let mounted: { root: Root; host: HTMLElement } | null = null
+let router: ReturnType<typeof createMemoryRouter> | null = null
+
+const ok = (body: unknown): TransportResponse => ({ status: 200, body })
+const status = (over: Partial<{ hasUser: boolean; open: boolean }> = {}) =>
+  ok({ hasUser: true, open: false, closesInSeconds: 0, defaultLocale: "he", ...over })
+const signedOut: TransportResponse = { status: 401, body: { error: "unauthorized" } }
+const totpRequired: TransportResponse = { status: 403, body: { error: "totp_required" } }
+const admin = ok({ id: "u1", username: "first.admin", role: "admin" })
+const agent = ok({ id: "u2", username: "agent.one", role: "agent" })
+
+async function renderAt(path: string, answers: Answers): Promise<void> {
+  requests = []
+  setTransport(async (request) => {
+    requests.push(request)
+    const path = request.url.split("?")[0] ?? ""
+    const answer = answers[path]
+    if (!answer) return { status: 404, body: { error: "not_found" } }
+    return typeof answer === "function" ? answer(request) : answer
+  })
+  const host = document.createElement("div")
+  document.body.append(host)
+  const root = createRoot(host)
+  mounted = { root, host }
+  router = createMemoryRouter(ROUTES, { initialEntries: [path] })
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  await act(async () => {
+    root.render(
+      <I18nProvider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router as ReturnType<typeof createMemoryRouter>} />
+        </QueryClientProvider>
+      </I18nProvider>,
+    )
+  })
+}
+
+const where = () => `${router?.state.location.pathname}${router?.state.location.search}`
+const text = () => document.body.textContent ?? ""
+
+/** Types into a React-controlled field the way a browser does. */
+function type(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set
+  setter?.call(input, value)
+  input.dispatchEvent(new Event("input", { bubbles: true }))
+}
+
+beforeEach(() => {
+  localStorage.clear()
+  for (const fn of Object.values(auth)) fn.mockReset()
+})
+
+afterEach(async () => {
+  if (mounted) {
+    const { root, host } = mounted
+    await act(async () => root.unmount())
+    host.remove()
+  }
+  mounted = null
+  document.body.innerHTML = ""
+})
+
+describe("the session gate", () => {
+  it("sends a signed-out visitor to sign-in, and back to the page afterwards", async () => {
+    await renderAt("/users", { "/api/setup/status": status(), "/api/v1/me": signedOut })
+    await vi.waitFor(() => expect(where()).toBe("/login?next=%2Fusers"))
+    await vi.waitFor(() => expect(text()).toContain(he("login.description")))
+  })
+
+  it("sends a session without two-factor to the two-factor setup", async () => {
+    await renderAt("/settings", { "/api/setup/status": status(), "/api/v1/me": totpRequired })
+    await vi.waitFor(() => expect(where()).toBe("/enroll?next=%2Fsettings"))
+    await vi.waitFor(() => expect(text()).toContain(he("enroll.required")))
+  })
+
+  it("shows an admin every page in the navigation and the empty home", async () => {
+    await renderAt("/", { "/api/setup/status": status(), "/api/v1/me": admin })
+    await vi.waitFor(() => expect(text()).toContain(he("home.emptyTitle")))
+    const nav = document.querySelector(".ui-sidenav")?.textContent ?? ""
+    for (const id of ["home", "users", "settings", "audit"]) expect(nav).toContain(he(`nav.${id}`))
+  })
+
+  it("hides admin pages from an agent and locks them on a direct address, without reading them", async () => {
+    await renderAt("/users", { "/api/setup/status": status(), "/api/v1/me": agent })
+    await vi.waitFor(() => expect(text()).toContain(he("adminOnly.title")))
+    const nav = document.querySelector(".ui-sidenav")?.textContent ?? ""
+    expect(nav).toContain(he("nav.home"))
+    for (const id of ["users", "settings", "audit"]) expect(nav).not.toContain(he(`nav.${id}`))
+    expect(auth.listUsers).not.toHaveBeenCalled()
+  })
+
+  it("goes to sign-in when Maane's API answers 401 while a page is open", async () => {
+    await renderAt("/settings", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": signedOut,
+    })
+    await vi.waitFor(() => expect(where()).toBe("/login?next=%2Fsettings"))
+  })
+})
+
+describe("setup", () => {
+  it("offers the first admin while setup is open, and sign-in sends there while no user exists", async () => {
+    await renderAt("/login", { "/api/setup/status": status({ hasUser: false, open: true }), "/api/v1/me": signedOut })
+    await vi.waitFor(() => expect(where()).toBe("/setup"))
+    await vi.waitFor(() => expect(text()).toContain(he("setup.create")))
+  })
+
+  it("says a restart opens setup when the window closed with no user", async () => {
+    await renderAt("/setup", { "/api/setup/status": status({ hasUser: false, open: false }) })
+    await vi.waitFor(() => expect(text()).toContain(he("setup.closedTitle")))
+    expect(text()).toContain(he("setup.closedText", { minutes: 5 }))
+    expect(document.querySelector("form")).toBeNull()
+  })
+
+  it("leaves for sign-in once a user exists", async () => {
+    await renderAt("/setup", { "/api/setup/status": status(), "/api/v1/me": signedOut })
+    await vi.waitFor(() => expect(where()).toBe("/login"))
+  })
+
+  it("creates the first admin with the four documented fields and the derived e-mail", async () => {
+    auth.signUpEmail.mockResolvedValue({ data: null, error: { status: 403, code: "SETUP_CLOSED" } })
+    await renderAt("/setup", { "/api/setup/status": status({ hasUser: false, open: true }) })
+    await vi.waitFor(() => expect(document.querySelector("form")).not.toBeNull())
+    const [username, password, repeat] = Array.from(document.querySelectorAll<HTMLInputElement>("form input"))
+    const typed = crypto.randomUUID()
+    await act(async () => {
+      type(username as HTMLInputElement, "first.admin")
+      type(password as HTMLInputElement, typed)
+      type(repeat as HTMLInputElement, typed)
+    })
+    await act(async () => document.querySelector<HTMLButtonElement>("form button[type=submit]")?.click())
+    await vi.waitFor(() =>
+      expect(auth.signUpEmail).toHaveBeenCalledWith({
+        name: "first.admin",
+        email: "first.admin@maane.invalid",
+        username: "first.admin",
+        password: typed,
+      }),
+    )
+  })
+})
+
+describe("sign-in", () => {
+  it("asks for the second factor and never sends trustDevice", async () => {
+    auth.signInUsername.mockResolvedValue({ data: { twoFactorRedirect: true }, error: null })
+    auth.verifyTotp.mockResolvedValue({ data: null, error: { status: 401, code: "INVALID_CODE" } })
+    await renderAt("/login", { "/api/setup/status": status(), "/api/v1/me": signedOut })
+    await vi.waitFor(() => expect(document.querySelector("form")).not.toBeNull())
+    const [username, password] = Array.from(document.querySelectorAll<HTMLInputElement>("form input"))
+    await act(async () => {
+      type(username as HTMLInputElement, "first.admin")
+      type(password as HTMLInputElement, crypto.randomUUID())
+    })
+    await act(async () => document.querySelector<HTMLButtonElement>("form button[type=submit]")?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("login.codeDescription")))
+    const code = document.querySelector<HTMLInputElement>("input[autocomplete=one-time-code]")
+    await act(async () => type(code as HTMLInputElement, "123456"))
+    await vi.waitFor(() => expect(auth.verifyTotp).toHaveBeenCalledWith({ code: "123456" }))
+    await vi.waitFor(() => expect(text()).toContain(he("errors.code.wrongCode")))
+  })
+
+  it("explains a wrong password in words", async () => {
+    auth.signInUsername.mockResolvedValue({ data: null, error: { status: 401, code: "INVALID_USERNAME_OR_PASSWORD" } })
+    await renderAt("/login", { "/api/setup/status": status(), "/api/v1/me": signedOut })
+    await vi.waitFor(() => expect(document.querySelector("form")).not.toBeNull())
+    const [username, password] = Array.from(document.querySelectorAll<HTMLInputElement>("form input"))
+    await act(async () => {
+      type(username as HTMLInputElement, "first.admin")
+      type(password as HTMLInputElement, crypto.randomUUID())
+    })
+    await act(async () => document.querySelector<HTMLButtonElement>("form button[type=submit]")?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("errors.code.wrongCredentials")))
+  })
+
+  it("goes straight on when the session is already full", async () => {
+    await renderAt("/login?next=%2Faudit", { "/api/setup/status": status(), "/api/v1/me": admin })
+    await vi.waitFor(() => expect(where()).toBe("/audit"))
+  })
+})
+
+describe("Maane's API requests", () => {
+  it("sends the request header on every change, never on a read", async () => {
+    await renderAt("/settings", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": ok({ settings: [] }),
+    })
+    await vi.waitFor(() => expect(requests.some((r) => r.url === "/api/v1/settings")).toBe(true))
+    for (const request of requests) expect(request.headers["x-maane-request"]).toBeUndefined()
+    const { request } = await import("./api/client.ts")
+    await request("PUT", "/settings", { "security.sessionDays": 7 })
+    const put = requests.find((r) => r.method === "PUT")
+    expect(put?.headers["x-maane-request"]).toBe("1")
+    expect(put?.url).toBe("/api/v1/settings")
+  })
+})

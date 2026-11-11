@@ -1,5 +1,405 @@
 {
   "app": {
-    "name": "Maane"
+    "name": "Maane",
+    "loading": "Loading",
+    "unreachable": "Maane is not answering"
+  },
+  "common": {
+    "cancel": "Cancel",
+    "close": "Close",
+    "tryAgain": "Try again"
+  },
+  "language": {
+    "self": "English",
+    "he": "Hebrew",
+    "en": "English"
+  },
+  "theme": {
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark"
+  },
+  "role": {
+    "admin": "Admin",
+    "agent": "Agent"
+  },
+  "nav": {
+    "main": "Main navigation",
+    "youAreHere": "You are here",
+    "homeLabel": "Maane home",
+    "home": "Tickets",
+    "users": "Users",
+    "settings": "Settings",
+    "audit": "Audit log"
+  },
+  "shell": {
+    "tagline": "Email helpdesk",
+    "collapseMenu": "Collapse the menu",
+    "expandMenu": "Expand the menu",
+    "theme": "Theme",
+    "themeButton": "Theme: {theme}. Switch to {next}",
+    "language": "Language",
+    "languageButton": "Switch to {language}",
+    "accountMenu": "Account menu",
+    "twoFactorOn": "Two-factor authentication is on"
+  },
+  "time": {
+    "justNow": "just now",
+    "ago": {
+      "min": {
+        "one": "{count} minute ago",
+        "two": "{count} minutes ago",
+        "other": "{count} minutes ago"
+      },
+      "h": {
+        "one": "{count} hour ago",
+        "two": "{count} hours ago",
+        "other": "{count} hours ago"
+      },
+      "d": {
+        "one": "{count} day ago",
+        "two": "{count} days ago",
+        "other": "{count} days ago"
+      }
+    }
+  },
+  "copy": {
+    "hint": "Click to copy",
+    "done": "Copied: {value}",
+    "failed": "Could not copy. Select the text and copy it by hand.",
+    "needsHttps": "Copying needs a secure (HTTPS) connection. Select the text and copy it by hand."
+  },
+  "savebar": {
+    "region": "Unsaved changes",
+    "count": {
+      "one": "{count} unsaved change",
+      "two": "{count} unsaved changes",
+      "other": "{count} unsaved changes"
+    },
+    "discard": "Discard",
+    "save": "Save changes",
+    "saving": "Saving"
+  },
+  "unsaved": {
+    "leaveTitle": "Leave without saving?",
+    "leaveMessage": {
+      "one": "{count} change is not saved and will be lost.",
+      "two": "{count} changes are not saved and will be lost.",
+      "other": "{count} changes are not saved and will be lost."
+    },
+    "leave": "Leave",
+    "stay": "Stay",
+    "discardTitle": "Discard your changes?",
+    "discardMessage": "What you typed here will be lost.",
+    "discard": "Discard",
+    "keepEditing": "Keep editing"
+  },
+  "errors": {
+    "network": "Maane did not answer. Check your connection and try again.",
+    "rateLimited": "Too many attempts. Wait a few minutes, then try again.",
+    "server": "Something went wrong on the server. Try again in a moment.",
+    "unexpected": "Something unexpected went wrong. Try again.",
+    "refreshFailed": "Could not refresh. What you see may be out of date; Maane keeps trying.",
+    "code": {
+      "unauthorized": "You are signed out. Sign in again.",
+      "totpRequired": "Set up two-factor authentication first.",
+      "totpAlreadyOn": "Two-factor authentication is already on for this account.",
+      "totpNotEnabled": "Two-factor authentication is not on for this account.",
+      "banned": "This account is disabled. Ask an admin to enable it.",
+      "forbidden": "Only an admin can do this.",
+      "notFound": "Maane could not find it. It may have been removed; reload the page.",
+      "csrfRefused": "Maane refused the request because it did not come from this page. Reload the page and try again.",
+      "setupClosed": "Setup is closed. Restart the server to open it for 5 minutes, then try again.",
+      "invalidUsername": "That username cannot be used. Use {usernameMin} to {usernameMax} lowercase letters, digits, dots, or underscores.",
+      "usernameTaken": "That username is taken. Choose another one.",
+      "invalidRole": "Choose admin or agent.",
+      "invalidFields": "Maane refused fields it does not accept. Reload the page and try again.",
+      "ownRole": "You cannot change your own role. Ask another admin.",
+      "setupAdminProtected": "This is the first admin, made at setup. It cannot be made an agent or disabled, so Maane always keeps one admin.",
+      "trustDevice": "Maane asks for the code at every sign-in.",
+      "wrongCredentials": "The username or password is wrong. Check both and try again.",
+      "wrongPassword": "The password is wrong. Check it and try again.",
+      "wrongCode": "That code is wrong or has expired. Type the newest code from the app.",
+      "wrongBackupCode": "That backup code is wrong or was already used. Try another one.",
+      "codeExpired": "The sign-in took too long. Type your password again.",
+      "passwordLength": "The password must be {passwordMin} to {passwordMax} characters.",
+      "banSelf": "You cannot disable your own account.",
+      "settingLocked": "This setting is set by the environment and cannot be changed here.",
+      "settingInvalid": "That value is not valid.",
+      "settingUnknown": "Maane does not know this setting. Reload the page."
+    }
+  },
+  "auth": {
+    "username": "Username",
+    "usernameRule": "{min} to {max} lowercase letters, digits, dots, or underscores.",
+    "password": "Password",
+    "passwordRule": "{min} to {max} characters.",
+    "repeatPassword": "Type the password again",
+    "mismatch": "The two passwords are not the same.",
+    "show": "Show the password",
+    "hide": "Hide the password",
+    "capsLock": "Caps Lock is on.",
+    "code": "Code",
+    "codeHint": "The 6-digit code from your authenticator app.",
+    "backupCode": "Backup code",
+    "backupCodeHint": "One of the backup codes you saved. Each code works once.",
+    "error": {
+      "codeFormat": "Type the 6 digits from the app.",
+      "backupFormat": "Type a backup code as it was shown."
+    }
+  },
+  "backupCodes": {
+    "hint": "Keep these {count} backup codes somewhere safe. Each one signs you in once without the app. They are shown only now.",
+    "copy": "Copy",
+    "copied": "The backup codes are copied.",
+    "copyFailed": "Could not copy. Download them instead.",
+    "download": "Download",
+    "fileHeading": "Maane backup codes. Each code signs in once.",
+    "saved": "I saved the backup codes"
+  },
+  "setup": {
+    "title": "Set up Maane",
+    "description": "Create the first admin account. It can add everyone else.",
+    "steps": "Setup steps",
+    "stepAccount": "Admin account",
+    "stepTotp": "Two-factor",
+    "stepCodes": "Backup codes",
+    "stepDone": "done",
+    "create": "Create the admin",
+    "creating": "Creating the admin",
+    "loadFailed": "Could not read the setup state",
+    "closedTitle": "Setup is closed",
+    "closedText": "Setup opens for {minutes} minutes after the server starts, while no user exists. Restart the server, then open this page again.",
+    "checkAgain": "Check again"
+  },
+  "enroll": {
+    "title": "Set up two-factor authentication",
+    "description": "Maane asks for a code from an authenticator app at every sign-in.",
+    "required": "Two-factor authentication is required. Until it is set up, this account can only sign out.",
+    "confirmPassword": "Your password",
+    "confirmPasswordHint": "Type your password to start.",
+    "start": "Start",
+    "starting": "Starting",
+    "qrAlt": "QR code for the authenticator app",
+    "manual": "Scan the QR code with the authenticator app, or type this key in it:",
+    "enterCode": "Then type the code the app shows.",
+    "finish": "Turn on two-factor",
+    "finishing": "Turning on",
+    "signOutOthersFailed": "Two-factor is on, but Maane could not end the other sessions of this account. Try again.",
+    "signOutOthersRetry": "End the other sessions",
+    "codesTitle": "Save your backup codes",
+    "codesDescription": "If you lose the authenticator app, a backup code signs you in.",
+    "continue": "Continue"
+  },
+  "login": {
+    "title": "Sign in",
+    "description": "Sign in with your username and password.",
+    "submit": "Sign in",
+    "signingIn": "Signing in",
+    "missing": "Type your username and password.",
+    "forgot": "Forgot your password? An admin can set a new one in Users.",
+    "codeTitle": "Two-factor code",
+    "codeDescription": "Type the code from your authenticator app.",
+    "backupDescription": "Type one of your backup codes.",
+    "verify": "Sign in",
+    "verifying": "Checking",
+    "useApp": "Use the authenticator app",
+    "useBackup": "Use a backup code",
+    "back": "Back"
+  },
+  "home": {
+    "title": "Tickets",
+    "description": "Customer email that needs an answer.",
+    "emptyTitle": "No tickets yet",
+    "emptyHint": "Tickets appear here once Maane reads the shared mailbox."
+  },
+  "notFound": {
+    "title": "This page does not exist",
+    "hint": "Check the address, or go to the start.",
+    "home": "Go to tickets"
+  },
+  "adminOnly": {
+    "title": "Only for admins",
+    "text": "This page is for admins. Ask an admin if you need something here."
+  },
+  "account": {
+    "title": "Account",
+    "description": "Your sign-in, your sessions, and two-factor authentication.",
+    "signOut": "Sign out",
+    "signOutFailed": "Could not sign out. {reason}",
+    "signedInGroup": "Signed in",
+    "signedInAs": "Username",
+    "role": "Role",
+    "sessions": "Sessions",
+    "sessionsHint": "Every browser signed in to this account.",
+    "loading": "Loading the sessions",
+    "failed": "Could not load the sessions",
+    "thisSession": "This browser",
+    "browserOn": "{browser} on {system}",
+    "unknownBrowser": "Unknown browser",
+    "signedIn": "Signed in",
+    "until": "until",
+    "endOne": "End session",
+    "endOneTitle": "End this session?",
+    "endOneMessage": "{name} will be signed out.",
+    "endOneDone": "{name} is signed out.",
+    "endOthers": "End all other sessions",
+    "endOthersTitle": "End all other sessions?",
+    "endOthersMessage": "{count} other sessions will be signed out. This browser stays signed in.",
+    "endOthersDone": "The other sessions are signed out.",
+    "endFailed": "Could not end the session. {reason}",
+    "passwordGroup": "Password",
+    "passwordRow": "Password",
+    "passwordHint": "Changing it signs out every other session.",
+    "change": "Change password",
+    "changing": "Changing",
+    "changed": "The password is changed. Every other session is signed out.",
+    "passwordTitle": "Change password",
+    "currentPassword": "Current password",
+    "currentMissing": "Type your current password.",
+    "newPassword": "New password",
+    "repeatNewPassword": "Type the new password again",
+    "twoFactor": "Two-factor authentication",
+    "codesRow": "Backup codes",
+    "codesHint": "New codes replace the old ones.",
+    "newCodes": "New backup codes",
+    "newCodesTitle": "New backup codes",
+    "newCodesHint": "Type your password. The old backup codes stop working.",
+    "newCodesSubmit": "Make new codes",
+    "newCodesBusy": "Making codes",
+    "authenticatorRow": "Authenticator app",
+    "authenticatorHint": "To move to a new app, turn two-factor off and set it up again at once.",
+    "newAuthenticator": "Set up a new app",
+    "newAuthenticatorTitle": "Set up a new authenticator app",
+    "newAuthenticatorHint": "Type your password. Two-factor turns off and the old app stops working; set up the new app on the next screen. Until you do, this account can only sign out.",
+    "newAuthenticatorSubmit": "Turn off and set up again",
+    "newAuthenticatorBusy": "Turning off",
+    "done": "Done"
+  },
+  "users": {
+    "title": "Users",
+    "description": "Who can sign in to Maane, and what they may do.",
+    "listTitle": "All users",
+    "loading": "Loading the users",
+    "failed": "Could not load the users",
+    "empty": "No users yet",
+    "more": "Showing {shown} of {total} users.",
+    "you": "You",
+    "protected": "First admin",
+    "protectedHint": "Made at setup; it stays an admin and cannot be disabled.",
+    "banned": "Disabled",
+    "noTwoFactor": "Two-factor not set up",
+    "created": "Created",
+    "actions": "Actions for {name}",
+    "actionFailed": "Could not change {name}. {reason}",
+    "create": "Add user",
+    "createTitle": "Add a user",
+    "createHint": "The user signs in with this username and password, then sets up two-factor authentication.",
+    "creating": "Adding",
+    "createDone": "{name} is added.",
+    "role": "Role",
+    "roleHint": {
+      "admin": "Manages users, settings, and the audit log.",
+      "agent": "Answers tickets."
+    },
+    "firstPassword": "First password",
+    "makeAdmin": "Make admin",
+    "makeAdminTitle": "Make {name} an admin?",
+    "makeAdminMessage": "Their sessions end; they sign in again as an admin.",
+    "makeAgent": "Make agent",
+    "makeAgentTitle": "Make {name} an agent?",
+    "makeAgentMessage": "Their sessions end; they sign in again without admin pages.",
+    "roleDone": "{name} is now: {role}.",
+    "setPassword": "Set a new password",
+    "setPasswordTitle": "New password for {name}",
+    "setPasswordHint": "Every session of this user ends. Give them the new password in a safe way.",
+    "setPasswordBusy": "Setting",
+    "setPasswordDone": "{name} has a new password, and their sessions ended.",
+    "endSessions": "End sessions",
+    "endSessionsTitle": "End every session of {name}?",
+    "endSessionsMessage": "They are signed out everywhere and can sign in again.",
+    "endSessionsDone": "Every session of {name} ended.",
+    "ban": "Disable",
+    "banTitle": "Disable {name}?",
+    "banMessage": "They are signed out everywhere and cannot sign in until an admin enables them.",
+    "banDone": "{name} is disabled.",
+    "unban": "Enable",
+    "unbanTitle": "Enable {name}?",
+    "unbanMessage": "They can sign in again.",
+    "unbanDone": "{name} is enabled."
+  },
+  "settings": {
+    "title": "Settings",
+    "description": "How Maane works for everyone.",
+    "loading": "Loading the settings",
+    "failed": "Could not load the settings",
+    "general": "General",
+    "security": "Security",
+    "defaultLocale": {
+      "label": "Default language",
+      "hint": "The language of the sign-in page and of every browser that has not chosen its own."
+    },
+    "sessionDays": {
+      "label": "Session length (days)",
+      "hint": "A user who does not open Maane for this long signs in again. {min} to {max} days."
+    },
+    "changed": "Changed",
+    "env": {
+      "pill": "Set by the environment",
+      "tooltip": "An environment variable sets this value; change it there.",
+      "note": "Set by the variable"
+    },
+    "invalid": "{field}: the value is not valid.",
+    "refusedField": "{field}: {reason}",
+    "saved": "The settings are saved."
+  },
+  "audit": {
+    "title": "Audit log",
+    "description": "Who did what, and when.",
+    "listTitle": "Entries",
+    "loading": "Loading the audit log",
+    "failed": "Could not load the audit log",
+    "empty": "No entries yet",
+    "more": "Show older entries",
+    "loadingMore": "Loading older entries",
+    "moreFailed": "Could not load older entries.",
+    "end": "That is the first entry.",
+    "by": "by",
+    "system": "Maane",
+    "secretChanged": "changed (secret)",
+    "fact": {
+      "user": "User",
+      "role": "Role",
+      "setting": "Setting",
+      "value": "Value",
+      "stage": "Step"
+    },
+    "stage": {
+      "password": "password",
+      "second_factor": "second factor"
+    },
+    "action": {
+      "account": {
+        "setup": "First admin created at setup",
+        "password_change": "Password changed",
+        "totp_enable": "Two-factor turned on",
+        "totp_disable": "Two-factor turned off"
+      },
+      "session": {
+        "sign_in": "Signed in",
+        "sign_out": "Signed out"
+      },
+      "user": {
+        "create": "User added",
+        "set_role": "Role changed",
+        "ban": "User disabled",
+        "unban": "User enabled",
+        "revoke_sessions": "Sessions ended",
+        "set_password": "Password set by an admin"
+      },
+      "setting": {
+        "update": "Setting changed"
+      }
+    }
   }
 }
