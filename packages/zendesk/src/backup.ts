@@ -1,4 +1,4 @@
-import { mkdir, rename, rm, stat } from "node:fs/promises"
+import { mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises"
 import {
   ARCHIVE_FORMAT,
   ARCHIVE_VERSION,
@@ -143,6 +143,8 @@ export async function runBackup(options: BackupOptions): Promise<BackupResult> {
       result.ticketsSaved++
       if (result.ticketsSaved % 50 === 0) log(`tickets saved: ${result.ticketsSaved} of ${pending.length}`)
     }
+
+    result.pages += await backfillSideConversations(options, manifest, state, runState, attempted)
 
     // Files that failed before and were not tried in this run. A comment attachment gets a fresh link from Show
     // Attachment first; the saved pages of its ticket stay as they are.
@@ -337,12 +339,48 @@ async function saveTicket(
     }
   }
 
+  // A ticket deleted meanwhile may have pages from an earlier, interrupted run of this version: their files count too.
+  if (gone) attachments.push(...(await attachmentsOnDisk(archive, folder)))
   // Every file a saved page lists gets a manifest entry, also for a ticket deleted while it was saved: downloaded, or
   // failed with the reason.
+  await recordFiles(options, manifest, ticketId, attachments, attempted)
+  if (gone) return markGone(options, state, ticketId, pages)
+  await writeMarker(archive, folder, ticket.updatedAt, sides, now)
+  ticket.savedFor = ticket.updatedAt
+  ticket.sideConversationsMissing = sides.status === "unavailable" ? true : undefined
+  await archive.saveState(state)
+  return pages
+}
+
+async function writeMarker(
+  archive: Archive,
+  folder: string,
+  updatedAt: string,
+  sides: { status: "saved" | "unavailable"; ids: string[] },
+  now: () => Date,
+) {
+  const marker: VersionMarker = {
+    updatedAt,
+    sideConversations: sides.status,
+    sideConversationIds: sides.ids,
+    savedAt: now().toISOString(),
+  }
+  await archive.writeRaw(`${folder}/${VERSION_MARKER}`, JSON.stringify(marker))
+}
+
+/** Gives every listed file a manifest entry and tries to download those not saved yet. */
+async function recordFiles(
+  options: BackupOptions,
+  manifest: Manifest,
+  ticketId: string,
+  attachments: Attachment[],
+  attempted: Set<string>,
+): Promise<void> {
+  const now = options.now ?? (() => new Date())
   for (const { commentId, attachment } of attachments) {
     const id = String(attachment.id)
     const existing = manifest.files[id]
-    if (existing?.status === "ok") continue
+    if (existing?.status === "ok" || attempted.has(id)) continue
     const entry: ManifestEntry = {
       attachmentId: id,
       ticketId,
@@ -361,17 +399,68 @@ async function saveTicket(
     attempted.add(id)
     await fetchFile(options, entry, now)
   }
-  await archive.saveManifest(manifest)
-  if (gone) return markGone(options, state, ticketId, pages)
-  const marker: VersionMarker = {
-    updatedAt: ticket.updatedAt,
-    sideConversations: sides.status,
-    sideConversationIds: sides.ids,
-    savedAt: now().toISOString(),
+  await options.archive.saveManifest(manifest)
+}
+
+/** The files listed in pages already saved in a version folder: comment pages and side conversation events. */
+async function attachmentsOnDisk(archive: Archive, folder: string): Promise<Attachment[]> {
+  const found: Attachment[] = []
+  const read = async (path: string) => JSON.parse(await readFile(archive.path(path), "utf8")) as unknown
+  const names = await readdir(archive.path(folder)).catch(() => [] as string[])
+  for (const name of names.filter((n) => /^comments-\d+\.json$/.test(n))) {
+    const page = (await read(`${folder}/${name}`)) as { comments?: ZendeskComment[] }
+    for (const comment of page.comments ?? []) {
+      for (const attachment of comment.attachments ?? []) found.push({ commentId: String(comment.id), attachment })
+    }
   }
-  await archive.writeRaw(`${folder}/${VERSION_MARKER}`, JSON.stringify(marker))
-  ticket.savedFor = ticket.updatedAt
-  await archive.saveState(state)
+  const sideIds = await readdir(archive.path(folder, "side_conversations")).catch(() => [] as string[])
+  for (const sideId of sideIds) {
+    for (const name of await readdir(archive.path(folder, "side_conversations", sideId))) {
+      if (!/^events-\d+\.json$/.test(name)) continue
+      const page = (await read(`${folder}/side_conversations/${sideId}/${name}`)) as {
+        events?: ZendeskSideConversationEvent[]
+      }
+      for (const event of page.events ?? []) {
+        for (const attachment of event.message?.attachments ?? []) {
+          found.push({ commentId: `side:${String(event.id)}`, attachment })
+        }
+      }
+    }
+  }
+  return found
+}
+
+/**
+ * Tickets saved while side conversations could not be read get them once a run can read them: the lists go into the
+ * same version folder, where they were missing, and the marker is written again. No saved page is replaced.
+ */
+async function backfillSideConversations(
+  options: BackupOptions,
+  manifest: Manifest,
+  state: ArchiveState,
+  runState: RunState,
+  attempted: Set<string>,
+): Promise<number> {
+  const now = options.now ?? (() => new Date())
+  let pages = 0
+  for (const [ticketId, ticket] of Object.entries(state.tickets)) {
+    if (!ticket.sideConversationsMissing || ticket.gone || ticket.status === "deleted") continue
+    if (ticket.savedFor !== ticket.updatedAt) continue
+    if (runState.sideConversations === "unavailable") break
+    const folder = `raw/tickets/${ticketId}/${stamp(ticket.updatedAt)}`
+    const attachments: Attachment[] = []
+    const saved = await saveSideConversations(options, runState, ticketId, folder, attachments)
+    if (saved === "gone") {
+      await markGone(options, state, ticketId, 0)
+      continue
+    }
+    if (saved.status === "unavailable") break
+    pages += saved.pages
+    await recordFiles(options, manifest, ticketId, attachments, attempted)
+    await writeMarker(options.archive, folder, ticket.updatedAt, saved, now)
+    ticket.sideConversationsMissing = undefined
+    await options.archive.saveState(state)
+  }
   return pages
 }
 
@@ -461,7 +550,13 @@ async function fetchFile(options: BackupOptions, entry: ManifestEntry, now: () =
     const download = await client.download(entry.contentUrl, partial, options.maxFileBytes, entry.size)
     const target = archive.filePath(download.sha256)
     await mkdir(archive.path("files", download.sha256.slice(0, 2)), { recursive: true })
-    if (await exists(target)) await rm(partial, { force: true })
+    // A copy already there with the right size is the same content (named by its SHA-256); one with another size is
+    // damaged and is replaced by this verified download.
+    const existingSize = await stat(target).then(
+      (s) => s.size,
+      () => -1,
+    )
+    if (existingSize === download.bytes) await rm(partial, { force: true })
     else await rename(partial, target)
     entry.status = "ok"
     entry.sha256 = download.sha256
@@ -472,14 +567,5 @@ async function fetchFile(options: BackupOptions, entry: ManifestEntry, now: () =
     if (!(error instanceof ZendeskError)) throw error
     entry.status = "failed"
     entry.error = error.message
-  }
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await stat(path)
-    return true
-  } catch {
-    return false
   }
 }

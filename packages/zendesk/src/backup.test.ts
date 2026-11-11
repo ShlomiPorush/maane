@@ -158,6 +158,40 @@ describe("backup", () => {
     expect((await backup()).sideConversations).toBe("available")
   })
 
+  it("adds side conversations to tickets saved without them once a later run can read them", async () => {
+    zendesk.sideConversationsAvailable = false
+    await backup()
+    zendesk.sideConversationsAvailable = true
+    const result = await backup()
+    expect(result.sideConversations).toBe("available")
+    const check = await checkArchive(dir)
+    expect(check.problems).toEqual([])
+    expect(check.counts.sideConversations).toBe(1)
+    expect(check.warnings.some((w) => w.includes("side conversations could not be read"))).toBe(false)
+    expect((await manifest()).files["401"]?.status).toBe("ok")
+  })
+
+  it("records the files of pages saved before a ticket was deleted between runs", async () => {
+    // The first run saves ticket 2's comments, then stops before its files.
+    zendesk.failWhen = (path) => path.includes("/tickets/2/audits")
+    await expect(backup(2)).rejects.toThrow("500")
+    zendesk.failWhen = null
+    // The ticket is deleted before the next run.
+    const ticket = zendesk.tickets.get(2)
+    if (ticket) ticket.gone = true
+    await backup()
+    expect((await manifest()).files["201"]).toBeDefined()
+    expect((await checkArchive(dir)).problems).toEqual([])
+  })
+
+  it("replaces a stored copy whose size went wrong with a verified download", async () => {
+    await backup()
+    const sha = (await manifest()).files["101"]?.sha256 ?? ""
+    await writeFile(join(dir, "files", sha.slice(0, 2), sha), "x")
+    await backup()
+    expect((await checkArchive(dir)).problems).toEqual([])
+  })
+
   it("keeps side conversations for other tickets when one ticket is deleted while it is saved", async () => {
     zendesk.deletedDuringSave.add(1)
     const result = await backup()

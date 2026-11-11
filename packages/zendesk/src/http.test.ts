@@ -89,10 +89,13 @@ describe("ZendeskClient", () => {
       [`${api}/f`]: () => {
         n++
         if (n > 1) return new Response("whole")
+        // The first chunk is delivered, then the connection drops on the next read.
+        let pulls = 0
         const body = new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("par"))
-            controller.error(new TypeError("terminated"))
+          pull(controller) {
+            pulls++
+            if (pulls === 1) controller.enqueue(new TextEncoder().encode("par"))
+            else controller.error(new TypeError("terminated"))
           },
         })
         return new Response(body)

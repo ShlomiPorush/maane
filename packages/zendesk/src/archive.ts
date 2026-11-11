@@ -35,6 +35,8 @@ export interface TicketState {
   savedFor: string | null
   /** The ticket answered 404 when its comments were read: deleted after the export listed it. */
   gone?: boolean
+  /** The saved version has no side conversations because a run could not read them; a later run adds them. */
+  sideConversationsMissing?: boolean
 }
 
 /** state.json: everything a run needs to continue where the previous one stopped. */
@@ -141,22 +143,43 @@ export class Archive {
     await rename(temporary, target)
   }
 
-  /** Writes a raw API page and records its hash in raw-index.jsonl, which the check compares against. */
   /**
    * Drops a last line of raw-index.jsonl that a crash cut short, so the next entry starts on a line of its own. Runs
-   * under the lock, before anything is appended. A damaged line before the last stays for the check to report.
+   * under the lock, before anything is appended. Reads backwards from the end only as far as the last line break,
+   * so a large index costs no more than its last line. A damaged line before the last stays for the check to report.
    */
   async repairRawIndex(): Promise<void> {
-    const path = this.path(RAW_INDEX)
-    const text = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return null
+    let handle: Awaited<ReturnType<typeof open>>
+    try {
+      handle = await open(this.path(RAW_INDEX), "r+")
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return
       throw error
-    })
-    if (text === null || text === "" || text.endsWith("\n")) return
-    const keep = text.slice(0, text.lastIndexOf("\n") + 1)
-    await this.write(RAW_INDEX, keep)
+    }
+    try {
+      const { size } = await handle.stat()
+      const chunk = Buffer.alloc(64 * 1024)
+      let end = size
+      let keep = 0
+      while (end > 0) {
+        const start = Math.max(0, end - chunk.length)
+        const { bytesRead } = await handle.read(chunk, 0, end - start, start)
+        const newline = chunk.subarray(0, bytesRead).lastIndexOf(0x0a)
+        if (end === size && newline === bytesRead - 1) return // ends with a line break: nothing to repair
+        if (newline >= 0) {
+          keep = start + newline + 1
+          break
+        }
+        end = start
+      }
+      await handle.truncate(keep)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
   }
 
+  /** Writes a raw API page and records its hash in raw-index.jsonl, which the check compares against. */
   async writeRaw(relativePath: string, text: string): Promise<void> {
     await this.write(relativePath, text)
     const entry: RawIndexEntry = {
