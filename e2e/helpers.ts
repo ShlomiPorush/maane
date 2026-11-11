@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { expect, type Page } from "@playwright/test"
-import { loadState } from "./state.ts"
+import { loadState, saveState } from "./state.ts"
 import { freshTotp } from "./totp.ts"
 
 /** The first admin's username in every run: the stack is new each time. */
@@ -30,10 +30,22 @@ export function password(): string {
   return value
 }
 
+/**
+ * Gives the page's requests an address of their own: Better Auth allows 5 sign-ins per 5 minutes per client address,
+ * which it reads from X-Forwarded-For here. Addresses come from the documentation range 198.51.100.0/24.
+ */
+export async function freshAddress(page: Page): Promise<void> {
+  const n = (loadState().addresses ?? 0) + 1
+  if (n > 200) throw new Error("more sign-ins than documentation addresses")
+  saveState({ addresses: n })
+  await page.setExtraHTTPHeaders({ "x-forwarded-for": `198.51.100.${n + 50}` })
+}
+
 /** Signs in through the UI with the password and a TOTP code of a step no earlier test used. */
 export async function signIn(page: Page): Promise<void> {
   const secret = loadState().secret
   if (!secret) throw new Error("no TOTP secret: the setup test did not run")
+  await freshAddress(page)
   await page.goto("/login")
   await page.getByLabel(he("auth.username"), { exact: true }).fill(ADMIN)
   await page.getByLabel(he("auth.password"), { exact: true }).fill(password())

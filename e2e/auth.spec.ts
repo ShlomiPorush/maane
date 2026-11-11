@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { ADMIN, he, password, signIn } from "./helpers.ts"
+import { ADMIN, freshAddress, he, password, signIn } from "./helpers.ts"
 import { loadState, saveState } from "./state.ts"
 import { freshTotp } from "./totp.ts"
 
@@ -61,6 +61,7 @@ test("signs in with the password and a code from the authenticator", async ({ pa
 })
 
 test("refuses a wrong password without saying whether the user exists", async ({ page }) => {
+  await freshAddress(page)
   await page.goto("/login")
   await page.getByLabel(he("auth.username"), { exact: true }).fill(ADMIN)
   await page.getByLabel(he("auth.password"), { exact: true }).fill(`${password()}x`)

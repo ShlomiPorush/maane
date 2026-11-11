@@ -7,7 +7,7 @@ import { join } from "node:path"
 
 const STATE_FILE = join(tmpdir(), "maane-e2e-auth.json")
 
-type State = { password?: string; secret?: string; lastStep?: number; backupCodes?: string[] }
+type State = { password?: string; secret?: string; lastStep?: number; backupCodes?: string[]; addresses?: number }
 
 export function loadState(): State {
   try {
