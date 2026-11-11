@@ -221,18 +221,36 @@ describe("roles and admin actions", () => {
     expect((await database.db.select().from(authUser))[0]).toMatchObject({ role: "admin", banned: false })
   })
 
-  it("the gap, open for the owner: two admins who demote each other at once can leave no admin", async () => {
+  it("protects the setup admin, so two admins acting against each other always leave one", async () => {
     const { b: first } = await firstAdmin()
     const second = await newUser(first, "admin.two", "admin")
     const [firstRow] = await database.db.select().from(authUser).where(eq(authUser.username, "first.admin"))
-    const answers = await Promise.all([
+    const [toSecond, toFirst] = await Promise.all([
       first.call("POST", "/api/auth/admin/set-role", { userId: second.id, role: "agent" }),
       second.b.call("POST", "/api/auth/admin/set-role", { userId: firstRow?.id, role: "agent" }),
     ])
-    // Pinned as it behaves today: each request sees the other admin, so both may pass. Either outcome is recorded.
-    const admins = (await database.db.select().from(authUser)).filter((u) => u.role === "admin")
-    expect(answers.filter((a) => a.status === 200).length).toBeGreaterThanOrEqual(1)
-    expect(admins.length).toBeLessThanOrEqual(1)
+    expect(toSecond.status).toBe(200)
+    expect(toFirst.status).not.toBe(200)
+    const ban = await first.call("POST", "/api/auth/admin/ban-user", { userId: firstRow?.id })
+    expect(ban.status).not.toBe(200)
+    const [after] = await database.db
+      .select()
+      .from(authUser)
+      .where(eq(authUser.id, firstRow?.id ?? ""))
+    expect(after).toMatchObject({ role: "admin", banned: false })
+  })
+
+  it("refuses a second admin's attempt to demote or ban the setup admin", async () => {
+    const { b: first } = await firstAdmin()
+    const second = await newUser(first, "admin.four", "admin")
+    const [firstRow] = await database.db.select().from(authUser).where(eq(authUser.username, "first.admin"))
+    for (const [path, body] of [
+      ["/api/auth/admin/set-role", { userId: firstRow?.id, role: "agent" }],
+      ["/api/auth/admin/ban-user", { userId: firstRow?.id }],
+    ] as const) {
+      const res = await second.b.call("POST", path, body)
+      expect(res.json.code, path).toBe("SETUP_ADMIN_PROTECTED")
+    }
   })
 
   it("bans: the user's sessions end and sign-in is refused", async () => {

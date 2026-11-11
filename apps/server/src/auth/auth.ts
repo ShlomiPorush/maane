@@ -120,6 +120,12 @@ async function anyUser(db: Db): Promise<boolean> {
   return row !== undefined
 }
 
+/** Whether the user is the admin the setup screen created. */
+async function isSetupAdmin(db: Db, userId: string): Promise<boolean> {
+  const [row] = await db.select({ setupAdmin: authUser.setupAdmin }).from(authUser).where(eq(authUser.id, userId))
+  return row?.setupAdmin === true
+}
+
 type HookContext = {
   path?: string
   request?: Request
@@ -201,10 +207,14 @@ export function createAuth(options: AuthOptions) {
       return // audited when the user row is created
     }
     const target = typeof body.userId === "string" ? body.userId : null
-    // The acting admin never changes their own role, and the plugin refuses banning oneself, so the actor always
-    // stays an admin. Two admins demoting each other at the same moment can still leave none (an owner gap).
+    // The acting admin never changes their own role, and the plugin refuses banning oneself. The setup admin can be
+    // neither demoted nor banned (owner's decision, 2026-11-11), so Maane always keeps one admin, also when two
+    // admins act against each other at the same moment.
     if (path === "/admin/set-role" && target === actor.userId) {
       throw refuse("FORBIDDEN", "OWN_ROLE", "An admin cannot change their own role.")
+    }
+    if ((path === "/admin/set-role" || path === "/admin/ban-user") && target && (await isSetupAdmin(db, target))) {
+      throw refuse("FORBIDDEN", "SETUP_ADMIN_PROTECTED", "The first admin cannot be demoted or disabled.")
     }
     const action = ADMIN_AUDIT[path]
     if (action) {
