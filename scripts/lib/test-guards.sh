@@ -105,8 +105,28 @@ plant "a quoted uses key" "$pinned" .github/workflows/ci.yml \
   $'jobs:\n  a:\n    steps:\n      - "uses": "actions/checkout@v'"7"$'"\n'
 plant "a job that calls a workflow by tag" "$pinned" .github/workflows/call.yml \
   $'jobs:\n  a:\n    uses: owner/repo/.github/workflows/x.yml@main\n'
+plant "a URL password with an apostrophe" "$secret" docs/db.md "postgres""://maane:it's$(repeat x 8)@db/x"$'\n'
 plant "a shellcheck finding" "SC2086" scripts/lib/bad.sh $'#!/usr/bin/env bash\necho $1\n'
-plant "a badly formatted script" "Run: shfmt" scripts/lib/ugly.sh $'#!/usr/bin/env bash\nif true; then\necho ok\nfi\n'
+plant "a badly formatted script" "not formatted" scripts/lib/ugly.sh $'#!/usr/bin/env bash\nif true; then\necho ok\nfi\n'
+# A script that holds a token and cannot be parsed: neither shellcheck's nor shfmt's message may repeat the line.
+plant "an unparsable script with a token" "$secret" scripts/lib/broken.sh \
+  $'#!/usr/bin/env bash\ncat <<EOF\n'"$token"$'EOF\n' "$token"
+# A locale file that does not parse is named, and the JSON error, which quotes the text, is not shown.
+printf '{ "app": { "name": %s } }\n' "$token" >"$scratch/packages/shared/src/locales/en.json"
+expect_failure "a locale file that is not JSON" "must be valid JSON" "$token"
+printf '{ "app": { "name": "Maane" } }\n' >"$scratch/packages/shared/src/locales/en.json"
+expect_pass "after the locale file was restored"
+
+# A malformed UTF-8 byte on the line of a token: grep would not match the line, so the file itself must fail.
+printf 'x \377 %s\n' "$token" >"$scratch/docs/legacy.md"
+expect_failure "a file that is not valid UTF-8" "not valid UTF-8" "$token"
+rm -f "$scratch/docs/legacy.md"
+expect_pass "after the file that is not valid UTF-8 was removed"
+
+# A binary image whose name git would quote is still an allowed binary file.
+printf '\x89PNG\r\n\x1a\n\000\000' >"$scratch/docs/l$(printf '\xc3\xb6')go.png"
+expect_pass "on an allowed binary file with a name git quotes"
+rm -f "$scratch/docs/l$(printf '\xc3\xb6')go.png"
 
 # A script that is not executable.
 mkdir -p "$scratch/scripts"
@@ -129,7 +149,7 @@ rm -rf "$scratch/docs/private"
 # Locale key drift: the English file gets a key the Hebrew file lacks.
 cp "$scratch/packages/shared/src/locales/en.json" "$scratch/en.json.orig"
 printf '{ "app": { "name": "Maane", "extra": "x" } }\n' >"$scratch/packages/shared/src/locales/en.json"
-expect_failure "a key only in en.json" "en.json and he.json must have the same keys"
+expect_failure "a key only in en.json" "missing in he.json: app.extra"
 mv "$scratch/en.json.orig" "$scratch/packages/shared/src/locales/en.json"
 expect_pass "after the locale keys match again"
 

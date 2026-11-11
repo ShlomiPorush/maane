@@ -14,15 +14,44 @@ ENGLISH_LOCALE=packages/shared/src/locales/en.json
 BINARY_EXTENSIONS='png|jpg|jpeg|gif|webp|ico|woff2|pdf|mmdb'
 
 fail=0
+
+# The file lists come from git into files first, so a failing git stops the guards instead of leaving the lists
+# empty and every content check silently skipped. NUL-separated, so no file name is quoted or split.
+listing="$(mktemp)"
+eol_listing="$(mktemp)"
+trap 'rm -f -- "$listing" "$eol_listing"' EXIT
+git ls-files -z -co --exclude-standard >"$listing" || {
+  echo "error: git ls-files failed" >&2
+  exit 2
+}
+git ls-files -z --eol -co --exclude-standard >"$eol_listing" || {
+  echo "error: git ls-files --eol failed" >&2
+  exit 2
+}
+
 files=()
 while IFS= read -r -d '' file; do
   [ -f "$file" ] && [ ! -L "$file" ] && files+=("$file")
-done < <(git ls-files -z -co --exclude-standard)
+done <"$listing"
 
 hebrew_files=()
+text_files=()
 for file in "${files[@]}"; do
   [ "$file" = "$HEBREW_LOCALE" ] || hebrew_files+=("$file")
+  [[ "${file,,}" =~ \.($BINARY_EXTENSIONS)$ ]] || text_files+=("$file")
 done
+
+# Line endings per file, from `git ls-files --eol`: "i/<index> w/<worktree> attr/<...>\t<path>".
+binary_files=()
+crlf_files=()
+while IFS= read -r -d '' entry; do
+  path="${entry#*$'\t'}"
+  read -r index worktree _ <<<"${entry%%$'\t'*}"
+  if [ "$index" = i/-text ] || [ "$worktree" = w/-text ]; then
+    [[ "${path,,}" =~ \.($BINARY_EXTENSIONS)$ ]] || binary_files+=("$path")
+  fi
+  if [[ "$index" =~ ^i/(crlf|mixed)$ || "$worktree" =~ ^w/(crlf|mixed)$ ]]; then crlf_files+=("$path"); fi
+done <"$eol_listing"
 
 # Runs grep with the given arguments (ending with -- and the files) and prints file:line[:match].
 # No match is fine; a grep error (exit 2) stops the guards, so a broken pattern never passes silently.
@@ -50,11 +79,18 @@ report() {
 
 echo "--- Binary content only in images, fonts, PDFs and GeoIP databases"
 # grep skips binary files, so a NUL byte would hide a file from every text guard below.
-binary="$(git ls-files --eol -co --exclude-standard | awk '$1 == "i/-text" || $2 == "w/-text" { print $NF }' |
-  grep -viE "\.($BINARY_EXTENSIONS)$" || true)"
-if [ -n "$binary" ]; then
+if [ ${#binary_files[@]} -gt 0 ]; then
   echo "Only images, fonts, PDFs and GeoIP databases may be binary; the text guards cannot read these:"
-  while IFS= read -r file; do echo "  $file"; done <<<"$binary"
+  printf '  %s\n' "${binary_files[@]}"
+  fail=1
+fi
+
+echo "--- Text files are valid UTF-8"
+# In a UTF-8 locale grep does not match across a malformed byte, so one would hide a line from every text guard.
+invalid="$(search -l -a -x -v '.*' -- "${text_files[@]}")"
+if [ -n "$invalid" ]; then
+  echo "These files are not valid UTF-8; the text guards cannot read them reliably:"
+  while IFS= read -r file; do echo "  $file"; done <<<"$invalid"
   fail=1
 fi
 
@@ -133,7 +169,7 @@ secret_pattern+='|\bAIza[0-9A-Za-z_-]{35}'
 secret_pattern+='|\bapi-[A-F0-9]{32}\b'
 secret_pattern+='|\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
 secret_pattern+='|\b[a-z][a-z0-9+.-]*://[A-Za-z0-9._%+-]+:'
-secret_pattern+='(?!(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|<[^\s<>@]*>|\*+)@)[^\s/@'"'"'"]+@'
+secret_pattern+='(?!(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|<[^\s<>@]*>|\*+)@)[^\s/@]+@'
 secrets="$(search -P -e "$secret_pattern" -- "${files[@]}")"
 if [ -n "$secrets" ]; then
   echo "A secret-like value is in the repository. Remove it, and replace it wherever it is used:"
@@ -174,25 +210,28 @@ else
 fi
 
 echo "--- Locale files have the same keys"
+# A file that does not parse is named, never quoted: a JSON error message repeats the text around the fault.
 node -e '
   const fs = require("node:fs")
   const keys = (v, p = "") => (typeof v === "object" && v !== null)
     ? Object.entries(v).flatMap(([k, x]) => keys(x, p ? p + "." + k : k)) : [p]
-  const [a, b] = process.argv.slice(1).map((f) => new Set(keys(JSON.parse(fs.readFileSync(f, "utf8")))))
+  const read = (f) => {
+    try { return JSON.parse(fs.readFileSync(f, "utf8")) } catch { console.log("  " + f + " is not valid JSON"); process.exit(1) }
+  }
+  const [a, b] = process.argv.slice(1).map((f) => new Set(keys(read(f))))
   const missing = (x, y, name) => [...x].filter((k) => !y.has(k)).map((k) => "  missing in " + name + ": " + k)
   const problems = [...missing(a, b, "he.json"), ...missing(b, a, "en.json")]
   if (problems.length) { console.log(problems.join("\n")); process.exit(1) }
 ' "$ENGLISH_LOCALE" "$HEBREW_LOCALE" || {
-  echo "en.json and he.json must have the same keys."
+  echo "en.json and he.json must be valid JSON with the same keys."
   fail=1
 }
 
 echo "--- LF line endings"
 # Index (i/) and working tree (w/) line endings; a file with CRLF in either fails.
-crlf="$(git ls-files --eol -co --exclude-standard | awk '$1 ~ /^i\/(crlf|mixed)$/ || $2 ~ /^w\/(crlf|mixed)$/ { print $NF }')"
-if [ -n "$crlf" ]; then
+if [ ${#crlf_files[@]} -gt 0 ]; then
   echo "Files must use LF line endings:"
-  while IFS= read -r file; do echo "  $file"; done <<<"$crlf"
+  printf '  %s\n' "${crlf_files[@]}"
   fail=1
 fi
 
@@ -220,26 +259,51 @@ for file in "${files[@]}"; do
   [[ "$file" == scripts/*.sh || "$file" == scripts/lib/*.sh ]] && scripts+=("$file")
 done
 if [ ${#scripts[@]} -gt 0 ]; then
-  # One line per finding, without the source line, and only the names of badly formatted files in CI: the output
-  # of a public repository's CI must not repeat a line that may hold what another guard just found.
-  shellcheck -x -f gcc "${scripts[@]}" || fail=1
   if [ -n "${CI:-}" ]; then
-    unformatted="$(shfmt -l -i 2 -ci "${scripts[@]}")" || fail=1
+    # In CI only the place and the check's code: a message can quote the script's own text, and the output of a
+    # public repository's CI must not repeat a line that may hold what another guard just found.
+    # Exit status 1 means findings; above 1 means the scripts could not be checked.
+    rc=0
+    json="$(shellcheck -x -f json1 "${scripts[@]}" 2>/dev/null)" || rc=$?
+    if [ "$rc" -gt 1 ] || ! findings="$(jq -r '.comments[] | "  \(.file):\(.line):\(.column): SC\(.code)"' <<<"$json")"; then
+      echo "  shellcheck could not check the scripts"
+      findings=""
+      fail=1
+    fi
+    if [ -n "$findings" ]; then
+      echo "$findings"
+      echo "Run shellcheck -x on these scripts locally for the messages."
+      fail=1
+    fi
+    for script in "${scripts[@]}"; do
+      if ! listed="$(shfmt -l -i 2 -ci "$script" 2>/dev/null)"; then
+        echo "  $script: shfmt cannot parse it"
+        fail=1
+      elif [ -n "$listed" ]; then
+        echo "  $script: not formatted. Run: shfmt -w -i 2 -ci scripts"
+        fail=1
+      fi
+    done
   else
-    unformatted="$(shfmt -d -i 2 -ci "${scripts[@]}")" || fail=1
-  fi
-  if [ -n "$unformatted" ]; then
-    echo "$unformatted"
-    echo "Run: shfmt -w -i 2 -ci scripts"
-    fail=1
+    shellcheck -x -f gcc "${scripts[@]}" || fail=1
+    if ! unformatted="$(shfmt -d -i 2 -ci "${scripts[@]}")" || [ -n "$unformatted" ]; then
+      echo "$unformatted"
+      echo "Run: shfmt -w -i 2 -ci scripts"
+      fail=1
+    fi
   fi
 fi
+modes="$(git ls-files -s -- 'scripts/*.sh')" || {
+  echo "error: git ls-files -s failed" >&2
+  exit 2
+}
 while read -r mode _ _ path; do
+  [ -z "$path" ] && continue
   [[ "$path" == scripts/lib/* ]] && continue
   [ "$mode" = 100755 ] || {
     echo "$path is not executable: git update-index --chmod=+x $path"
     fail=1
   }
-done < <(git ls-files -s 'scripts/*.sh')
+done <<<"$modes"
 
 exit "$fail"
