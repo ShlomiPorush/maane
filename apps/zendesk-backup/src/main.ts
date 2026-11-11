@@ -60,6 +60,9 @@ export async function main(argv: string[], io: Io): Promise<number> {
         log: say,
       })
       say(`Backup run ${result.run} finished. Changes up to ${result.coveredUntil ?? "(unknown)"} are in the archive.`)
+      if (result.collectionsUnavailable.length > 0) {
+        say(`Not available to this token or account: ${result.collectionsUnavailable.join(", ")}`)
+      }
     }
     const check = await checkArchive(out)
     report(check, io)

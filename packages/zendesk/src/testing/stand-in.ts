@@ -44,6 +44,8 @@ export class StandInZendesk {
   failAfter = Number.POSITIVE_INFINITY
   /** A collection whose next link points at another origin. */
   foreignLinkIn: string | null = null
+  /** Collections that answer 403, as for an account without the feature. */
+  readonly forbiddenCollections = new Set<string>()
 
   readonly tickets = new Map<number, Ticket>()
   /** The ticket export's change log; a cursor is a position in it. */
@@ -217,6 +219,7 @@ export class StandInZendesk {
   }
 
   #collection(url: URL, res: ServerResponse, name: string) {
+    if (this.forbiddenCollections.has(name)) return send(res, 403, { error: "Forbidden" })
     const after = Number(url.searchParams.get("page[after]") ?? 0)
     const records = [1, 2, 3].map((id) => ({ id, name: `${name} ${id}` }))
     const page = records.slice(after, after + 2)

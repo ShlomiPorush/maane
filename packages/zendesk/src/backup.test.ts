@@ -136,6 +136,17 @@ describe("backup", () => {
     expect(check.counts.comments).toBe(6)
   })
 
+  it("records a collection the account cannot read and goes on", async () => {
+    zendesk.forbiddenCollections.add("custom_statuses")
+    const result = await backup()
+    expect(result.collectionsUnavailable).toEqual(["custom_statuses"])
+    const note = JSON.parse(
+      await readFile(join(dir, "raw/collections/custom_statuses/000001/unavailable.json"), "utf8"),
+    )
+    expect(note).toMatchObject({ status: 403 })
+    expect((await checkArchive(dir)).problems).toEqual([])
+  })
+
   it("refuses a next link to another host, so the token never leaves the API origin", async () => {
     zendesk.foreignLinkIn = "groups"
     await expect(backup()).rejects.toThrow("refused a link to another host")

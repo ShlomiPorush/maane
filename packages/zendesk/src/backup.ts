@@ -38,6 +38,8 @@ export interface BackupResult {
   ticketsSaved: number
   filesSaved: number
   filesFailed: number
+  /** Collections the account answered 403 or 404 for, with the reason in their unavailable.json. */
+  collectionsUnavailable: string[]
   coveredUntil: string | null
 }
 
@@ -85,6 +87,7 @@ export async function runBackup(options: BackupOptions): Promise<BackupResult> {
       ticketsSaved: 0,
       filesSaved: 0,
       filesFailed: 0,
+      collectionsUnavailable: [],
       coveredUntil: state.coveredUntil,
     }
 
@@ -95,11 +98,24 @@ export async function runBackup(options: BackupOptions): Promise<BackupResult> {
 
     for (const source of COLLECTION_SOURCES) {
       let url: string | null = source.paged ? `${source.path}?page[size]=${PAGE_SIZE}` : source.path
-      for (let seq = 1; url; seq++) {
-        const page = await client.getJson(url)
-        await archive.write(`raw/collections/${source.name}/${run}/${seqName(seq)}.json`, page.text)
-        result.pages++
-        url = nextPage(page.json)
+      try {
+        for (let seq = 1; url; seq++) {
+          const page = await client.getJson(url)
+          await archive.write(`raw/collections/${source.name}/${run}/${seqName(seq)}.json`, page.text)
+          result.pages++
+          url = nextPage(page.json)
+        }
+      } catch (error) {
+        // An account without the feature (custom statuses) or a token without the right answers 403 or 404.
+        // The collection is settings, not customer data: record why it is missing and go on.
+        if (!(error instanceof ZendeskError) || (error.status !== 403 && error.status !== 404)) throw error
+        await archive.writeJson(`raw/collections/${source.name}/${run}/unavailable.json`, {
+          status: error.status,
+          error: error.message,
+        })
+        result.collectionsUnavailable.push(source.name)
+        log(`${source.name}: not available (${error.status})`)
+        continue
       }
       log(`${source.name}: saved`)
     }
