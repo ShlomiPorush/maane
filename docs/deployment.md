@@ -192,7 +192,7 @@ Copy the dump and `.env` off the host with your own backup tools. A copy of `./p
 
 Test a restore before the cutover from Zendesk, and again from time to time. Run it on another Docker host or virtual machine with its own Traefik, never beside production: `docker-compose.yml` names its project `maane` and its Traefik router `maane`, so a second copy on the production host would take them over.
 
-1. On the test host, create the folder with the same release's `docker-compose.yml` (section 2). Copy the backup's `.env` into it (mode 600). Edit two lines of that copy: `DOMAIN` to the test host name, for example `maane-restore.example.com`, and `MAANE_TRUSTED_PROXIES` to the subnets of the test host's `traefik` network. Leave every key as it is: the test checks that they open the data.
+1. On the test host, create the folder `~/maane-restore` with the block of section 2, with `dir="$HOME/maane-restore"` and `version` set to the release the backup came from. Copy the backup's `.env` into it (mode 600). Edit two lines of that copy: `DOMAIN` to the test host name, for example `maane-restore.example.com`, and `MAANE_TRUSTED_PROXIES` to the subnets of the test host's `traefik` network. Leave every key as it is: the test checks that they open the data.
 2. Put the database back, before `server` ever starts on this host:
    - From a copy of `./postgres-data`: restore it as `postgres-data` in the folder with owners and modes kept.
    - From a dump: start PostgreSQL alone on the empty folder, then restore into it. Set `dump` to the dump's path:
@@ -202,6 +202,7 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
        set -euo pipefail
        dump="$HOME/maane-restore/maane.dump"
        cd "$HOME/maane-restore"
+       [ -f "$dump" ] && [ "$(head -c 5 "$dump")" = PGDMP ] || { echo "error: $dump is not a dump from section 5" >&2; exit 1; }
        [ ! -e postgres-data ] || { echo "error: postgres-data exists; restore only into an empty folder" >&2; exit 1; }
        docker compose up -d --wait postgres
        docker compose exec -T postgres pg_restore -U maane -d maane --no-owner --exit-on-error --single-transaction <"$dump"
@@ -226,18 +227,24 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
 ## 7. Upgrade to a release
 
 1. Read the release notes of the new version on the repository's Releases page. They say when `docker-compose.yml` or `.env.example` changed; compare your copy with the new tag's file before you continue.
-2. Take a dump (section 5). Migrations only move forward: the backup is the way back.
-3. Set `version`, then run:
+2. Set `version`, then run the block. It pulls the new image, then takes a dump into `~/maane/backups` (migrations only move forward: the dump is the way back), and only then sets `VERSION` in `.env` and restarts. When the pull or the dump fails, it stops with `.env` unchanged and the running version untouched.
 
    ```bash
    (
      set -euo pipefail
+     umask 077
      version=0.2.0
      cd "$HOME/maane"
      [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version must look like 1.2.3" >&2; exit 1; }
      [ "$(grep -c '^VERSION=' .env)" = 1 ] || { echo "error: .env must have one VERSION line" >&2; exit 1; }
+     docker pull "ghcr.io/shlomiporush/maane:$version"
+     mkdir -p backups
+     file="backups/maane-before-$version-$(date -u +%Y%m%dT%H%M%SZ).dump"
+     [ ! -e "$file" ] || { echo "error: $file exists" >&2; exit 1; }
+     docker compose exec -T postgres pg_dump -U maane -d maane -Fc >"$file.partial"
+     mv -n -- "$file.partial" "$file"
+     echo "Wrote $HOME/maane/$file"
      sed -i "s/^VERSION=.*/VERSION=$version/" .env
-     docker compose pull
      docker compose up -d --wait
      docker compose ps
    )
@@ -245,9 +252,9 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
 
    The server applies the new migrations on start; the worker starts after it is healthy. `sed -i` keeps the mode of `.env`.
 
-4. Check `https://maane.example.com/healthz/ready` and sign in.
+3. Check `https://maane.example.com/healthz/ready` and sign in.
 
-To go back to an earlier version, restore the dump from step 2 (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported.
+To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported.
 
 ## What was verified
 
@@ -259,9 +266,10 @@ Checked on 2026-11-11, before the first release, with stand-ins and throwaway co
   - The three values are 64 hex characters and differ from each other. Every other line stays as in `.env.example`, and no value is printed.
   - The example domain is refused. A second run refuses and leaves `.env` byte for byte.
   - A missing `.env.example`, a failing `docker` or `openssl`, `openssl` output that is not hex, or an edited example each leave no `.env` and no temporary file.
-- Sections 5 and 6, against PostgreSQL 18.6 in two throwaway Compose projects: the dump block writes one custom-format dump and no partial file. The restore block brings every row back into an empty database, and refuses an existing `postgres-data`.
-- Section 7 (upgrade), with a stand-in `docker`: only `VERSION` changes, `.env` keeps mode 600, and without `.env` the block stops before `docker`.
+- Sections 5 and 6, against PostgreSQL 18.6 in two throwaway Compose projects run from this `docker-compose.yml`, with PostgreSQL's data on tmpfs through an override file instead of `./postgres-data`: the dump block writes one custom-format dump and no partial file. The restore block brings every row back into an empty database, and refuses a missing dump and an existing `postgres-data`.
+- Section 7 (upgrade), with a stand-in `docker`: only `VERSION` changes, `.env` keeps mode 600, and the dump is written first. A failed pull or a failed dump stops the block with `.env` byte for byte as it was, and without `.env` the block stops before `docker`.
 - Not verified:
+  - The `./postgres-data` bind mount, and `server` or `worker` started on a restored database.
   - Traefik routing, the setup screen in a browser, the restore test's sign-in, an upgrade with real migrations, and key rotation.
   - No Maane release exists yet, nothing has been deployed, and the Release workflow has not run on GitHub.
   - Whether the server can pull `ghcr.io/shlomiporush/maane` without `docker login`. That depends on the package's visibility on GitHub after the first release; check it then.

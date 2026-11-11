@@ -6,8 +6,9 @@ on:
     branches: [main]
   workflow_dispatch:
   # The Release workflow runs the whole CI on the commit it releases when it finds no green CI run of that commit on
-  # main to reuse (scripts/ci-result.sh). A called run sees the caller's event (workflow_dispatch), so it runs the
-  # full sweep, and the caller's run id, so it gets a concurrency group of its own.
+  # main to reuse (scripts/ci-result.sh). GitHub documents that a called workflow sees the caller's github context:
+  # its event (workflow_dispatch), so the full sweep runs, and its run id, so the run gets a concurrency group of its
+  # own. Not yet observed on GitHub; check it on the first Release run.
   workflow_call:
   schedule:
     # Weekly full sweep that ignores path filters.
