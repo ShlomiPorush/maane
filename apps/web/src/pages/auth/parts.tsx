@@ -323,7 +323,18 @@ export function BackupCodeField({
  * The backup codes, shown once: the only way in without the authenticator. Copy and Download keep them; Continue
  * waits for "I saved them".
  */
-export function BackupCodes({ codes, onDone, doneLabel }: { codes: string[]; onDone: () => void; doneLabel: string }) {
+export function BackupCodes({
+  codes,
+  onDone,
+  doneLabel,
+  onSavedChange,
+}: {
+  codes: string[]
+  onDone: () => void
+  doneLabel: string
+  /** Told whether "I saved them" is ticked, for a dialog that warns before the codes are closed unsaved. */
+  onSavedChange?: (saved: boolean) => void
+}) {
   const { t } = useI18n()
   const savedId = useId()
   const [saved, setSaved] = useState(false)
@@ -367,7 +378,10 @@ export function BackupCodes({ codes, onDone, doneLabel }: { codes: string[]; onD
           type="checkbox"
           className="ui-check"
           checked={saved}
-          onChange={(event) => setSaved(event.target.checked)}
+          onChange={(event) => {
+            setSaved(event.target.checked)
+            onSavedChange?.(event.target.checked)
+          }}
         />
         <span>{t("backupCodes.saved")}</span>
       </label>

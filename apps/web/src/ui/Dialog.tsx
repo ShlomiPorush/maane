@@ -60,6 +60,7 @@ export function Dialog(props: DialogProps) {
     return openLayer({
       root,
       close: () => closeRef.current(),
+      modal: true,
       noHistory: props.noHistory,
       initialFocus: props.initialFocus,
     })

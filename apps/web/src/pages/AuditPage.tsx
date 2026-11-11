@@ -17,14 +17,21 @@ import { AdminOnly } from "./AdminOnly.tsx"
 import { labelKey, SETTING_ROWS } from "./SettingsPage.tsx"
 import { readUsers } from "./UsersPage.tsx"
 
-/** Every action the server writes today, each with its words in the locale files (audit.action.*). */
+/**
+ * Every action the server writes, each with its words in the locale files (audit.action.*). guards.test.ts reads the
+ * actions from the server's writeAudit calls and fails on one missing here.
+ */
 export const AUDIT_ACTIONS = [
   "account.setup",
   "account.password_change",
   "account.totp_enable",
   "account.totp_disable",
+  "account.backup_codes_new",
   "session.sign_in",
   "session.sign_out",
+  "session.revoke",
+  "session.revoke_all",
+  "session.revoke_others",
   "user.create",
   "user.set_role",
   "user.ban",

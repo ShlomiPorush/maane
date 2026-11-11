@@ -3,7 +3,8 @@
 // other sessions (/list-sessions, /revoke-session, /revoke-other-sessions); the password, changed in a dialog
 // (/change-password, which ends the other sessions); new backup codes (/two-factor/generate-backup-codes); and
 // two-factor turned off (/two-factor/disable) to set up a new authenticator app at once (/enroll). Every dialog with
-// typed input asks before dropping it (DS-9). Signing out of this browser is in the account menu.
+// typed input asks before dropping it (DS-9), and new backup codes not marked saved are never closed without a
+// warning. Signing out of this browser is in the account menu.
 
 import { PASSWORD_MAX, PASSWORD_MIN } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
@@ -309,15 +310,34 @@ function PasswordDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-/** New backup codes: the password, then the new codes shown once; the old ones stop working. */
+/**
+ * New backup codes: the password, then the new codes shown once; the old ones stop working. Until "I saved them" is
+ * ticked, every way of closing (X, Escape, Back, a pull down) first warns that the codes would be lost.
+ */
 function NewCodesDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n()
   const formId = useId()
   const [password, setPassword] = useState("")
   const [codes, setCodes] = useState<string[] | null>(null)
+  const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const guardedClose = useDiscardGuard(Boolean(password) && !codes, onClose)
+
+  const closeCodes = async () => {
+    if (!saved) {
+      const lose = await confirmDialog({
+        title: t("account.codesLossTitle"),
+        message: t("account.codesLossMessage"),
+        confirmText: t("account.codesLossClose"),
+        cancelText: t("account.codesLossBack"),
+        danger: true,
+        focusCancel: true,
+      })
+      if (!lose) return
+    }
+    onClose()
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -343,7 +363,7 @@ function NewCodesDialog({ onClose }: { onClose: () => void }) {
     <Dialog
       title={t("account.newCodesTitle")}
       size="sm"
-      onClose={codes ? onClose : () => void guardedClose()}
+      onClose={codes ? () => void closeCodes() : () => void guardedClose()}
       foot={
         codes ? null : (
           <button type="submit" form={formId} className="ui-btn ui-btn-primary" disabled={busy || !password}>
@@ -353,7 +373,7 @@ function NewCodesDialog({ onClose }: { onClose: () => void }) {
       }
     >
       {codes ? (
-        <BackupCodes codes={codes} doneLabel={t("account.done")} onDone={onClose} />
+        <BackupCodes codes={codes} doneLabel={t("account.done")} onDone={onClose} onSavedChange={setSaved} />
       ) : (
         <form id={formId} className="ui-form-stack" onSubmit={(event) => void submit(event)} noValidate>
           <p className="ui-hint">{t("account.newCodesHint")}</p>

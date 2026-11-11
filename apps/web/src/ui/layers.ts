@@ -2,7 +2,9 @@
 // button close only the top layer, through its own close function, and stay on the page. While a
 // layer is open the page holds one extra history entry at the same URL; closing by hand takes it
 // back, so the next Back really leaves. Everything except the top layer and the toast is inert, the
-// focus moves into the layer and returns to the control that opened it.
+// focus moves into the layer and returns to the control that opened it. In a modal layer (a dialog) Tab and
+// Shift+Tab stay inside, wrapping at its ends, and a Tab from outside (the toast) comes back in (W3C APG modal
+// dialog pattern); a menu handles Tab itself.
 
 export type LayerOptions = {
   /**
@@ -16,8 +18,8 @@ export type LayerOptions = {
   noHistory?: boolean
   /** Where the focus goes on open; default: first field, else primary button, else the panel. */
   initialFocus?: () => HTMLElement | null
-  /** Makes only these inert instead of everything else (the phone More sheet keeps the tab bar usable). */
-  inertOnly?: () => HTMLElement[]
+  /** A modal dialog: Tab and Shift+Tab stay inside it. */
+  modal?: boolean
 }
 
 type Layer = LayerOptions & { id: number; opener: Element | null }
@@ -34,9 +36,7 @@ let inertNow = new Set<HTMLElement>()
 function syncInert(): void {
   const top = stack.at(-1)
   const want = new Set<HTMLElement>()
-  if (top?.inertOnly) {
-    for (const element of top.inertOnly()) want.add(element)
-  } else if (top) {
+  if (top) {
     for (const child of Array.from(document.body.children)) {
       if (!(child instanceof HTMLElement) || child.tagName === "SCRIPT") continue
       if (child !== top.root && child.dataset.layerKeep !== "true") want.add(child)
@@ -65,6 +65,38 @@ function focusInto(layer: Layer): void {
     "[data-autofocus], .ui-btn-primary:not([disabled]), .ui-btn-danger-solid:not([disabled])",
   )
   const target = field ?? primary ?? panel
+  if (target === panel && !panel.hasAttribute("tabindex")) panel.tabIndex = -1
+  target.focus({ preventScroll: true })
+}
+
+const TABBABLE =
+  "a[href], area[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), " +
+  "textarea:not([disabled]), iframe, summary, [contenteditable]:not([contenteditable=false]), [tabindex]"
+
+/** The controls Tab reaches in a panel, in order. No layout check: what a layer hides, it does not render. */
+function tabbables(panel: HTMLElement): HTMLElement[] {
+  return Array.from(panel.querySelectorAll<HTMLElement>(TABBABLE)).filter(
+    (element) => element.tabIndex >= 0 && !element.closest("[hidden], [inert]"),
+  )
+}
+
+/** Keeps Tab inside a modal top layer: wraps at its ends and brings a focus from outside back in. */
+function trapTab(event: KeyboardEvent): void {
+  const top = stack.at(-1)
+  if (!top?.modal) return
+  const panel = top.root.querySelector<HTMLElement>("[data-layer-panel]") ?? top.root
+  const items = tabbables(panel)
+  const first = items[0]
+  const last = items.at(-1)
+  const active = document.activeElement
+  const inside = active instanceof Node && panel.contains(active)
+  let target: HTMLElement | undefined
+  if (!first || !last) target = panel
+  else if (!inside) target = event.shiftKey ? last : first
+  else if (event.shiftKey && (active === first || active === panel)) target = last
+  else if (!event.shiftKey && active === last) target = first
+  if (!target) return
+  event.preventDefault()
   if (target === panel && !panel.hasAttribute("tabindex")) panel.tabIndex = -1
   target.focus({ preventScroll: true })
 }
@@ -156,6 +188,10 @@ if (typeof window !== "undefined") {
   window.addEventListener(
     "keydown",
     (event) => {
+      if (event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        trapTab(event)
+        return
+      }
       if (event.key !== "Escape" || !stack.length) return
       const top = stack.at(-1)
       // A native select or an open picker inside the top layer closes itself first.

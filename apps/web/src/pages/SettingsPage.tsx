@@ -3,7 +3,8 @@
 // keys only); leaving with unsaved changes asks first. A field the environment sets is locked: it stays in place,
 // disabled, and names its variable. The server refuses a locked field (setting_locked), an invalid value
 // (setting_invalid) and an unknown key (setting_unknown); each refusal is explained and points at its field. A
-// refresh never touches a field being edited: the draft holds only what was changed.
+// refresh never touches a field being edited: the draft holds only what was changed. A field edited again while a
+// save is on its way keeps its new text: a save takes out of the draft only what it sent.
 
 import { LOCALES, SETTINGS, type SettingKey, type SettingView } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
@@ -87,12 +88,18 @@ function Settings() {
       }
       body[key] = parsed
     }
+    const sent: Draft = {}
+    for (const key of changed) sent[key] = draft[key]
     setBusy(true)
     setError(null)
     try {
       const saved = await api.saveSettings(body)
       queryClient.setQueryData(qk.settings, saved)
-      setDraft({})
+      setDraft((current) => {
+        const next = { ...current }
+        for (const key of Object.keys(sent) as SettingKey[]) if (next[key] === sent[key]) delete next[key]
+        return next
+      })
       showToast(t("settings.saved"), "success")
       await queryClient.invalidateQueries({ queryKey: qk.setupStatus })
     } catch (failure) {

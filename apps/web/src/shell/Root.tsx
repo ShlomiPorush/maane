@@ -1,14 +1,17 @@
 // The app root: the language, the session gate, the unsaved-changes guard, and the one confirm and toast hosts.
 // GET /api/v1/me answering 401 goes to sign-in (/login?next=...); totp_required goes to the two-factor setup
 // (/enroll). Any later 401 from Maane's API does the same, without asking about unsaved changes, and the page comes
-// back afterwards. The sign-in, setup and enrollment pages are outside the gate: they decide for themselves.
+// back afterwards. A 401 from Better Auth's routes (api/auth.ts) makes the gate ask GET /api/v1/me again: a session
+// that is gone then goes to sign-in the same way, and a wrong password or code stays the page's own error. The
+// sign-in, setup and enrollment pages are outside the gate: they decide for themselves.
 // The gate also mounts Better Auth's useSession: its own refresh (on opening, coming back to the front or online,
-// and another tab's change) is what keeps the session alive; Maane's polling never extends it.
+// and another tab's change) is what keeps the session alive; Maane's polling never extends it. When it shows another
+// user or another role than before, every cached read is dropped and read again for the user signed in now.
 
 import { useQueryClient } from "@tanstack/react-query"
-import { type ReactNode, useEffect, useRef } from "react"
+import { type ReactNode, type RefObject, useEffect, useRef } from "react"
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router"
-import { authClient } from "../api/auth.ts"
+import { authClient, onAuthUnauthorized } from "../api/auth.ts"
 import { ApiError, onUnauthorized } from "../api/client.ts"
 import { qk } from "../api/endpoints.ts"
 import { useI18n } from "../i18n/i18n.tsx"
@@ -55,6 +58,9 @@ export function SessionGate({ children }: { children: ReactNode }) {
   pathRef.current = location.pathname
   const open = AUTH_PAGES.includes(location.pathname)
   const me = useMe()
+  // The user and role the session showed last; kept here, so a user who changed while the page was elsewhere (sign-in)
+  // is noticed when the keeper mounts again.
+  const sessionUser = useRef<string | null>(null)
 
   useEffect(() => {
     onUnauthorized((error) => {
@@ -64,7 +70,15 @@ export function SessionGate({ children }: { children: ReactNode }) {
       queryClient.removeQueries({ queryKey: qk.me })
       navigate(authPath(error, hereRef.current), { replace: true })
     })
-    return () => onUnauthorized(null)
+    // Better Auth answered 401: whether the session is gone is Maane's API's answer to who is signed in.
+    onAuthUnauthorized(() => {
+      if (AUTH_PAGES.includes(pathRef.current)) return
+      void queryClient.invalidateQueries({ queryKey: qk.me })
+    })
+    return () => {
+      onUnauthorized(null)
+      onAuthUnauthorized(null)
+    }
   }, [clearUnsaved, navigate, queryClient])
 
   if (open) return children
@@ -75,7 +89,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
   if (me.data)
     return (
       <>
-        <SessionKeeper />
+        <SessionKeeper seen={sessionUser} />
         {children}
       </>
     )
@@ -90,16 +104,25 @@ export function SessionGate({ children }: { children: ReactNode }) {
 /**
  * Better Auth's client session: mounted, it refreshes the session by itself (a GET, then the POST that extends it
  * when the answer says so). When it learns that the session is gone (signed out in another tab), the gate checks
- * again and goes to sign-in.
+ * again and goes to sign-in. When it shows another user or another role than it did before (signed in as someone
+ * else in another tab, a changed role), unsaved changes are dropped and every cached read starts again, so nothing
+ * the previous identity loaded stays on screen.
  */
-function SessionKeeper() {
+function SessionKeeper({ seen }: { seen: RefObject<string | null> }) {
   const queryClient = useQueryClient()
+  const clearUnsaved = useClearUnsaved()
   const { data, isPending } = authClient.useSession()
-  const seen = useRef(false)
-  const signedIn = Boolean(data)
+  const user = data?.user as { id?: string; role?: string | null } | undefined
+  const identity = user?.id ? `${user.id}:${user.role ?? ""}` : null
   useEffect(() => {
-    if (signedIn) seen.current = true
-    else if (!isPending && seen.current) void queryClient.invalidateQueries({ queryKey: qk.me })
-  }, [signedIn, isPending, queryClient])
+    if (identity) {
+      const before = seen.current
+      seen.current = identity
+      if (before && before !== identity) {
+        clearUnsaved()
+        void queryClient.resetQueries()
+      }
+    } else if (!isPending && seen.current) void queryClient.invalidateQueries({ queryKey: qk.me })
+  }, [identity, isPending, seen, clearUnsaved, queryClient])
   return null
 }

@@ -278,7 +278,11 @@
     "newAuthenticatorHint": "Type your password. Two-factor turns off and the old app stops working; set up the new app on the next screen. Until you do, this account can only sign out.",
     "newAuthenticatorSubmit": "Turn off and set up again",
     "newAuthenticatorBusy": "Turning off",
-    "done": "Done"
+    "done": "Done",
+    "codesLossTitle": "Close without the codes?",
+    "codesLossMessage": "The new codes are shown only now, and the old ones no longer work. Closing without saving them means making new ones.",
+    "codesLossClose": "Close anyway",
+    "codesLossBack": "Back to the codes"
   },
   "users": {
     "title": "Users",
@@ -389,11 +393,15 @@
         "setup": "First admin created at setup",
         "password_change": "Password changed",
         "totp_enable": "Two-factor turned on",
-        "totp_disable": "Two-factor turned off"
+        "totp_disable": "Two-factor turned off",
+        "backup_codes_new": "New backup codes made"
       },
       "session": {
         "sign_in": "Signed in",
-        "sign_out": "Signed out"
+        "sign_out": "Signed out",
+        "revoke": "Session ended",
+        "revoke_all": "All sessions ended",
+        "revoke_others": "Other sessions ended"
       },
       "user": {
         "create": "User added",

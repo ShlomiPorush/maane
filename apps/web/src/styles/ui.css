@@ -355,7 +355,8 @@ button {
   flex: none;
   align-items: center;
   gap: 8px;
-  margin-inline-start: 12px;
+  /* As far from the panel's end edge as the trail's own end padding. */
+  margin-inline: 12px 22px;
 }
 .ui-topbar-actions:empty {
   display: none;
@@ -674,6 +675,9 @@ button {
   }
   .ui-trail {
     padding-inline: 14px 28px;
+  }
+  .ui-topbar-actions {
+    margin-inline-end: 28px;
   }
   .ui-content {
     padding-inline: 28px;
@@ -1453,10 +1457,6 @@ html.ui-layer-on .ui-page {
 .ui-toast .ui-icon-btn svg {
   width: 16px;
   height: 16px;
-}
-.ui-toast-action {
-  margin-block: -4px;
-  flex: none;
 }
 .ui-toast-icon {
   width: 18px;

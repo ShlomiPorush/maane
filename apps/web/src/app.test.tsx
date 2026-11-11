@@ -7,29 +7,55 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { createMemoryRouter, RouterProvider } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { noteAuthStatus } from "./api/auth.ts"
 import { setTransport, type TransportRequest, type TransportResponse } from "./api/client.ts"
 import { I18nProvider, translate } from "./i18n/i18n.tsx"
 import { ROUTES } from "./routes.tsx"
 
 const auth = vi.hoisted(() => ({
   listUsers: vi.fn(),
+  listSessions: vi.fn(),
   signInUsername: vi.fn(),
   verifyTotp: vi.fn(),
   verifyBackupCode: vi.fn(),
+  generateBackupCodes: vi.fn(),
   signUpEmail: vi.fn(),
 }))
 
+/** Better Auth's client session as useSession reads it, changed by a test the way another tab or a refresh does. */
+const session = vi.hoisted(() => {
+  type Data = { session: { id: string }; user: { id: string; role: string } } | null
+  let data: Data = null
+  const listeners = new Set<() => void>()
+  return {
+    get: () => data,
+    set(next: Data) {
+      data = next
+      for (const listener of listeners) listener()
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+})
+
 vi.mock("./api/auth.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("./api/auth.ts")>()
+  const { useSyncExternalStore } = await import("react")
   return {
     ...real,
     authClient: {
-      useSession: () => ({ data: { session: { id: "current" } }, isPending: false }),
-      listSessions: () => Promise.resolve({ data: [], error: null }),
+      useSession: () => ({ data: useSyncExternalStore(session.subscribe, session.get), isPending: false }),
+      listSessions: auth.listSessions,
       signOut: () => Promise.resolve({ data: {}, error: null }),
       signIn: { username: auth.signInUsername },
       signUp: { email: auth.signUpEmail },
-      twoFactor: { verifyTotp: auth.verifyTotp, verifyBackupCode: auth.verifyBackupCode },
+      twoFactor: {
+        verifyTotp: auth.verifyTotp,
+        verifyBackupCode: auth.verifyBackupCode,
+        generateBackupCodes: auth.generateBackupCodes,
+      },
       admin: { listUsers: auth.listUsers },
     },
   }
@@ -92,6 +118,8 @@ function type(input: HTMLInputElement, value: string) {
 beforeEach(() => {
   localStorage.clear()
   for (const fn of Object.values(auth)) fn.mockReset()
+  auth.listSessions.mockResolvedValue({ data: [], error: null })
+  session.set({ session: { id: "current" }, user: { id: "u1", role: "admin" } })
 })
 
 afterEach(async () => {
@@ -150,6 +178,98 @@ describe("the session gate", () => {
       "/api/v1/settings": signedOut,
     })
     await vi.waitFor(() => expect(where()).toBe("/login?next=%2Fsettings"))
+  })
+
+  it("goes to sign-in when a Better Auth call answers 401 because the session is gone", async () => {
+    const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": admin }
+    auth.listSessions.mockImplementation(async () => {
+      answers["/api/v1/me"] = signedOut
+      noteAuthStatus(401)
+      return { data: null, error: { status: 401 } }
+    })
+    await renderAt("/account", answers)
+    await vi.waitFor(() => expect(where()).toBe("/login?next=%2Faccount"))
+  })
+
+  it("stays on the page when a Better Auth call answers 401 but the session is still there", async () => {
+    auth.listSessions.mockImplementation(async () => {
+      noteAuthStatus(401)
+      return { data: null, error: { status: 401, code: "INVALID_PASSWORD" } }
+    })
+    await renderAt("/account", { "/api/setup/status": status(), "/api/v1/me": admin })
+    await vi.waitFor(() => expect(requests.filter((r) => r.url === "/api/v1/me").length).toBeGreaterThan(1))
+    await vi.waitFor(() => expect(text()).toContain(he("account.failed")))
+    expect(where()).toBe("/account")
+  })
+
+  it("follows the session to another user and drops what the previous one loaded", async () => {
+    const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": admin }
+    await renderAt("/account", answers)
+    await vi.waitFor(() => expect(text()).toContain("first.admin"))
+    const reads = auth.listSessions.mock.calls.length
+    answers["/api/v1/me"] = agent
+    await act(async () => session.set({ session: { id: "other" }, user: { id: "u2", role: "agent" } }))
+    await vi.waitFor(() => expect(text()).toContain("agent.one"))
+    expect(text()).not.toContain("first.admin")
+    expect(document.querySelector(".ui-sidenav")?.textContent ?? "").not.toContain(he("nav.users"))
+    expect(auth.listSessions.mock.calls.length).toBeGreaterThan(reads)
+  })
+
+  it("follows a role change in the same session", async () => {
+    const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": admin }
+    await renderAt("/", answers)
+    await vi.waitFor(() => expect(document.querySelector(".ui-sidenav")?.textContent).toContain(he("nav.users")))
+    answers["/api/v1/me"] = ok({ id: "u1", username: "first.admin", role: "agent" })
+    await act(async () => session.set({ session: { id: "current" }, user: { id: "u1", role: "agent" } }))
+    await vi.waitFor(() =>
+      expect(document.querySelector(".ui-sidenav")?.textContent ?? "").not.toContain(he("nav.users")),
+    )
+  })
+})
+
+describe("account", () => {
+  const button = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+  const closeX = () =>
+    document.querySelector<HTMLButtonElement>(`[role=dialog] button[aria-label="${he("common.close")}"]`)
+
+  async function showNewCodes() {
+    auth.generateBackupCodes.mockResolvedValue({ data: { backupCodes: ["code-one", "code-two"] }, error: null })
+    await renderAt("/account", { "/api/setup/status": status(), "/api/v1/me": admin })
+    await vi.waitFor(() => expect(button(he("account.newCodes"))).toBeDefined())
+    await act(async () => button(he("account.newCodes"))?.click())
+    const field = await vi.waitFor(() => {
+      const input = document.querySelector<HTMLInputElement>("[role=dialog] input")
+      expect(input).not.toBeNull()
+      return input as HTMLInputElement
+    })
+    await act(async () => type(field, crypto.randomUUID()))
+    await act(async () => button(he("account.newCodesSubmit"))?.click())
+    await vi.waitFor(() => expect(text()).toContain("code-one"))
+  }
+
+  it("warns before new backup codes are closed unsaved, by the X and by Escape", async () => {
+    await showNewCodes()
+    await act(async () => closeX()?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("account.codesLossTitle")))
+    await act(async () => button(he("account.codesLossBack"))?.click())
+    await vi.waitFor(() => expect(text()).not.toContain(he("account.codesLossTitle")))
+    expect(text()).toContain("code-one")
+
+    await act(async () => {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("account.codesLossTitle")))
+    await act(async () => button(he("account.codesLossClose"))?.click())
+    await vi.waitFor(() => expect(text()).not.toContain("code-one"))
+  })
+
+  it("closes at once once the codes are marked saved", async () => {
+    await showNewCodes()
+    await act(async () => document.querySelector<HTMLInputElement>("[role=dialog] input[type=checkbox]")?.click())
+    await act(async () => closeX()?.click())
+    await vi.waitFor(() => expect(text()).not.toContain("code-one"))
+    expect(text()).not.toContain(he("account.codesLossTitle"))
   })
 })
 
@@ -261,6 +381,36 @@ describe("settings", () => {
     await vi.waitFor(() => expect(document.querySelector(".ui-savebar")).not.toBeNull())
     expect(document.querySelector(".ui-savebar")?.textContent).toContain(he("savebar.save"))
     expect(document.querySelector("button[lang=he]")?.getAttribute("aria-pressed")).toBe("true")
+  })
+
+  it("keeps an edit made while the save is on its way", async () => {
+    let release: (answer: TransportResponse) => void = () => {}
+    const loaded = (days: number) =>
+      ok({ settings: [view("general.defaultLocale", "he"), view("security.sessionDays", days)] })
+    await renderAt("/settings", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": (request) =>
+        request.method === "PUT"
+          ? (new Promise<TransportResponse>((resolve) => {
+              release = resolve
+            }) as unknown as TransportResponse)
+          : loaded(30),
+    })
+    const days = await vi.waitFor(() => {
+      const input = document.querySelector<HTMLInputElement>("input[type=number]")
+      expect(input).not.toBeNull()
+      return input as HTMLInputElement
+    })
+    await act(async () => type(days, "14"))
+    const save = document.querySelector<HTMLButtonElement>(".ui-savebar-save")
+    await act(async () => save?.click())
+    await vi.waitFor(() => expect(requests.some((r) => r.method === "PUT")).toBe(true))
+    await act(async () => type(days, "21"))
+    await act(async () => release(loaded(14)))
+    await vi.waitFor(() => expect(text()).toContain(he("settings.saved")))
+    expect(days.value).toBe("21")
+    expect(document.querySelector(".ui-savebar")).not.toBeNull()
   })
 })
 

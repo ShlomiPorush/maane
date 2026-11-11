@@ -477,3 +477,106 @@ describe("settings", () => {
     expect([...SETTING_KEYS].sort()).toEqual([...SETTING_ROWS].sort())
   })
 })
+
+// --- Audit actions: every action the server can write has its words ---
+
+const SERVER_SRC = fileURLToPath(new URL("../../server/src/", import.meta.url))
+
+/** The server's sources without tests. */
+function serverFiles(): Record<string, string> {
+  const out: Record<string, string> = {}
+  const visit = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) visit(full)
+      else if (/\.ts$/.test(entry.name) && !/\.test\.ts$/.test(entry.name))
+        out[relative(SERVER_SRC, full).replaceAll("\\", "/")] = readFileSync(full, "utf8")
+    }
+  }
+  visit(SERVER_SRC)
+  return out
+}
+
+/** Every argument of a call, from just after its opening parenthesis to its closing one. */
+function callArguments(text: string, open: number): string {
+  let depth = 0
+  for (let index = open; index < text.length; index++) {
+    const char = text[index]
+    if (char === "(" || char === "{" || char === "[") depth++
+    else if (char === ")" || char === "}" || char === "]") {
+      if (depth === 0) return text.slice(open, index)
+      depth--
+    }
+  }
+  return text.slice(open)
+}
+
+/**
+ * The actions the server's writeAudit calls can write: literals after `action:` (also in a condition), and the values
+ * of a `*_AUDIT` map that an `action` read from it. An action the scan cannot read (any other expression), or an
+ * audit row inserted without writeAudit, is reported, so a new writer cannot hide from the check.
+ */
+function auditActionsWritten(sources: Record<string, string>): { actions: Set<string>; unread: string[] } {
+  const actions = new Set<string>()
+  const unread: string[] = []
+  for (const [file, raw] of Object.entries(sources)) {
+    const text = code(raw)
+    if (file !== "audit.ts" && /\.insert\(\s*auditLog\b/.test(text))
+      unread.push(`${file}: inserts an audit row without writeAudit`)
+    const maps = new Map<string, string[]>()
+    for (const map of text.matchAll(/\bconst (\w+_AUDIT)\b[^=]*=\s*\{([^}]*)\}/g))
+      maps.set(
+        map[1] ?? "",
+        [...(map[2] ?? "").matchAll(/:\s*"([^"]+)"/g)].map((value) => value[1] ?? ""),
+      )
+    for (const call of text.matchAll(/\bwriteAudit\(/g)) {
+      const rest = callArguments(text, (call.index ?? 0) + call[0].length)
+      const expressions = [
+        ...[...rest.matchAll(/\baction:\s*([^,\n}]+)/g)].map((match) => (match[1] ?? "").trim()),
+        ...[...rest.matchAll(/[{,]\s*(action)\s*[,}]/g)].map((match) => match[1] ?? ""),
+      ]
+      for (const expression of expressions) {
+        const literals = [...expression.matchAll(/"([^"]+)"/g)].map((match) => match[1] ?? "")
+        if (literals.length > 0) {
+          for (const literal of literals) actions.add(literal)
+          continue
+        }
+        const bound = /^\w+$/.test(expression)
+          ? new RegExp(`\\b(?:const|let)\\s+${expression}\\s*=\\s*(\\w+_AUDIT)\\[`).exec(text)
+          : null
+        const values = bound ? maps.get(bound[1] ?? "") : undefined
+        if (values) for (const value of values) actions.add(value)
+        else unread.push(`${file}: writeAudit with action ${expression}; use a literal or a *_AUDIT map`)
+      }
+    }
+  }
+  return { actions, unread }
+}
+
+describe("audit actions", () => {
+  // The declaration of writeAudit in audit.ts reads as a call with no action, so it adds nothing.
+  const { actions, unread } = auditActionsWritten(serverFiles())
+
+  it("every action the server can write has its words on the audit page", () => {
+    expect(unread).toEqual([])
+    expect([...actions].filter((action) => !(AUDIT_ACTIONS as readonly string[]).includes(action))).toEqual([])
+  })
+
+  it("reads literals, conditions and both kinds of map lookups (the scan itself works)", () => {
+    for (const action of ["setting.update", "account.totp_disable", "session.revoke_others", "user.set_role"])
+      expect(actions.has(action)).toBe(true)
+  })
+
+  it("catches a planted action, an unreadable one, and an audit row written by hand", () => {
+    const planted = auditActionsWritten({
+      "a.ts": `const NEW_AUDIT: Record<string, string> = { "/x": "planted.map" }
+        const action = NEW_AUDIT[path]
+        await writeAudit(db, actor, { action, entityType: "user" })
+        await writeAudit(db, actor, { action: on ? "planted.yes" : "planted.no" })
+        await writeAudit(db, actor, { action: pick(path), entityType: "user" })`,
+      "b.ts": "await db.insert(auditLog).values({ action: 'planted.raw' })",
+    })
+    expect([...planted.actions].sort()).toEqual(["planted.map", "planted.no", "planted.yes"])
+    expect(planted.unread).toHaveLength(2)
+  })
+})
