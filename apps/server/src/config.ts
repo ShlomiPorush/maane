@@ -62,18 +62,20 @@ const PLACEHOLDER_WORDS = new Set([
 
 /**
  * A value copied from an example instead of generated: in angle brackets or `${...}`, one character repeated, or a
- * phrase made only of letters and separators, in any case, with a word such as "changeme", "your", "example", or
- * "placeholder" in it. A generated value of 32 or more bytes has digits, so it is never a phrase.
+ * phrase with a word such as "changeme", "your", "example", or "placeholder" in it, in any case. A phrase is split on
+ * spaces, dots, hyphens, and underscores into short words of letters only and numbers, as in
+ * "replace-me-with-32-random-bytes". A generated value of 32 or more bytes mixes letters and digits in long runs, so
+ * it is never a phrase.
  */
 export function isPlaceholder(value: string): boolean {
   const v = value.trim()
   if (/^<.*>$/.test(v) || /^\$\{.*\}$/.test(v) || /^(.)\1*$/.test(v)) return true
-  const phrase = v.toLowerCase()
-  if (!/^[a-z _.-]+$/.test(phrase)) return false
-  return phrase
+  const words = v
+    .toLowerCase()
     .split(/[-_ .]+/)
     .filter(Boolean)
-    .some((word) => PLACEHOLDER_WORDS.has(word))
+  if (!words.every((word) => /^[a-z]{1,12}$/.test(word) || /^\d+$/.test(word))) return false
+  return words.some((word) => PLACEHOLDER_WORDS.has(word))
 }
 
 /**

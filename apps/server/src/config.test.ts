@@ -88,5 +88,17 @@ describe("isPlaceholder", () => {
     for (const value of ["YOUR-SETTINGS-SECRET-REPLACE-ME-HERE", "Change_Me_To_Something_Random_Please", "EXAMPLE"]) {
       expect(isPlaceholder(value), value).toBe(true)
     }
+    // Numbers in the instructions do not hide them.
+    for (const value of [
+      "replace-me-with-32-random-bytes-before-starting",
+      "YOUR-SETTINGS-SECRET-REPLACE-ME-HERE-123",
+    ]) {
+      expect(isPlaceholder(value), value).toBe(true)
+    }
+  })
+
+  it("refuses an instruction with numbers in it as a settings key", () => {
+    const key = "replace-me-with-32-random-bytes-before-starting"
+    expect(problems(env({ MAANE_SETTINGS_KEYS: `1:${key}` }))).toContain("placeholder")
   })
 })
