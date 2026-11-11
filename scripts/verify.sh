@@ -7,6 +7,8 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
 CHANGED_BASE=""
+MERGE_BASE=""
+CHANGED=""
 CHECKS=1
 
 usage() {
@@ -44,13 +46,14 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-MERGE_BASE=""
+# The files changed since MERGE_BASE, committed or not, and new files that are not ignored. Runs in the main
+# shell (never in a pipe or a process substitution), so a failing git stops verify instead of looking like
+# "no changes".
 changed_files() {
-  MERGE_BASE="$(git -C "$REPO_ROOT" merge-base "$CHANGED_BASE" HEAD)" || die "cannot find a merge base with $CHANGED_BASE"
-  {
-    git -C "$REPO_ROOT" diff --name-only "$MERGE_BASE"
-    git -C "$REPO_ROOT" ls-files --others --exclude-standard
-  } | sort -u
+  local committed untracked
+  committed="$(git -C "$REPO_ROOT" diff --name-only "$MERGE_BASE")" || die "git diff against $CHANGED_BASE failed"
+  untracked="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || die "git ls-files failed"
+  CHANGED="$(printf '%s\n%s\n' "$committed" "$untracked" | sed '/^$/d' | sort -u)"
 }
 
 run_guards() {
@@ -78,15 +81,19 @@ main() {
 
   local filter=""
   if [ -n "$CHANGED_BASE" ] && [ $CHECKS -eq 1 ]; then
-    mapfile -t files < <(changed_files)
-    if [ ${#files[@]} -eq 0 ]; then
+    MERGE_BASE="$(git -C "$REPO_ROOT" merge-base "$CHANGED_BASE" HEAD)" ||
+      die "cannot find a merge base with $CHANGED_BASE (a shallow clone needs fetch-depth: 0)"
+    [[ "$MERGE_BASE" =~ ^[0-9a-f]{40}$ ]] || die "git merge-base gave no commit for $CHANGED_BASE"
+    changed_files
+    if [ -z "$CHANGED" ]; then
       info "No changes since $CHANGED_BASE: guards only"
       CHECKS=0
-    elif ! printf '%s\n' "${files[@]}" | grep -qvE '^(docs/|README\.md$|AGENTS\.md$|CHANGELOG\.md$|LICENSE$)'; then
+    elif ! grep -qvE '^(docs/|README\.md$|AGENTS\.md$|CHANGELOG\.md$|LICENSE$)' <<<"$CHANGED"; then
       info "Documentation-only change: guards only"
       CHECKS=0
-    elif ! printf '%s\n' "${files[@]}" | grep -qvE '^(apps|packages)/[^/]+/'; then
+    elif ! grep -qvE '^(apps|packages)/[^/]+/' <<<"$CHANGED"; then
       # Root files (manifests, lockfile, tool configuration, scripts) reach every package: those run everything.
+      # pnpm's documented filter: the packages changed since the commit, and every package that depends on them.
       filter="...[$MERGE_BASE]"
       info "Changes only inside packages: the changed packages and their dependents"
     fi

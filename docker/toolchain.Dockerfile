@@ -2,7 +2,7 @@
 FROM node:26.13.1-bookworm-slim
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git jq openssl shellcheck shfmt \
+  && apt-get install -y --no-install-recommends ca-certificates curl git jq openssl shellcheck shfmt yq \
   && rm -rf /var/lib/apt/lists/*
 
 # pnpm comes from corepack, pinned by "packageManager" in package.json. Node 25 and later no longer ship

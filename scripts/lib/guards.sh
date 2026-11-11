@@ -10,6 +10,8 @@ export LC_ALL=C.UTF-8
 
 HEBREW_LOCALE=packages/shared/src/locales/he.json
 ENGLISH_LOCALE=packages/shared/src/locales/en.json
+# The only kinds of file that may hold binary content. Text guards cannot read them.
+BINARY_EXTENSIONS='png|jpg|jpeg|gif|webp|ico|woff2|pdf|mmdb'
 
 fail=0
 files=()
@@ -18,12 +20,8 @@ while IFS= read -r -d '' file; do
 done < <(git ls-files -z -co --exclude-standard)
 
 hebrew_files=()
-ip_files=()
 for file in "${files[@]}"; do
   [ "$file" = "$HEBREW_LOCALE" ] || hebrew_files+=("$file")
-  # The lockfile is machine-written and holds version strings and hashes only; it is reviewed through
-  # package.json.
-  [ "$file" = pnpm-lock.yaml ] || ip_files+=("$file")
 done
 
 # Runs grep with the given arguments (ending with -- and the files) and prints file:line[:match].
@@ -50,25 +48,36 @@ report() {
   done
 }
 
+echo "--- Binary content only in images, fonts, PDFs and GeoIP databases"
+# grep skips binary files, so a NUL byte would hide a file from every text guard below.
+binary="$(git ls-files --eol -co --exclude-standard | awk '$1 == "i/-text" || $2 == "w/-text" { print $NF }' |
+  grep -viE "\.($BINARY_EXTENSIONS)$" || true)"
+if [ -n "$binary" ]; then
+  echo "Only images, fonts, PDFs and GeoIP databases may be binary; the text guards cannot read these:"
+  while IFS= read -r file; do echo "  $file"; done <<<"$binary"
+  fail=1
+fi
+
 echo "--- Hebrew only in $HEBREW_LOCALE"
 hebrew="$(search -l -P '[\x{0590}-\x{05FF}\x{FB1D}-\x{FB4F}]' -- "${hebrew_files[@]}")"
 if [ -n "$hebrew" ]; then
-  echo "Hebrew text is allowed only in $HEBREW_LOCALE. Write it in tests as \\u escapes or MIME-encoded:"
+  echo "Hebrew text is allowed only in $HEBREW_LOCALE. Write it in tests as code points or MIME-encoded:"
   while IFS= read -r file; do echo "  $file"; done <<<"$hebrew"
   fail=1
 fi
 
 echo "--- No literal bidirectional control characters"
-bidi="$(search -P '[\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]' -- "${files[@]}")"
+# Unicode's Bidi_Control set: ALM, LRM, RLM, the embeddings and overrides, and the isolates.
+bidi="$(search -P '[\x{061C}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]' -- "${files[@]}")"
 if [ -n "$bidi" ]; then
-  echo "Write bidirectional control characters as escapes (\\u200F), never as literal characters:"
+  echo "Write bidirectional control characters as escapes, never as literal characters:"
   report "a bidirectional control character" <<<"$bidi"
   fail=1
 fi
 
 echo "--- IPv4 addresses only from loopback, 0.0.0.0 and the documentation ranges"
 # Four dot-separated numbers inside a longer dotted run (1.2.3.4.5) are not an address.
-ips="$(search -o -P '(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)' -- "${ip_files[@]}" |
+ips="$(search -o -P '(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)' -- "${files[@]}" |
   awk -F: '{
     n = split($NF, o, ".")
     for (i = 1; i <= n; i++) if (o[i] + 0 > 255) next
@@ -84,19 +93,25 @@ fi
 
 echo "--- Environment files only as examples, with no secret values"
 # The repository holds no value a stack runs on, not even a "fake" or "dev-only" one: stacks generate theirs.
+# An environment file is any name that starts with .env or holds .env as a part: .env, .env.local, server.env,
+# .env.production.example. Only those that end in .example may be tracked, and their secrets stay empty.
 env_examples=()
 for file in "${files[@]}"; do
-  case "${file##*/}" in
-    .env.example | *.env.example) env_examples+=("$file") ;;
-    *.example) ;;
-    .env | .env.* | *.env)
-      echo "  $file: an environment file; keep only an example (<name>.example) with empty values"
-      fail=1
+  name="${file##*/}"
+  case "$name" in
+    .env | .env.* | *.env | *.env.*)
+      if [[ "$name" == *.example ]]; then
+        env_examples+=("$file")
+      else
+        echo "  $file: an environment file; keep only an example (<name>.example) with empty values"
+        fail=1
+      fi
       ;;
   esac
 done
-secret_values="$(search -E \
-  '^[[:space:]]*(export[[:space:]]+)?(DATABASE_URL|[A-Z0-9_]*(PASSWORD|SECRET|SECRETS|KEY|KEYS|TOKEN))[[:space:]]*=[[:space:]]*[^[:space:]#]' \
+# A value is anything but nothing, "" or ''.
+secret_values="$(search -P \
+  '^\s*(export\s+)?(DATABASE_URL|[A-Z0-9_]*(PASSWORD|SECRET|SECRETS|KEY|KEYS|TOKEN))\s*=\s*(?!""\s*(#.*)?$|'"''"'\s*(#.*)?$)[^\s#]' \
   -- "${env_examples[@]}")"
 if [ -n "$secret_values" ]; then
   echo "Example environment files must leave secrets and connection strings empty:"
@@ -107,6 +122,7 @@ fi
 echo "--- No secret-like values"
 # High-confidence formats only: private key blocks, known token formats, credentials inside a URL.
 # Tests that need such a value assemble it at run time, so the literal text never matches.
+# In a URL, only a placeholder password passes: $NAME, ${NAME}, <name> or asterisks.
 secret_pattern='-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----'
 secret_pattern+='|\bgh[pousr]_[A-Za-z0-9]{36,}'
 secret_pattern+='|\bgithub_pat_[A-Za-z0-9_]{22,}'
@@ -116,7 +132,8 @@ secret_pattern+='|\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}'
 secret_pattern+='|\bAIza[0-9A-Za-z_-]{35}'
 secret_pattern+='|\bapi-[A-F0-9]{32}\b'
 secret_pattern+='|\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
-secret_pattern+='|\b[a-z][a-z0-9+.-]*://[A-Za-z0-9._%+-]+:[^\s/@'"'"'"$<{*\[\]]+@'
+secret_pattern+='|\b[a-z][a-z0-9+.-]*://[A-Za-z0-9._%+-]+:'
+secret_pattern+='(?!(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|<[^\s<>@]*>|\*+)@)[^\s/@'"'"'"]+@'
 secrets="$(search -P -e "$secret_pattern" -- "${files[@]}")"
 if [ -n "$secrets" ]; then
   echo "A secret-like value is in the repository. Remove it, and replace it wherever it is used:"
@@ -125,14 +142,17 @@ if [ -n "$secrets" ]; then
 fi
 
 echo "--- No build: in the Compose files"
-compose_files=()
+# Read as YAML, so quoting and flow style cannot hide the key.
 for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.example.yml; do
-  [ -f "$file" ] && compose_files+=("$file")
+  [ -f "$file" ] || continue
+  if ! built="$(yq -r '[(.services // {})[]? | select(type == "object" and has("build"))] | length' "$file" 2>/dev/null)"; then
+    echo "  $file: not valid YAML"
+    fail=1
+  elif [ "$built" != 0 ]; then
+    echo "  $file: $built service(s) with build:. Compose files must not build; the scripts build images."
+    fail=1
+  fi
 done
-if [ ${#compose_files[@]} -gt 0 ] && grep -nE '^[[:space:]]*build[[:space:]]*:' "${compose_files[@]}"; then
-  echo "Compose files must not contain build:. Images are built by the scripts."
-  fail=1
-fi
 
 echo "--- Local deny list"
 deny=docs/private/deny-list.txt
@@ -177,19 +197,22 @@ if [ -n "$crlf" ]; then
 fi
 
 echo "--- GitHub Actions pinned to a commit SHA"
-workflow_files=()
+# Read as YAML, so quoting and flow style cannot hide a `uses`.
 for file in "${files[@]}"; do
-  [[ "$file" == .github/workflows/*.yml || "$file" == .github/workflows/*.yaml || "$file" == .github/actions/* ]] &&
-    workflow_files+=("$file")
+  [[ "$file" =~ ^\.github/(workflows/[^/]+|actions/.+/action)\.ya?ml$ ]] || continue
+  if ! uses="$(yq -r '.. | objects | .uses? // empty | strings' "$file" 2>/dev/null)"; then
+    echo "  $file: not valid YAML"
+    fail=1
+    continue
+  fi
+  while IFS= read -r action; do
+    [ -z "$action" ] && continue
+    [[ "$action" =~ ^\./ || "$action" =~ ^docker://[^[:space:]]+@sha256:[0-9a-f]{64}$ ]] && continue
+    [[ "$action" =~ ^[^[:space:]@]+@[0-9a-f]{40}$ ]] && continue
+    echo "  $file: $action is not pinned to a full commit SHA (put the version in a comment)"
+    fail=1
+  done <<<"$uses"
 done
-unpinned="$(search -E '^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]*' -- "${workflow_files[@]}" |
-  grep -vE 'uses:[[:space:]]*["'"'"']?(\./|docker://[^[:space:]]+@sha256:[0-9a-f]{64})' |
-  grep -vE 'uses:[[:space:]]*["'"'"']?[^[:space:]@"'"'"']+@[0-9a-f]{40}([[:space:]"'"'"']|$)' || true)"
-if [ -n "$unpinned" ]; then
-  echo "Pin every action to a full commit SHA (with the version in a comment):"
-  report "" <<<"$unpinned"
-  fail=1
-fi
 
 echo "--- Shell scripts"
 scripts=()
@@ -197,11 +220,19 @@ for file in "${files[@]}"; do
   [[ "$file" == scripts/*.sh || "$file" == scripts/lib/*.sh ]] && scripts+=("$file")
 done
 if [ ${#scripts[@]} -gt 0 ]; then
-  shellcheck -x "${scripts[@]}" || fail=1
-  shfmt -d -i 2 -ci "${scripts[@]}" || {
+  # One line per finding, without the source line, and only the names of badly formatted files in CI: the output
+  # of a public repository's CI must not repeat a line that may hold what another guard just found.
+  shellcheck -x -f gcc "${scripts[@]}" || fail=1
+  if [ -n "${CI:-}" ]; then
+    unformatted="$(shfmt -l -i 2 -ci "${scripts[@]}")" || fail=1
+  else
+    unformatted="$(shfmt -d -i 2 -ci "${scripts[@]}")" || fail=1
+  fi
+  if [ -n "$unformatted" ]; then
+    echo "$unformatted"
     echo "Run: shfmt -w -i 2 -ci scripts"
     fail=1
-  }
+  fi
 fi
 while read -r mode _ _ path; do
   [[ "$path" == scripts/lib/* ]] && continue

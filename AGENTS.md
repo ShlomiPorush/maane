@@ -50,6 +50,7 @@ CI (`.github/workflows/ci.yml`) runs `Detect changes`, `Guards` always, `Checks`
 
 - Some editing tools turn `\u` escapes in the text they write into the literal characters. After writing a file that needs Hebrew code points or bidirectional controls in source, build them from code points (`String.fromCodePoint(0x5d0)`) or check the file: the guards fail on literal Hebrew outside `he.json` and on any literal bidirectional control.
 - Tests and guard tests assemble secret-like values at run time (`"gh""p_..."`), because the guards and GitHub push protection scan the literal text.
+- Only images, fonts, PDFs, and GeoIP databases may hold binary content (`BINARY_EXTENSIONS` in `scripts/lib/guards.sh`): grep skips binary files, so any other binary file would hide from the text guards. The Compose and workflow guards read YAML with `yq`, so quoting or flow style cannot hide `build:` or an unpinned `uses:`.
 - The guards scan tracked files and new files that are not ignored. The deny list `docs/private/deny-list.txt` exists only on the owner's machine; in CI the guard is skipped, and CI output never repeats a matched line.
 - pnpm 12 reads its settings only from `pnpm-workspace.yaml`. A dependency that needs an install script must be allowed there under `allowBuilds`.
 - Biome 2 must find `biome.json` at the repository root; a config under `config/` fails with "nested root configuration". Its Markdown and YAML formatters are off.

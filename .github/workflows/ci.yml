@@ -13,8 +13,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  # Superseded pull request runs are cancelled; runs on main always finish.
+  # Pull request runs share a group per pull request, and a new push cancels the superseded run. Every other run
+  # (main, manual, weekly) has a group of its own, so none is ever cancelled or dropped while it waits.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -32,11 +33,14 @@ jobs:
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           predicate-quantifier: every
+          # The same documentation-only paths as scripts/verify.sh --changed.
           filters: |
             code:
               - '**'
               - '!docs/**'
-              - '!**/*.md'
+              - '!README.md'
+              - '!AGENTS.md'
+              - '!CHANGELOG.md'
               - '!LICENSE'
 
   # Always runs: documentation is where Hebrew text, addresses and private names slip in.
