@@ -2064,3 +2064,20 @@ fieldset.ui-seg {
   margin: 0;
   border: 0;
 }
+/* "Reset to default (value)" under a setting's explanation, in the info colour (FS-6). */
+.ui-set-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ui-muted);
+  font: inherit;
+  font-size: var(--ui-fs-meta);
+  cursor: pointer;
+}
+.ui-set-clear.is-reset {
+  color: var(--ui-info);
+}

@@ -5,7 +5,7 @@
 // (setting_invalid) and an unknown key (setting_unknown); each refusal is explained and points at its field. A
 // refresh never touches a field being edited: the draft holds only what was changed.
 
-import { LOCALES, type SettingKey, type SettingView } from "@maane/shared"
+import { LOCALES, SETTINGS, type SettingKey, type SettingView } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { type ReactNode, useId, useRef, useState } from "react"
 import { ApiError } from "../api/client.ts"
@@ -109,6 +109,17 @@ function Settings() {
     }
   }
 
+  /** A value that differs from its default: Changed, and Reset puts the default in the draft (FS-6). */
+  const resetOf = (key: SettingKey) => {
+    if (lockOf(key)) return null
+    const fallback = String(SETTINGS[key].defaultValue)
+    const current = value(key).trim()
+    const same = key === "security.sessionDays" ? Number(current) === Number(fallback) : current === fallback
+    if (same) return null
+    const label = key === "general.defaultLocale" ? nativeName(fallback as (typeof LOCALES)[number]) : fallback
+    return { label, onReset: () => edit(key, fallback) }
+  }
+
   const lockOf = (key: SettingKey) => {
     const view = views.get(key)
     return view?.locked ? { variable: view.variable } : null
@@ -129,7 +140,7 @@ function Settings() {
             label={t(labelKey(locale))}
             hint={t("settings.defaultLocale.hint")}
             lock={lockOf(locale)}
-            changed={changed.includes(locale)}
+            reset={resetOf(locale)}
           >
             <fieldset className="ui-seg" aria-label={t(labelKey(locale))}>
               {LOCALES.map((option) => (
@@ -153,7 +164,7 @@ function Settings() {
             hint={t("settings.sessionDays.hint", { min: SESSION_DAYS_MIN, max: SESSION_DAYS_MAX })}
             htmlFor={daysId}
             lock={lockOf(days)}
-            changed={changed.includes(days)}
+            reset={resetOf(days)}
           >
             <input
               id={daysId}

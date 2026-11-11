@@ -1,9 +1,10 @@
 // The parts of the Account and Settings pages, after Mikud's Settings parts (v3 FS-6, FS-8): a group is a panel
 // with a small title, its count and its list actions at the end of its head; a row has the label and explanation at
 // the start and the control at the end. A value the environment sets carries a neutral "Set by the environment" tag
-// on its label line and names the variable under the explanation; its control stays in place, disabled.
+// on its label line and names the variable under the explanation; its control stays in place, disabled. A value that
+// differs from its default carries a Changed tag and a "Reset to default (value)" button; a locked one never does.
 
-import { Lock } from "lucide-react"
+import { Lock, RotateCcw } from "lucide-react"
 import type { ReactNode } from "react"
 import { formatNumber } from "../format/number.ts"
 import { useI18n } from "../i18n/i18n.tsx"
@@ -42,21 +43,22 @@ export function Group({
 
 /** The environment sets this value: the variable that does. */
 export type EnvLock = { variable: string | null }
+/** The value differs from its default: the default's name, and what puts it back in the draft. */
+export type ResetMark = { label: string; onReset: () => void }
 
 export function Row({
   label,
   hint,
   htmlFor,
   lock,
-  changed,
+  reset,
   children,
 }: {
   label: string
   hint?: ReactNode
   htmlFor?: string
   lock?: EnvLock | null
-  /** The draft differs from what is saved. */
-  changed?: boolean
+  reset?: ResetMark | null
   children: ReactNode
 }) {
   const { t } = useI18n()
@@ -75,8 +77,10 @@ export function Row({
             <span className="ui-set-pill" title={t("settings.env.tooltip")}>
               <Lock size={12} aria-hidden="true" /> {t("settings.env.pill")}
             </span>
-          ) : changed ? (
-            <span className="ui-set-pill is-changed">{t("settings.changed")}</span>
+          ) : reset ? (
+            <span className="ui-set-pill is-changed" title={t("settings.changedTooltip")}>
+              {t("settings.changed")}
+            </span>
           ) : null}
         </span>
         {hint ? <span className="ui-set-desc">{hint}</span> : null}
@@ -87,6 +91,10 @@ export function Row({
               {t("settings.env.note")} <bdi className="ui-mono">{lock.variable ?? ""}</bdi>
             </span>
           </span>
+        ) : reset ? (
+          <button type="button" className="ui-set-clear is-reset" onClick={reset.onReset}>
+            <RotateCcw size={12} aria-hidden="true" /> {t("settings.resetTo", { value: reset.label })}
+          </button>
         ) : null}
       </div>
       <div className="ui-set-control">{children}</div>

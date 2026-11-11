@@ -133,6 +133,16 @@ describe("the session gate", () => {
     expect(auth.listUsers).not.toHaveBeenCalled()
   })
 
+  it("stays on the two-factor setup after two-factor was turned off, despite the cached full session", async () => {
+    const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": admin }
+    await renderAt("/account", answers)
+    await vi.waitFor(() => expect(text()).toContain(he("account.sessions")))
+    answers["/api/v1/me"] = totpRequired
+    await act(async () => router?.navigate("/enroll?next=%2Faccount", { replace: true }))
+    await vi.waitFor(() => expect(text()).toContain(he("enroll.required")))
+    expect(where()).toBe("/enroll?next=%2Faccount")
+  })
+
   it("goes to sign-in when Maane's API answers 401 while a page is open", async () => {
     await renderAt("/settings", {
       "/api/setup/status": status(),
@@ -220,6 +230,37 @@ describe("sign-in", () => {
   it("goes straight on when the session is already full", async () => {
     await renderAt("/login?next=%2Faudit", { "/api/setup/status": status(), "/api/v1/me": admin })
     await vi.waitFor(() => expect(where()).toBe("/audit"))
+  })
+})
+
+describe("settings", () => {
+  const view = (key: string, value: unknown, locked = false) => ({
+    key,
+    value,
+    secret: false,
+    set: true,
+    locked,
+    variable: locked ? "MAANE_SESSION_DAYS" : null,
+  })
+
+  it("locks a value the environment sets, and resets a changed one to its default through the save bar", async () => {
+    await renderAt("/settings", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": ok({
+        settings: [view("general.defaultLocale", "en"), view("security.sessionDays", 30, true)],
+      }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("settings.env.pill")))
+    expect(text()).toContain("MAANE_SESSION_DAYS")
+    expect(document.querySelector<HTMLInputElement>("input[type=number]")?.disabled).toBe(true)
+    expect(text()).toContain(he("settings.changed"))
+
+    const reset = Array.from(document.querySelectorAll("button")).find((b) => b.className.includes("is-reset"))
+    await act(async () => reset?.click())
+    await vi.waitFor(() => expect(document.querySelector(".ui-savebar")).not.toBeNull())
+    expect(document.querySelector(".ui-savebar")?.textContent).toContain(he("savebar.save"))
+    expect(document.querySelector("button[lang=he]")?.getAttribute("aria-pressed")).toBe("true")
   })
 })
 

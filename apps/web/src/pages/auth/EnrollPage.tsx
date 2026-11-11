@@ -39,10 +39,12 @@ export function EnrollPage() {
         />
       </AuthFrame>
     )
-  if (me.isPending) return <Loading label={t("app.loading")} />
-  if (me.data) return <Navigate to={next} replace />
+  // Decided only on a read made after this page opened: a cached full session may be gone (two-factor turned off).
+  if (me.isPending || me.isFetching) return <Loading label={t("app.loading")} />
+  // A failed read keeps the old answer beside its error: the error decides.
   const error = me.error
   if (error instanceof ApiError && error.status === 401) return <Navigate to={withNext("/login", next)} replace />
+  if (!error && me.data) return <Navigate to={next} replace />
   if (!(error instanceof ApiError && error.code === "totp_required"))
     return (
       <div className="ui-auth">

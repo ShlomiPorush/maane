@@ -245,7 +245,11 @@
     "endOneDone": "{name} is signed out.",
     "endOthers": "End all other sessions",
     "endOthersTitle": "End all other sessions?",
-    "endOthersMessage": "{count} other sessions will be signed out. This browser stays signed in.",
+    "endOthersMessage": {
+      "one": "{count} other session will be signed out. This browser stays signed in.",
+      "two": "{count} other sessions will be signed out. This browser stays signed in.",
+      "other": "{count} other sessions will be signed out. This browser stays signed in."
+    },
     "endOthersDone": "The other sessions are signed out.",
     "endFailed": "Could not end the session. {reason}",
     "passwordGroup": "Password",
@@ -344,6 +348,8 @@
       "hint": "A user who does not open Maane for this long signs in again. {min} to {max} days."
     },
     "changed": "Changed",
+    "changedTooltip": "Differs from the default",
+    "resetTo": "Reset to default ({value})",
     "env": {
       "pill": "Set by the environment",
       "tooltip": "An environment variable sets this value; change it there.",

@@ -233,15 +233,33 @@ function leaf(tree: unknown, key: string): boolean {
 
 const inBoth = (key: string) => leaf(en, key) && leaf(he, key)
 
+/** The first argument of a call that starts at `open` (just after its parenthesis), parentheses and braces balanced. */
+function firstArgument(text: string, open: number): string {
+  let depth = 0
+  for (let index = open; index < text.length; index++) {
+    const char = text[index]
+    if (char === "(" || char === "{" || char === "[") depth++
+    else if (char === ")" || char === "}" || char === "]") {
+      if (depth === 0) return text.slice(open, index)
+      depth--
+    } else if (char === "," && depth === 0) return text.slice(open, index)
+  }
+  return text.slice(open)
+}
+
+/** Every key a t() or tc() call can ask for: each dotted literal in its first argument (also in a condition). */
 function usedKeys(sources: Record<string, string>): { plain: Set<string>; counted: Set<string>; dynamic: Set<string> } {
   const plain = new Set<string>()
   const counted = new Set<string>()
   const dynamic = new Set<string>()
   for (const text of Object.values(sources)) {
-    for (const match of text.matchAll(/\bt\(\s*"([\w.]+)"/g)) plain.add(match[1] ?? "")
-    for (const match of text.matchAll(/\btc\(\s*"([\w.]+)"/g)) counted.add(match[1] ?? "")
-    for (const match of text.matchAll(/\bt\(\s*`([\w.]+)\$\{/g)) dynamic.add(match[1] ?? "")
-    for (const match of text.matchAll(/\btc\(\s*`([\w.]+)\$\{/g)) dynamic.add(match[1] ?? "")
+    const plainText = code(text)
+    for (const call of plainText.matchAll(/\b(tc?)\(/g)) {
+      const argument = firstArgument(plainText, (call.index ?? 0) + call[0].length)
+      const into = call[1] === "tc" ? counted : plain
+      for (const literal of argument.matchAll(/"(\w+(?:\.\w+)+)"/g)) into.add(literal[1] ?? "")
+      for (const template of argument.matchAll(/`(\w+(?:\.\w+)*\.)\$\{/g)) dynamic.add(template[1] ?? "")
+    }
   }
   return { plain, counted, dynamic }
 }
@@ -412,6 +430,18 @@ describe("locale keys", () => {
     expect(plain.has("login.title")).toBe(true)
     expect(counted.has("savebar.count")).toBe(true)
     expect(dynamic.has("audit.action.")).toBe(true)
+    // A key chosen by a condition counts too.
+    expect(plain.has("users.makeAgent")).toBe(true)
+    expect(plain.has("login.backupDescription")).toBe(true)
+  })
+
+  it("catches a planted key in a condition, in a counted call, and in a template", () => {
+    const found = usedKeys({
+      "pages/Planted.tsx": `t(on ? "planted.yes" : "planted.no", { n: f("x.y") }); tc("planted.count", 2); t(\`planted.kind.\${k}\`)`,
+    })
+    expect([...found.plain].sort()).toEqual(["planted.no", "planted.yes"])
+    expect([...found.counted]).toEqual(["planted.count"])
+    expect([...found.dynamic]).toEqual(["planted.kind."])
   })
 })
 

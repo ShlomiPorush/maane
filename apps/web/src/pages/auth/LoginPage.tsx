@@ -35,7 +35,9 @@ export function LoginPage() {
 
   const status = useSetupStatus({ fresh: true })
   const me = useMe({ fresh: true })
-  if (status.isPending || (me.isPending && step === "password")) return <Loading label={t("app.loading")} />
+  // The session is judged only by a read made after this page opened, never by a cached answer.
+  if (status.isPending || ((me.isPending || me.isFetching) && step === "password"))
+    return <Loading label={t("app.loading")} />
   if (status.isError)
     return (
       <div className="ui-auth">
@@ -43,9 +45,10 @@ export function LoginPage() {
       </div>
     )
   if (!status.data.hasUser) return <Navigate to={withNext("/setup", next)} replace />
-  if (me.data) return <Navigate to={next} replace />
+  // A failed read keeps the old answer beside its error: the error decides.
   if (me.error instanceof ApiError && me.error.code === "totp_required")
     return <Navigate to={withNext("/enroll", next)} replace />
+  if (!me.error && me.data) return <Navigate to={next} replace />
 
   const finish = async () => {
     await queryClient.resetQueries()

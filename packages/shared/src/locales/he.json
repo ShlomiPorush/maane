@@ -37,9 +37,9 @@
     "collapseMenu": "כיווץ התפריט",
     "expandMenu": "הרחבת התפריט",
     "theme": "ערכת צבעים",
-    "themeButton": "ערכת צבעים: {theme}. מעבר ל{next}",
+    "themeButton": "ערכת צבעים: {theme}. מעבר ל־{next}",
     "language": "שפה",
-    "languageButton": "מעבר ל{language}",
+    "languageButton": "מעבר ל־{language}",
     "accountMenu": "תפריט החשבון",
     "twoFactorOn": "אימות דו־שלבי פעיל"
   },
@@ -245,7 +245,11 @@
     "endOneDone": "{name} נותק.",
     "endOthers": "ניתוק כל ההתחברויות האחרות",
     "endOthersTitle": "לנתק את כל ההתחברויות האחרות?",
-    "endOthersMessage": "{count} התחברויות אחרות ינותקו. הדפדפן הזה יישאר מחובר.",
+    "endOthersMessage": {
+      "one": "התחברות אחרת אחת תנותק. הדפדפן הזה יישאר מחובר.",
+      "two": "שתי התחברויות אחרות ינותקו. הדפדפן הזה יישאר מחובר.",
+      "other": "{count} התחברויות אחרות ינותקו. הדפדפן הזה יישאר מחובר."
+    },
     "endOthersDone": "ההתחברויות האחרות נותקו.",
     "endFailed": "הניתוק נכשל. {reason}",
     "passwordGroup": "סיסמה",
@@ -344,6 +348,8 @@
       "hint": "משתמש שלא פותח את מענה במשך הזמן הזה יתחבר שוב. {min} עד {max} ימים."
     },
     "changed": "שונה",
+    "changedTooltip": "שונה מברירת המחדל",
+    "resetTo": "חזרה לברירת המחדל ({value})",
     "env": {
       "pill": "נקבע בסביבה",
       "tooltip": "משתנה סביבה קובע את הערך הזה; משנים אותו שם.",

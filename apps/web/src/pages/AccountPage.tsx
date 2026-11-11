@@ -56,7 +56,7 @@ export function AccountPage() {
 }
 
 function AccountSections() {
-  const { t } = useI18n()
+  const { t, tc } = useI18n()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const me = useMe()
@@ -98,7 +98,7 @@ function AccountSections() {
     const others = sessions.filter((session) => session.id !== current).length
     const ok = await confirmDialog({
       title: t("account.endOthersTitle"),
-      message: t("account.endOthersMessage", { count: others }),
+      message: tc("account.endOthersMessage", others),
       confirmText: t("account.endOthers"),
       danger: true,
     })
@@ -197,6 +197,8 @@ function AccountSections() {
             setDialog(null)
             // The setup starts at once with the password just typed, held in memory only.
             rememberForEnrollment(password)
+            // The cached full session is gone: the setup page must not take it for one.
+            queryClient.removeQueries({ queryKey: qk.me })
             navigate(withNext("/enroll", ACCOUNT_PATH), { replace: true })
           }}
         />
