@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -70,6 +70,14 @@ describe("command line", () => {
     expect(await main(["check", "--out", join(dir, "repo", "archive")], run.io)).toBe(2)
     expect(run.stderr.text()).toContain("inside a Git working tree")
     expect(await insideGitWorkTree(join(dir, "elsewhere"))).toBe(false)
+  })
+
+  it("follows a link into a Git working tree, also to a folder that does not exist yet", async () => {
+    await mkdir(join(dir, "repo", ".git"), { recursive: true })
+    await mkdir(join(dir, "repo", "inside"), { recursive: true })
+    await symlink(join(dir, "repo", "inside"), join(dir, "outside-link"), "dir")
+    expect(await insideGitWorkTree(join(dir, "outside-link"))).toBe(true)
+    expect(await insideGitWorkTree(join(dir, "outside-link", "archive", "new"))).toBe(true)
   })
 
   it("reads the token from a terminal only", async () => {

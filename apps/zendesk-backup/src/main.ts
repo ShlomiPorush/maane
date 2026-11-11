@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises"
+import { realpath, stat } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { parseArgs } from "node:util"
 import { Archive, type CheckResult, checkArchive, runBackup, tokenAuthorization, ZendeskClient } from "@maane/zendesk"
@@ -59,7 +59,9 @@ export async function main(argv: string[], io: Io): Promise<number> {
         maxFileBytes: parsed.maxFileMb * 1024 * 1024,
         log: say,
       })
-      say(`Backup run ${result.run} finished. Changes up to ${result.coveredUntil ?? "(unknown)"} are in the archive.`)
+      say(
+        `Backup run ${result.run} finished. Changes up to ${result.coveredUntil ?? "(unknown)"} by Zendesk's clock are in the archive.`,
+      )
       if (result.collectionsUnavailable.length > 0) {
         say(`Not available to this token or account: ${result.collectionsUnavailable.join(", ")}`)
       }
@@ -111,13 +113,32 @@ function parse(argv: string[]): Parsed {
 
 /** True when the path, or the nearest folder above it that exists, belongs to a Git working tree. */
 export async function insideGitWorkTree(path: string): Promise<boolean> {
-  let current = resolve(path)
+  // The physical path: the nearest folder that exists, with every link and junction resolved, so a link outside a
+  // repository that points into one is seen for what it is. A folder that cannot be read refuses, to be safe.
+  let existing = resolve(path)
+  for (;;) {
+    try {
+      await stat(existing)
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true
+      const parent = dirname(existing)
+      if (parent === existing) return true
+      existing = parent
+    }
+  }
+  let current: string
+  try {
+    current = await realpath(existing)
+  } catch {
+    return true
+  }
   for (;;) {
     try {
       await stat(join(current, ".git"))
       return true
-    } catch {
-      // keep looking upwards
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true
     }
     const parent = dirname(current)
     if (parent === current) return false
@@ -131,7 +152,7 @@ function report(check: CheckResult, io: Io): void {
     `Archive check: ${check.problems.length === 0 ? "complete" : "INCOMPLETE"}`,
     `  Changes covered until: ${check.coveredUntil ?? "(unknown)"}`,
     `  Tickets: ${c.tickets} (deleted in Zendesk: ${c.deletedTickets}, deleted before their newest version was saved: ${c.goneTickets})`,
-    `  Comments: ${c.comments} (internal notes: ${c.internalNotes})`,
+    `  Comments: ${c.comments} (internal notes: ${c.internalNotes})  Side conversations: ${c.sideConversations}`,
     `  Users: ${c.users}  Organizations: ${c.organizations}`,
     `  Files saved: ${c.filesOk} (inline images: ${c.inlineImages})  Files failed: ${c.filesFailed}`,
     `  JSON files read: ${c.jsonFiles}`,

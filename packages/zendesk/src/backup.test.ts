@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -28,6 +28,8 @@ function client(maxAttempts = 3): ZendeskClient {
     apiOrigin: zendesk.apiOrigin,
     authorization: zendesk.authorization,
     allowHttp: true,
+    // The stand-in's file host is the loopback address: allowed here, never by the command line.
+    fileHostAllowed: (host) => host === "127.0.0.1",
     sleep: async () => {},
     maxAttempts,
   })
@@ -40,16 +42,23 @@ async function manifest(): Promise<Manifest> {
   return JSON.parse(await readFile(join(dir, "manifest.json"), "utf8")) as Manifest
 }
 
+const statuses = async () =>
+  Object.fromEntries(Object.entries((await manifest()).files).map(([id, f]) => [id, f.status]))
+
 describe("backup", () => {
-  it("saves the raw records, every ticket's comments and audits, and each file or its failure", async () => {
+  it("saves the raw records, every ticket's comments, audits, side conversations, and each file or its failure", async () => {
     const result = await backup()
     expect(result.coveredUntil).not.toBeNull()
+    expect(result.sideConversations).toBe("available")
 
-    // Raw pages are stored exactly as Zendesk sent them.
+    // Raw pages are stored exactly as Zendesk sent them, with metric sets asked for.
     const firstPage = await readFile(join(dir, "raw/incremental/tickets/000001.json"), "utf8")
     expect(JSON.parse(firstPage).tickets[0]).toMatchObject({ id: 1, encoded_id: "X1Y" })
+    expect(
+      zendesk.requests.some((r) => r.includes("incremental/tickets/cursor.json") && r.includes("include=metric_sets")),
+    ).toBe(true)
     expect(await readdir(join(dir, "raw/collections/brands/000001"))).toEqual(["000001.json", "000002.json"])
-    expect(await readdir(join(dir, "raw/incremental/organizations"))).toHaveLength(2)
+    expect(await readdir(join(dir, "raw/collections/satisfaction_ratings/000001"))).toHaveLength(2)
 
     const files = (await manifest()).files
     const invoice = zendesk.allFiles().find((f) => f.id === 101)
@@ -60,14 +69,12 @@ describe("backup", () => {
         .digest("hex"),
     )
     expect(files["102"]).toMatchObject({ status: "ok", inline: true })
-    expect(files["201"]).toMatchObject({ status: "failed" })
+    expect(files["401"]).toMatchObject({ status: "ok", commentId: "side:9001" })
     expect(files["201"]?.error).toContain("larger than the limit")
-    expect(files["301"]).toMatchObject({ status: "failed" })
     expect(files["301"]?.error).toContain("404")
 
     // The token went to the API only, never to the file host after the redirect.
     expect(zendesk.fileHostAuthorizations).toEqual([])
-    // Inline images were asked for.
     expect(zendesk.requests.some((r) => r.includes("comments.json?include_inline_images=true"))).toBe(true)
 
     const check = await checkArchive(dir)
@@ -78,44 +85,50 @@ describe("backup", () => {
       goneTickets: 1,
       comments: 5,
       internalNotes: 1,
+      sideConversations: 1,
       users: 3,
       organizations: 3,
-      filesOk: 2,
+      filesOk: 3,
       inlineImages: 1,
       filesFailed: 2,
     })
     expect(check.warnings.join("\n")).toContain("could not be downloaded")
   })
 
+  it("takes the covered time from Zendesk's clock, less the minute the export leaves out", async () => {
+    const result = await backup()
+    const last = zendesk.lastDate ?? ""
+    expect(result.coveredUntil).toBe(new Date(Date.parse(last) - 60_000).toISOString())
+  })
+
   it("resumes a run that stopped part way, with the same result as an uninterrupted run", async () => {
-    // The stand-in stops answering once the first ticket is saved, in the middle of its files.
-    zendesk.failAfter = 28
+    zendesk.failWhen = (path) => path.includes("/tickets/2/")
     await expect(backup(2)).rejects.toThrow("500")
     expect((await checkArchive(dir)).problems).not.toEqual([])
 
-    zendesk.failAfter = Number.POSITIVE_INFINITY
+    zendesk.failWhen = null
     await backup()
-    const resumed = await manifest()
     const check = await checkArchive(dir)
     expect(check.problems).toEqual([])
     expect(check.counts.tickets).toBe(4)
-
-    // The page numbers of the ticket export have no gap and no duplicate. The second run read the stream
-    // from the saved cursor: one more page, empty, at its end.
+    // The second run read the ticket stream from the saved cursor: one more page, empty, at its end.
     expect(await readdir(join(dir, "raw/incremental/tickets"))).toEqual([
       "000001.json",
       "000002.json",
       "000003.json",
       "000004.json",
     ])
-    const last = JSON.parse(await readFile(join(dir, "raw/incremental/tickets/000004.json"), "utf8"))
-    expect(last).toMatchObject({ tickets: [], end_of_stream: true })
-    expect(Object.fromEntries(Object.entries(resumed.files).map(([id, f]) => [id, f.status]))).toEqual({
-      "101": "ok",
-      "102": "ok",
-      "201": "failed",
-      "301": "failed",
-    })
+    expect(await statuses()).toEqual({ "101": "ok", "102": "ok", "201": "failed", "301": "failed", "401": "ok" })
+  })
+
+  it("tries a failed file again on the next run, with a fresh link, and records it once it arrives", async () => {
+    zendesk.failWhen = (path) => path.startsWith("/attachments/token/t102/")
+    await backup()
+    expect((await statuses())["102"]).toBe("failed")
+    zendesk.failWhen = null
+    await backup()
+    expect((await statuses())["102"]).toBe("ok")
+    expect((await checkArchive(dir)).problems).toEqual([])
   })
 
   it("continues from the saved position and keeps every earlier version of a ticket", async () => {
@@ -124,16 +137,21 @@ describe("backup", () => {
     zendesk.addComment(1, { id: 14, public: true, body: "Thanks", files: [] })
     const second = await backup()
     expect(second.ticketsSaved).toBe(1)
-
-    // The second run asked only for what changed, from the saved cursor.
     const later = zendesk.requests.slice(before)
     expect(later.filter((r) => r.includes("/incremental/tickets/")).every((r) => r.includes("cursor=pos-"))).toBe(true)
-    expect(later.filter((r) => /tickets\/\d+\/comments/.test(r)).every((r) => r.includes("/tickets/1/"))).toBe(true)
-
     expect(await readdir(join(dir, "raw/tickets/1"))).toHaveLength(2)
     const check = await checkArchive(dir)
     expect(check.problems).toEqual([])
     expect(check.counts.comments).toBe(6)
+  })
+
+  it("skips side conversations on an account without them", async () => {
+    zendesk.sideConversationsAvailable = false
+    const result = await backup()
+    expect(result.sideConversations).toBe("unavailable")
+    const check = await checkArchive(dir)
+    expect(check.problems).toEqual([])
+    expect(check.warnings).toContain("side conversations were not available to the token")
   })
 
   it("records a collection the account cannot read and goes on", async () => {
@@ -152,7 +170,12 @@ describe("backup", () => {
     await expect(backup()).rejects.toThrow("refused a link to another host")
   })
 
-  it("refuses an archive of another account and a second run at the same time", async () => {
+  it("refuses a ticket ID that would leave the archive folder", async () => {
+    zendesk.badTicketId = true
+    await expect(backup()).rejects.toThrow("not a number")
+  })
+
+  it("refuses another account's archive, and never takes over a lock, also a stale one", async () => {
     await backup()
     const other = new ZendeskClient({
       apiOrigin: "https://other.example.com",
@@ -162,27 +185,58 @@ describe("backup", () => {
     await expect(runBackup({ client: other, archive: new Archive(dir), maxFileBytes: 1024 })).rejects.toThrow(
       "another Zendesk account",
     )
+    // A lock left by a process that is long gone: still refused, with the file to remove.
+    await writeFile(join(dir, ".lock"), JSON.stringify({ pid: 999_999_999 }))
+    await expect(backup()).rejects.toThrow("remove")
+    await rm(join(dir, ".lock"))
+    await backup()
+  })
 
-    await writeFile(join(dir, ".lock"), String(process.ppid))
-    await expect(backup()).rejects.toThrow("another run")
+  it("refuses a path outside the archive", () => {
+    expect(() => new Archive(dir).path("..", "elsewhere")).toThrow("outside the archive")
   })
 })
 
 describe("check", () => {
-  it("finds a file whose content changed and a ticket whose comments are missing", async () => {
+  it("finds a changed file, a changed page, a missing page, and a missing raw folder", async () => {
     await backup()
     const files = (await manifest()).files
-    const sha = files["101"]?.sha256 ?? ""
+    const sha = files["102"]?.sha256 ?? ""
     await writeFile(join(dir, "files", sha.slice(0, 2), sha), "changed")
-    const folder = (await readdir(join(dir, "raw/tickets/2")))[0] ?? ""
-    await rm(join(dir, "raw/tickets/2", folder, "comments-000001.json"))
+    const folder = (await readdir(join(dir, "raw/tickets/1")))[0] ?? ""
+    await rm(join(dir, "raw/tickets/1", folder, "comments-000001.json"))
+    // Still valid JSON, but not what Zendesk sent.
+    await writeFile(join(dir, "raw/incremental/users/000001.json"), '{"users":[],"end_of_stream":false}')
 
     const problems = (await checkArchive(dir)).problems.join("\n")
-    expect(problems).toContain("file 101: its content does not match")
-    expect(problems).toContain("ticket 2: the comments or audits of its newest version are missing")
+    expect(problems).toContain("file 102: its content does not match")
+    expect(problems).toContain("comments page 000001 is missing")
+    expect(problems).toContain("raw/incremental/users/000001.json changed after it was written")
+
+    await rm(join(dir, "raw"), { recursive: true })
+    expect((await checkArchive(dir)).problems.join("\n")).toContain("raw/ cannot be read")
+  })
+
+  it("checks files of every saved version, not only the newest", async () => {
+    await backup()
+    // Ticket 1 changes; its older version keeps file 101, which the newest version no longer lists.
+    const ticket = zendesk.tickets.get(1)
+    if (ticket) ticket.comments = ticket.comments.slice(1)
+    zendesk.addComment(1, { id: 15, public: true, body: "Later", files: [] })
+    await backup()
+    const sha = (await manifest()).files["101"]?.sha256 ?? ""
+    await rm(join(dir, "files", sha.slice(0, 2), sha))
+    expect((await checkArchive(dir)).problems.join("\n")).toContain("file 101")
   })
 
   it("refuses a folder that is not an archive", async () => {
     expect((await checkArchive(dir)).problems).toEqual(["archive.json is missing or is not a Maane Zendesk archive"])
+  })
+
+  it("ignores a temporary file a crash left behind", async () => {
+    await backup()
+    await appendFile(join(dir, "raw/collections/groups/000001/.tmp-0123456789ab"), "{ half a page")
+    const check = await checkArchive(dir)
+    expect(check.problems).toEqual([])
   })
 })

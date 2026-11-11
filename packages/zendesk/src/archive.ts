@@ -1,6 +1,7 @@
-import { randomBytes } from "node:crypto"
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { createHash, randomBytes } from "node:crypto"
+import { appendFile, link, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises"
+import { hostname } from "node:os"
+import { dirname, join, resolve, sep } from "node:path"
 
 export const ARCHIVE_FORMAT = "maane-zendesk-archive"
 export const ARCHIVE_VERSION = 1
@@ -41,16 +42,22 @@ export interface ArchiveState {
   runs: number
   exports: Record<string, ExportPosition>
   tickets: Record<string, TicketState>
-  /** Changes up to this time are in the archive (the export leaves out the last minute). */
+  /**
+   * Changes up to this time are in the archive: Zendesk's own clock (its Date header) at the end of the ticket
+   * export, less the minute the export leaves out. Null when Zendesk sent no Date header.
+   */
   coveredUntil: string | null
+  /** Side conversations: "unavailable" once the account answered 403 or 404 for them (an add-on). */
+  sideConversations?: "available" | "unavailable"
 }
 
 export type FileStatus = "ok" | "failed"
 
-/** One expected file: an attachment or inline image of a comment. */
+/** One expected file: an attachment or inline image of a comment, or an attachment of a side conversation. */
 export interface ManifestEntry {
   attachmentId: string
   ticketId: string
+  /** The comment, or `side:<event id>` for a side conversation message. */
   commentId: string
   fileName: string
   contentType: string | null
@@ -73,39 +80,83 @@ export interface Manifest {
   files: Record<string, ManifestEntry>
 }
 
+/** One line of raw-index.jsonl: a raw page as written, with its hash. A later line for the same path wins. */
+export interface RawIndexEntry {
+  path: string
+  sha256: string
+  bytes: number
+}
+
+export const RAW_INDEX = "raw-index.jsonl"
+
 export const emptyState = (): ArchiveState => ({ runs: 0, exports: {}, tickets: {}, coveredUntil: null })
 
 export class Archive {
-  constructor(readonly root: string) {}
+  readonly root: string
 
+  constructor(root: string) {
+    this.root = resolve(root)
+  }
+
+  /** A path inside the archive. Refuses one that would leave it, whatever the parts hold. */
   path(...parts: string[]): string {
-    return join(this.root, ...parts)
+    const full = resolve(this.root, ...parts)
+    if (full !== this.root && !full.startsWith(this.root + sep))
+      throw new Error("a path outside the archive was refused")
+    return full
   }
 
   filePath(sha256: string): string {
+    if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error("not a SHA-256")
     return this.path("files", sha256.slice(0, 2), sha256)
   }
 
-  /** Writes a file through a temporary name and a rename, so a crash never leaves half a file. */
-  async write(relative: string, content: string): Promise<void> {
-    const target = this.path(relative)
+  /**
+   * Writes a file through a temporary name, flushed to disk, and a rename, so a crash never leaves half a file
+   * under the final name.
+   */
+  async write(relativePath: string, content: string): Promise<void> {
+    const target = this.path(relativePath)
     await mkdir(dirname(target), { recursive: true })
     const temporary = join(dirname(target), `.tmp-${randomBytes(6).toString("hex")}`)
-    await writeFile(temporary, content, { flag: "wx" })
+    const handle = await open(temporary, "wx")
+    try {
+      await handle.writeFile(content)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
     await rename(temporary, target)
   }
 
-  async readJson<T>(relative: string): Promise<T | undefined> {
+  /** Writes a raw API page and records its hash in raw-index.jsonl, which the check compares against. */
+  async writeRaw(relativePath: string, text: string): Promise<void> {
+    await this.write(relativePath, text)
+    const entry: RawIndexEntry = {
+      path: relativePath,
+      sha256: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    }
+    const handle = await open(this.path(RAW_INDEX), "a")
     try {
-      return JSON.parse(await readFile(this.path(relative), "utf8")) as T
+      await handle.appendFile(`${JSON.stringify(entry)}\n`)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+  }
+
+  async readJson<T>(relativePath: string): Promise<T | undefined> {
+    try {
+      return JSON.parse(await readFile(this.path(relativePath), "utf8")) as T
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
       throw error
     }
   }
 
-  async writeJson(relative: string, value: unknown): Promise<void> {
-    await this.write(relative, `${JSON.stringify(value, null, 2)}\n`)
+  async writeJson(relativePath: string, value: unknown): Promise<void> {
+    await this.write(relativePath, `${JSON.stringify(value, null, 2)}\n`)
   }
 
   async info(): Promise<ArchiveInfo | undefined> {
@@ -129,46 +180,43 @@ export class Archive {
   }
 
   /**
-   * Takes the archive for one run. A lock left by a process that no longer runs is taken over;
-   * a lock of a running process refuses the run.
+   * Takes the archive for one run. The lock file is created complete in one step (written under a temporary name,
+   * then hard-linked to `.lock`, which fails when it exists), so another run never reads half a lock. An existing
+   * lock is never taken over, also when its run looks finished: two runs that both did so could each remove the
+   * other's. The message names the file to remove once no run is active.
    */
   async lock(): Promise<() => Promise<void>> {
-    const lockPath = this.path(".lock")
     await mkdir(this.root, { recursive: true })
-    for (let tries = 0; tries < 2; tries++) {
-      try {
-        const handle = await open(lockPath, "wx")
-        await handle.writeFile(String(process.pid))
-        await handle.close()
-        return () => rm(lockPath, { force: true })
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-        const pid = Number((await readFile(lockPath, "utf8").catch(() => "")).trim())
-        if (pid > 0 && pid !== process.pid && isRunning(pid)) {
-          throw new Error(`another run (process ${pid}) is using this archive`)
-        }
-        await rm(lockPath, { force: true })
-      }
+    const lockPath = this.path(".lock")
+    const token = randomBytes(12).toString("hex")
+    const content = `${JSON.stringify({ pid: process.pid, host: hostname(), token, since: new Date().toISOString() })}\n`
+    const temporary = this.path(`.lock-${token}`)
+    await appendFile(temporary, content, { flag: "wx" })
+    try {
+      await link(temporary, lockPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+      const held = await readFile(lockPath, "utf8").catch(() => "")
+      const pid = /"pid":(\d+)/.exec(held)?.[1]
+      throw new Error(
+        `another run holds this archive${pid ? ` (process ${pid})` : ""}. If no run is active, remove ${lockPath} and run again.`,
+      )
+    } finally {
+      await rm(temporary, { force: true })
     }
-    throw new Error("could not lock the archive")
+    return async () => {
+      const held = await readFile(lockPath, "utf8").catch(() => "")
+      if (held.includes(token)) await rm(lockPath, { force: true })
+    }
   }
 
-  async exists(relative: string): Promise<boolean> {
+  async exists(relativePath: string): Promise<boolean> {
     try {
-      await stat(this.path(relative))
+      await stat(this.path(relativePath))
       return true
     } catch {
       return false
     }
-  }
-}
-
-function isRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM"
   }
 }
 

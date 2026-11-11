@@ -42,10 +42,20 @@ export class StandInZendesk {
   readonly requests: string[] = []
   /** After this many API requests every API request answers 500, to stop a run part way. */
   failAfter = Number.POSITIVE_INFINITY
+  /** Every API request whose path and query this returns true for answers 500. */
+  failWhen: ((pathAndQuery: string) => boolean) | null = null
+  /** The ticket export answers with an ID that tries to leave the archive folder. */
+  badTicketId = false
+  /** The Date header of the last ticket export page. */
+  lastDate: string | null = null
   /** A collection whose next link points at another origin. */
   foreignLinkIn: string | null = null
   /** Collections that answer 403, as for an account without the feature. */
   readonly forbiddenCollections = new Set<string>()
+  /** False: the account has no side conversations add-on, and its routes answer 404. */
+  sideConversationsAvailable = true
+  /** Ticket 1's side conversation, with one message that carries a file. */
+  readonly sideFile: StandInFile = { id: 401, name: "side.txt", content: randomBytes(48), serve: "redirect" }
 
   readonly tickets = new Map<number, Ticket>()
   /** The ticket export's change log; a cursor is a position in it. */
@@ -101,7 +111,7 @@ export class StandInZendesk {
   }
 
   allFiles(): StandInFile[] {
-    return [...this.tickets.values()].flatMap((t) => t.comments.flatMap((c) => c.files))
+    return [...[...this.tickets.values()].flatMap((t) => t.comments.flatMap((c) => c.files)), this.sideFile]
   }
 
   async start(): Promise<void> {
@@ -124,6 +134,10 @@ export class StandInZendesk {
     const url = new URL(req.url ?? "/", this.apiOrigin)
     this.requests.push(`${url.pathname}${url.search}`)
     if (this.requests.length > this.failAfter) return send(res, 500, { error: "stand-in stopped" })
+    if (this.failWhen?.(`${url.pathname}${url.search}`)) return send(res, 500, { error: "stand-in stopped" })
+    if (this.badTicketId && url.pathname === "/api/v2/incremental/tickets/cursor.json") {
+      return send(res, 200, { tickets: [{ id: "../../x", updated_at: "2026-01-01T00:00:00Z" }], end_of_stream: true })
+    }
     if (url.pathname.startsWith("/attachments/token/")) return this.#attachment(url, res)
     if (req.headers.authorization !== this.authorization) return send(res, 401, { error: "Couldn't authenticate you" })
 
@@ -140,6 +154,10 @@ export class StandInZendesk {
       return this.#cursorExport(url, res, "users", this.users, 2)
     }
     if (path === "/api/v2/incremental/organizations.json") return this.#organizationExport(url, res)
+    const sideList = /^\/api\/v2\/tickets\/(\d+)\/side_conversations\.json$/.exec(path)
+    if (sideList) return this.#sideConversations(res, Number(sideList[1]))
+    const sideEvents = /^\/api\/v2\/tickets\/(\d+)\/side_conversations\/([^/]+)\/events\.json$/.exec(path)
+    if (sideEvents) return this.#sideEvents(res, Number(sideEvents[1]), sideEvents[2] ?? "")
     const ticketMatch = /^\/api\/v2\/tickets\/(\d+)\/(comments|audits)\.json$/.exec(path)
     if (ticketMatch) return this.#ticketDetail(url, res, Number(ticketMatch[1]), ticketMatch[2] as string)
     const collection = /^\/api\/v2\/([a-z_]+)\.json$/.exec(path)?.[1]
@@ -148,6 +166,9 @@ export class StandInZendesk {
   }
 
   #ticketExport(url: URL, res: ServerResponse) {
+    // The Date header the client reads its coverage time from; kept so tests can compare.
+    this.lastDate = new Date().toUTCString()
+    res.setHeader("Date", this.lastDate)
     const start = Number(url.searchParams.get("cursor")?.replace("pos-", "") ?? 0)
     const end = Math.min(start + 2, this.ticketLog.length)
     const ids = [...new Set(this.ticketLog.slice(start, end))]
@@ -215,6 +236,39 @@ export class StandInZendesk {
       links: {
         next: more ? `${this.apiOrigin}${url.pathname}?page[after]=${after + 2}&include_inline_images=${inline}` : null,
       },
+    })
+  }
+
+  #sideConversations(res: ServerResponse, ticketId: number) {
+    if (!this.sideConversationsAvailable) return send(res, 404, { error: "InvalidEndpoint" })
+    const list = ticketId === 1 ? [{ id: "sc-1", subject: "Asking the supplier", state: "open" }] : []
+    send(res, 200, { side_conversations: list, next_page: null, count: list.length })
+  }
+
+  #sideEvents(res: ServerResponse, ticketId: number, sideId: string) {
+    if (!this.sideConversationsAvailable || ticketId !== 1 || sideId !== "sc-1") return send(res, 404, { error: "x" })
+    const f = this.sideFile
+    send(res, 200, {
+      events: [
+        {
+          id: 9001,
+          type: "create",
+          message: {
+            subject: "Asking the supplier",
+            body: "Please check the order.",
+            attachments: [
+              {
+                id: f.id,
+                file_name: f.name,
+                content_url: `${this.apiOrigin}/attachments/token/t${f.id}/?name=${f.name}`,
+                content_type: "text/plain",
+                size: f.content.length,
+              },
+            ],
+          },
+        },
+      ],
+      next_page: null,
     })
   }
 
