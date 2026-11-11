@@ -233,8 +233,12 @@ describe("account", () => {
   const closeX = () =>
     document.querySelector<HTMLButtonElement>(`[role=dialog] button[aria-label="${he("common.close")}"]`)
 
+  // Built at run time: backup codes are secret-like values.
+  let codes: string[] = []
+
   async function showNewCodes() {
-    auth.generateBackupCodes.mockResolvedValue({ data: { backupCodes: ["code-one", "code-two"] }, error: null })
+    codes = Array.from({ length: 2 }, () => crypto.randomUUID().slice(0, 11))
+    auth.generateBackupCodes.mockResolvedValue({ data: { backupCodes: codes }, error: null })
     await renderAt("/account", { "/api/setup/status": status(), "/api/v1/me": admin })
     await vi.waitFor(() => expect(button(he("account.newCodes"))).toBeDefined())
     await act(async () => button(he("account.newCodes"))?.click())
@@ -245,7 +249,7 @@ describe("account", () => {
     })
     await act(async () => type(field, crypto.randomUUID()))
     await act(async () => button(he("account.newCodesSubmit"))?.click())
-    await vi.waitFor(() => expect(text()).toContain("code-one"))
+    await vi.waitFor(() => expect(text()).toContain(codes[0] as string))
   }
 
   it("warns before new backup codes are closed unsaved, by the X and by Escape", async () => {
@@ -254,21 +258,21 @@ describe("account", () => {
     await vi.waitFor(() => expect(text()).toContain(he("account.codesLossTitle")))
     await act(async () => button(he("account.codesLossBack"))?.click())
     await vi.waitFor(() => expect(text()).not.toContain(he("account.codesLossTitle")))
-    expect(text()).toContain("code-one")
+    expect(text()).toContain(codes[0] as string)
 
     await act(async () => {
       document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
     })
     await vi.waitFor(() => expect(text()).toContain(he("account.codesLossTitle")))
     await act(async () => button(he("account.codesLossClose"))?.click())
-    await vi.waitFor(() => expect(text()).not.toContain("code-one"))
+    await vi.waitFor(() => expect(text()).not.toContain(codes[0] as string))
   })
 
   it("closes at once once the codes are marked saved", async () => {
     await showNewCodes()
     await act(async () => document.querySelector<HTMLInputElement>("[role=dialog] input[type=checkbox]")?.click())
     await act(async () => closeX()?.click())
-    await vi.waitFor(() => expect(text()).not.toContain("code-one"))
+    await vi.waitFor(() => expect(text()).not.toContain(codes[0] as string))
     expect(text()).not.toContain(he("account.codesLossTitle"))
   })
 })

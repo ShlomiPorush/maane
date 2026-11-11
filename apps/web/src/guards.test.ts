@@ -7,7 +7,8 @@
 // - every locale key the code uses exists in both locale files, and every dynamic key family is complete;
 // - no Hebrew and no literal bidirectional control character in apps/web (Hebrew lives only in he.json);
 // - the page loads nothing from another origin and has no inline script or style (the server's CSP forbids both);
-// - every setting the server registers has a place on the Settings page.
+// - every setting the server registers has a place on the Settings page;
+// - every audit action the server's writeAudit calls can write has its words on the audit page.
 // Each check is a function over file texts, so the self-tests show it catches a planted bypass.
 
 import { readdirSync, readFileSync } from "node:fs"
@@ -529,12 +530,17 @@ function auditActionsWritten(sources: Record<string, string>): { actions: Set<st
         map[1] ?? "",
         [...(map[2] ?? "").matchAll(/:\s*"([^"]+)"/g)].map((value) => value[1] ?? ""),
       )
-    for (const call of text.matchAll(/\bwriteAudit\(/g)) {
+    for (const call of text.matchAll(/\b(function\s+)?writeAudit\(/g)) {
+      if (call[1]) continue // the declaration in audit.ts
       const rest = callArguments(text, (call.index ?? 0) + call[0].length)
       const expressions = [
         ...[...rest.matchAll(/\baction:\s*([^,\n}]+)/g)].map((match) => (match[1] ?? "").trim()),
         ...[...rest.matchAll(/[{,]\s*(action)\s*[,}]/g)].map((match) => match[1] ?? ""),
       ]
+      if (expressions.length === 0) {
+        unread.push(`${file}: writeAudit without an action the scan can read; write it out in the call`)
+        continue
+      }
       for (const expression of expressions) {
         const literals = [...expression.matchAll(/"([^"]+)"/g)].map((match) => match[1] ?? "")
         if (literals.length > 0) {
@@ -554,7 +560,6 @@ function auditActionsWritten(sources: Record<string, string>): { actions: Set<st
 }
 
 describe("audit actions", () => {
-  // The declaration of writeAudit in audit.ts reads as a call with no action, so it adds nothing.
   const { actions, unread } = auditActionsWritten(serverFiles())
 
   it("every action the server can write has its words on the audit page", () => {
@@ -573,10 +578,12 @@ describe("audit actions", () => {
         const action = NEW_AUDIT[path]
         await writeAudit(db, actor, { action, entityType: "user" })
         await writeAudit(db, actor, { action: on ? "planted.yes" : "planted.no" })
-        await writeAudit(db, actor, { action: pick(path), entityType: "user" })`,
+        await writeAudit(db, actor, { action: pick(path), entityType: "user" })
+        await writeAudit(db, actor, entry)`,
       "b.ts": "await db.insert(auditLog).values({ action: 'planted.raw' })",
+      "audit.ts": "export async function writeAudit(db: Db, actor: Actor, entry: AuditEntry) {}",
     })
     expect([...planted.actions].sort()).toEqual(["planted.map", "planted.no", "planted.yes"])
-    expect(planted.unread).toHaveLength(2)
+    expect(planted.unread).toHaveLength(3)
   })
 })
