@@ -9,7 +9,7 @@ This document separates what exists in the repository from the approved foundati
 - The repository holds documentation and repository metadata only: `README.md`, `AGENTS.md`, `LICENSE` (MIT), `.gitignore`, `.gitattributes`, `docs/requirements.md`, and this document.
 - No package manifest, lockfile, source code, test, script, CI workflow, Dockerfile, Compose file, or environment example exists. No command in this document runs yet.
 - The local Git repository uses the GitHub noreply address as `user.email`. `core.autocrlf` is on for the owner's machine, so `.gitattributes` forces LF for every text file.
-- GitHub repository: not created yet. [GitHub configuration](#github-configuration) lists the approved settings and their status.
+- GitHub repository `ShlomiPorush/maane` exists, public, default branch `main`, with the approved settings read back on 2026-11-11. See [GitHub configuration](#github-configuration).
 - No check other than the manual documentation checks listed in the preparation hand-off has run.
 
 ## Product intent and boundaries
@@ -204,13 +204,13 @@ All four scripts are Bash run inside WSL (or any Linux with Docker), with `#!/us
 
 ## GitHub configuration
 
-Approved by the owner on 2026-11-11. Status: approved, not applied yet. The preparation task applies these settings after the first push and records here what it read back from GitHub.
+Approved by the owner on 2026-11-11. Applied after the first push on 2026-11-11 and read back from the GitHub API the same day. Every item below matched, except as noted for CodeQL.
 
 - Repository `ShlomiPorush/maane`, public, default branch `main`. Issues on. Wiki, Projects, and Discussions off. Merge options at GitHub defaults, auto-merge off, automatic branch deletion off.
 - Secret scanning and push protection on. Dependabot alerts and Dependabot security updates on. Private vulnerability reporting on.
-- CodeQL default setup for `actions` and `javascript-typescript`, default query suite. GitHub may refuse it while the repository has no code. In that case the 1a task enables it once TypeScript lands.
+- CodeQL default setup, default query suite. Read back as `configured` with no languages, because the repository has no code yet. The 1a task checks that the setup lists `actions` and `javascript-typescript` once its workflow and TypeScript land, and sets them if it does not.
 - Actions enabled with all actions allowed. Workflows pin every action to a commit SHA, and a guard enforces it. The default `GITHUB_TOKEN` is read-only, and Actions may not approve pull requests.
-- A ruleset on `main` that blocks force pushes and deletion only. It requires no pull request and no status check, because `scripts/release.sh` pushes the release commit to `main`.
+- A ruleset, `Protect main`, on the default branch that blocks force pushes and deletion only. It requires no pull request and no status check, because `scripts/release.sh` pushes the release commit to `main`.
 - GitHub's default labels only. Dependabot adds its own.
 
 ## Known unknowns and blockers
@@ -232,7 +232,7 @@ Approved by the owner on 2026-11-11. Status: approved, not applied yet. The prep
 ## Ready-for-implementation criteria
 
 - The owner approved the product plan and the decisions in this document. Done on 2026-11-11.
-- The repository exists on GitHub with the approved settings. See [GitHub configuration](#github-configuration).
+- The repository exists on GitHub with the approved settings. Done on 2026-11-11. See [GitHub configuration](#github-configuration).
 - The 1a task has a brief that carries the [Secrets](#secrets) rules and the Better Auth rule, and its review follows the owner's cross-provider review tier for CI, release, and agent-instruction changes.
 
 ## Handoff to foundation implementation
