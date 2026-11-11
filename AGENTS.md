@@ -9,7 +9,7 @@ Maane is a self-hosted helpdesk for email only. Mail reaches one Microsoft 365 s
 - Product requirements: `docs/requirements.md`
 - Foundation plan, decisions, order of work, and status: `docs/project-foundation.md`
 
-The foundation plan is the desired state. Items marked planned do not exist yet. Check the repository before assuming a file, command, or feature exists. Today the repository holds the workspace baseline (1a): manifests, the lockfile, `packages/shared` with the locale files, the toolchain image, the guards, `scripts/verify.sh`, CI, and Dependabot; the phase 0 Zendesk backup tool; the server and worker of foundation 1b (sign-in, setup, settings, audit log, job queue); and the web UI of 1b (sign-in, setup, two-factor, account, users, settings, audit log), component-tested. No Compose file, application image, end-to-end test, or other workflow script exists yet.
+The foundation plan is the desired state. Items marked planned do not exist yet. Check the repository before assuming a file, command, or feature exists. Today the repository holds the workspace baseline (1a): manifests, the lockfile, `packages/shared` with the locale files, the toolchain image, the guards, `scripts/verify.sh`, CI, and Dependabot; the phase 0 Zendesk backup tool; the server and worker of foundation 1b (sign-in, setup, settings, audit log, job queue); the web UI of 1b (sign-in, setup, two-factor, account, users, settings, audit log), component-tested; and the application image, the Compose files, `scripts/local.sh`, and `scripts/try-pr.sh`. No end-to-end test or release workflow exists yet.
 
 UI follows the `v3-ui-style` skill.
 
@@ -30,18 +30,24 @@ Exists:
 - `apps/worker`: pg-boss (schema `pgboss`) with the `heartbeat` job; its health check reads the heartbeat file. Imports the server's config, database, and log through `@maane/server/*`.
 - `apps/web`: React 19, Vite 8, React Router, TanStack Query; built to `apps/web/dist` (the server's `webDir`). `public/boot.js` applies the theme, the language and the folded sidebar before the first paint (a file, because the CSP forbids inline scripts). `src/api/`: `client.ts` (Maane's API; adds `x-maane-request` to every change and reports 401 and `totp_required`), `auth.ts` (Better Auth's React client with the `username`, `twoFactor`, and `admin` client plugins; its documented `fetchOptions.onError` reports a 401, and the gate then asks `/api/v1/me` whether the session is gone; `access.ts` mirrors the server's role map for the client's types), `errors.ts` (every server code to a locale key). `src/i18n/` (lookup, plural forms, values wrapped in first-strong isolates), `src/format/` (the only place that formats dates: Asia/Jerusalem, numbers only), `src/shell/` (the session gate in `Root.tsx`, the frame in `Shell.tsx`, theme, language, account menu), `src/ui/` (the shared builders: `layers.ts`, `Dialog.tsx`, `Menu.tsx`, `Toast.tsx`, `confirm.tsx`, `unsaved.tsx`, `SaveBar.tsx`), `src/pages/` (the pages; `auth/` holds sign-in, setup, and two-factor), `src/styles/ui.css` (the one stylesheet; tokens on `:root`, dark on `.dark`). `src/guards.test.ts` fails on a popup outside the builders, a page without its own refresh, a date formatted outside `format/`, a missing locale key, Hebrew or a literal bidirectional character in `apps/web`, an inline or remote asset, a setting without a place on the Settings page, and an audit action the server's `writeAudit` calls can write without its words on the audit page. The UI and its adaptations of the v3 rules came from Mikud's `src/web`.
 
+- `docker/maane.Dockerfile` (with `maane.Dockerfile.dockerignore`): one image for the server and the worker, built from this checkout by the scripts, running as `node`.
+- `docker/docker-compose-dev.example.yml`: the development and verification stack (`server`, `worker`, `postgres`). `docker-compose.yml` and `.env.example` at the root: the production deployment and its environment contract.
+- `scripts/local.sh`: the development stack. `scripts/try-pr.sh`: a pull request as its own stack with a seeded first admin (`scripts/lib/try-pr-seed.mjs`).
+
 Planned, not created (see the architecture table in `docs/project-foundation.md`):
 
-- `scripts/local.sh`, `scripts/try-pr.sh`, `scripts/release.sh`. `docker/`: the application Dockerfile, the development Compose template, env examples.
+- `scripts/release.sh` and the Release workflow.
 
 ## Commands
 
 All scripts are Bash for WSL or Linux with Docker. Node, pnpm, shellcheck, and shfmt run inside the toolchain container, so the host needs only Docker.
 
-- `scripts/verify.sh [--changed [BASE]] [--guards-only] [--skip-integration]`: the only verification entry point. Guards and their tests, then install from the lockfile, Biome, types, unit tests, builds, a check that the schema needs no missing migration, and the integration tests against a disposable PostgreSQL (`postgres:18.6-bookworm` on a private network, a password new for every run, passed only through an owner-only `--env-file`). `--changed` compares with `BASE` (default `origin/main`): documentation only runs the guards; changes only inside `apps/` or `packages/` run the changed packages and their dependents; anything else runs everything.
+- `scripts/verify.sh [--changed [BASE]] [--guards-only] [--skip-integration]`: the only verification entry point. Guards and their tests, then install from the lockfile, Biome, types, unit tests, builds, a check that the schema needs no missing migration, and the integration tests against a disposable PostgreSQL (`postgres:18.6-bookworm` on a private network, a password new for every run, passed only through an owner-only `--env-file`), then the container stack: the image built from this checkout, started from the development template with a data directory and secrets new for the run, checked for health, readiness, runtime users, and hardening. `--skip-integration` skips the integration tests and the stack. `--changed` compares with `BASE` (default `origin/main`): documentation only runs the guards; changes only inside `apps/` or `packages/` run the changed packages and their dependents; anything else runs everything.
 - Ad-hoc commands in the toolchain: `source scripts/lib/common.sh && build_toolchain && in_toolchain "pnpm ..."`.
 - The web UI alone: `in_toolchain "pnpm --filter @maane/web run typecheck"`, `... run test` (Vitest with happy-dom), `... run build`. `pnpm --filter @maane/web run dev` serves it on port 5173 and sends `/api` to a server on port 8090.
-- The planned contracts for `scripts/local.sh`, `scripts/try-pr.sh`, and `scripts/release.sh` are in `docs/project-foundation.md`.
+- `scripts/local.sh <build|up|start|down|status|logs|nuke>`: the development stack on `http://127.0.0.1:8095` (`MAANE_PORT`). Its data directory (default on the Linux file system) holds the database and the generated `postgres.env` and `app.env`, created once and never rewritten. `down` keeps the data; `nuke` asks, then deletes it.
+- `scripts/try-pr.sh <number|status|restore>`: builds a pull request's head in a disposable worktree and runs it as the Compose project `maane-pr` on `http://127.0.0.1:8096` (`MAANE_PR_PORT`), with its own database, secrets, and a first admin whose sign-in `status` points to. `restore` removes all of it.
+- The planned contract for `scripts/release.sh` is in `docs/project-foundation.md`.
 
 Verify in proportion to the risk, and report what ran and its result:
 
@@ -87,9 +93,9 @@ CI (`.github/workflows/ci.yml`) runs `Detect changes`, `Guards` always, `Checks`
 
 ## Docker
 
-Planned, not created. Details and the container table are in `docs/project-foundation.md`, "Docker decisions".
+Details and the container table are in `docs/project-foundation.md`, "Docker decisions".
 
-- `docker-compose.yml` (tracked) is the production deployment: `server`, `worker`, `postgres`, `clamav`, published images only, behind Traefik on the external `traefik` network with no published port.
+- `docker-compose.yml` (tracked) is the production deployment: `server`, `worker`, and `postgres` (`clamav` joins in phase 2), published images only, behind Traefik on the external `traefik` network with no published port.
 - `docker-compose-dev.yml` (root, ignored, never committed) is the development stack, copied from `docker/docker-compose-dev.example.yml` and used only through `scripts/local.sh`. CI, verify, and release use the tracked template.
 - Compose files never contain `build:`. The scripts build images explicitly, and a guard enforces it.
 - Runtime variables come through `env_file`. Production reads `.env` (contract in `.env.example`). Development and verification read generated owner-only files. Interpolation is limited to values Compose resolves itself.
