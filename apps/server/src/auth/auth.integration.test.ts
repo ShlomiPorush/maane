@@ -17,6 +17,7 @@ beforeEach(async () => {
   await app.ready
 })
 afterEach(async () => {
+  await app.close()
   await database.drop()
 })
 
@@ -62,10 +63,10 @@ describe("setup", () => {
     expect(second.json.code).toBe("SETUP_CLOSED")
   })
 
-  it("creates one admin when setup sign-ups race", async () => {
-    const answers = await Promise.all(
-      ["racer.one", "racer.two", "racer.three", "racer.four"].map((n) => browser().setup(n, password)),
-    )
+  it("creates one admin when setup sign-ups race, more of them than the connection pool holds", async () => {
+    // The test pool holds 5 connections; 12 sign-ups at once must neither hang nor create a second admin.
+    const names = Array.from({ length: 12 }, (_, i) => `racer.${String.fromCharCode(97 + i)}`)
+    const answers = await Promise.all(names.map((n) => browser().setup(n, password)))
     expect(answers.filter((a) => a.status === 200)).toHaveLength(1)
     const users = await database.db.select().from(authUser)
     expect(users).toHaveLength(1)

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { type Auth, createAuth } from "../auth/auth.ts"
 import { SetupWindow } from "../auth/setup-window.ts"
+import { openDatabase } from "../db/client.ts"
 import { createApp } from "../http/app.ts"
 import { createSettingsCipher } from "../settings/crypto.ts"
 import { Settings } from "../settings/service.ts"
@@ -23,6 +24,7 @@ export class TestClock {
  * straight to `app.fetch`, so no port is opened.
  */
 export function createTestApp(database: TestDatabase, overrides: Record<string, string> = {}) {
+  const audit = openDatabase(database.url, 2)
   const clock = new TestClock()
   const setup = new SetupWindow(clock.now)
   const publicUrl = new URL(TEST_ORIGIN)
@@ -36,6 +38,7 @@ export function createTestApp(database: TestDatabase, overrides: Record<string, 
   const build = async () => {
     auth = createAuth({
       db: database.db,
+      auditDb: audit.db,
       secrets,
       publicUrl,
       trustedProxies: [],
@@ -63,5 +66,6 @@ export function createTestApp(database: TestDatabase, overrides: Record<string, 
       return app.fetch(request)
     },
     auth: () => auth,
+    close: () => audit.close(),
   }
 }

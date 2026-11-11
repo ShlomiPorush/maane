@@ -34,21 +34,46 @@ export class ConfigError extends Error {
 /** Variables Better Auth would read on its own when an option lacks a value. Maane refuses them. */
 const FOREIGN_AUTH_VARIABLES = /^(BETTER_AUTH_|AUTH_SECRET$)/
 
+/** Words that mark a value as written by hand for an example, compared in any case. */
+const PLACEHOLDER_WORDS = new Set([
+  "changeme",
+  "change",
+  "replaceme",
+  "replace",
+  "placeholder",
+  "example",
+  "your",
+  "secret",
+  "password",
+  "todo",
+  "fixme",
+  "here",
+  "dummy",
+  "sample",
+  "fake",
+  "test",
+  "dev",
+  "default",
+  "generate",
+  "admin",
+  "none",
+  "null",
+])
+
 /**
  * A value copied from an example instead of generated: in angle brackets or `${...}`, one character repeated, or a
- * phrase of words such as "changeme", "your-secret-here", "example", or "placeholder", the whole value matching.
- * The phrases hold only letters and separators, so a random value, which has digits or upper case, never matches.
+ * phrase made only of letters and separators, in any case, with a word such as "changeme", "your", "example", or
+ * "placeholder" in it. A generated value of 32 or more bytes has digits, so it is never a phrase.
  */
 export function isPlaceholder(value: string): boolean {
   const v = value.trim()
   if (/^<.*>$/.test(v) || /^\$\{.*\}$/.test(v) || /^(.)\1*$/.test(v)) return true
-  if (!/^[a-z _.-]+$/.test(v.toLowerCase()) || /[A-Z]/.test(v.slice(1))) return false
   const phrase = v.toLowerCase()
-  return (
-    /^(change[-_ .]?me|replace[-_ .]?me|your[-_ .][a-z_ .-]*|example[a-z_ .-]*|placeholder[a-z_ .-]*)$/.test(phrase) ||
-    /^(secret|password|passw0rd|admin|test|dev|default|null|none|todo)$/.test(phrase) ||
-    /(^|[-_ .])(change[-_ .]?me|replace[-_ .]?me|placeholder|example)([-_ .]|$)/.test(phrase)
-  )
+  if (!/^[a-z _.-]+$/.test(phrase)) return false
+  return phrase
+    .split(/[-_ .]+/)
+    .filter(Boolean)
+    .some((word) => PLACEHOLDER_WORDS.has(word))
 }
 
 /**

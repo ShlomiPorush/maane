@@ -13,12 +13,15 @@ async function main(): Promise<void> {
   // The window starts with the process, before anything slow, so it is never shorter than it says.
   const setup = new SetupWindow()
   const database = openDatabase(config.databaseUrl)
+  // Audit rows from Better Auth's hooks: a pool of their own (see AuthOptions.auditDb).
+  const auditDatabase = openDatabase(config.databaseUrl, 2)
   await migrateDatabase(database.db, config.migrationsDir)
   const settings = new Settings(database.db, createSettingsCipher(config.settingsKeys), config.overrides)
 
   const build = async () =>
     createAuth({
       db: database.db,
+      auditDb: auditDatabase.db,
       secrets: config.authSecrets,
       publicUrl: config.publicUrl,
       trustedProxies: config.trustedProxies,
@@ -47,7 +50,7 @@ async function main(): Promise<void> {
   const stop = (signal: string) => {
     log.info("server stopping", { signal })
     server.close(() => {
-      void database.close().then(() => process.exit(0))
+      void Promise.all([database.close(), auditDatabase.close()]).then(() => process.exit(0))
     })
   }
   process.once("SIGTERM", () => stop("SIGTERM"))

@@ -79,9 +79,14 @@ describe("isPlaceholder", () => {
       expect(isPlaceholder(randomBytes(32).toString("hex"))).toBe(false)
       expect(isPlaceholder(randomBytes(32).toString("base64url"))).toBe(false)
     }
-    // Random values that happen to begin like a placeholder word are still random.
+    // A generated value has digits, also when it happens to begin like a placeholder word (a digit is appended so the
+    // case is certain, not only likely).
     for (const prefix of ["YOUR_A", "your-", "example", "changeme"]) {
-      expect(isPlaceholder(`${prefix}${randomBytes(32).toString("base64url")}`), prefix).toBe(false)
+      expect(isPlaceholder(`${prefix}${randomBytes(32).toString("base64url")}7`), prefix).toBe(false)
+    }
+    // Placeholders in upper case are still placeholders, also when long enough to pass the length rule.
+    for (const value of ["YOUR-SETTINGS-SECRET-REPLACE-ME-HERE", "Change_Me_To_Something_Random_Please", "EXAMPLE"]) {
+      expect(isPlaceholder(value), value).toBe(true)
     }
   })
 })

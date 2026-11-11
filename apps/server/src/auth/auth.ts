@@ -112,6 +112,12 @@ const groupOf = new Map<string, "public" | "enrollment" | "protected">([
 
 export interface AuthOptions {
   db: Db
+  /**
+   * A separate small pool for the audit rows Better Auth's hooks write. Some hooks run while Better Auth holds a
+   * connection of `db` for its transaction; with their own pool, many requests at once cannot use up `db` waiting
+   * for each other.
+   */
+  auditDb: Db
   /** MAANE_AUTH_SECRETS: Better Auth's versioned `secrets`. */
   secrets: VersionedKey[]
   publicUrl: URL
@@ -161,7 +167,7 @@ function validPassword(value: unknown): boolean {
 }
 
 export function createAuth(options: AuthOptions) {
-  const { db, publicUrl, setup } = options
+  const { db, auditDb, publicUrl, setup } = options
   /** The user behind each sign-out request, from the before hook to the after hook. */
   const signingOut = new WeakMap<Request, Actor>()
 
@@ -253,7 +259,7 @@ export function createAuth(options: AuthOptions) {
     const target = typeof body.userId === "string" ? body.userId : null
     const accountAction = ACCOUNT_AUDIT[path]
     if (accountAction) {
-      await writeAudit(db, actor, {
+      await writeAudit(auditDb, actor, {
         action: accountAction,
         entityType: "user",
         entityId: actor.userId,
@@ -272,7 +278,7 @@ export function createAuth(options: AuthOptions) {
     }
     const action = ADMIN_AUDIT[path]
     if (action) {
-      await writeAudit(db, actor, {
+      await writeAudit(auditDb, actor, {
         action,
         entityType: "user",
         entityId: target,
@@ -301,7 +307,11 @@ export function createAuth(options: AuthOptions) {
       } else if (c.path === "/sign-out") {
         const actor = signingOut.get(c.request)
         if (actor)
-          await writeAudit(db, actor, { action: "session.sign_out", entityType: "session", ipAddress: ipOf(c.request) })
+          await writeAudit(auditDb, actor, {
+            action: "session.sign_out",
+            entityType: "session",
+            ipAddress: ipOf(c.request),
+          })
       }
     } catch (error) {
       log.error("an after-route step failed", { path: c.path, ...errorFacts(error) })
@@ -373,7 +383,7 @@ export function createAuth(options: AuthOptions) {
               if (!setup.isOpen()) throw refuse("FORBIDDEN", "SETUP_CLOSED", "Setup is closed.")
               const name = String((user as { username?: string }).username ?? user.name)
               await writeAudit(
-                db,
+                auditDb,
                 { userId: null, label: "system" },
                 {
                   action: "account.setup",
@@ -386,7 +396,7 @@ export function createAuth(options: AuthOptions) {
             }
             const actor = actorOf(ctx)
             if (actor) {
-              await writeAudit(db, actor, {
+              await writeAudit(auditDb, actor, {
                 action: "user.create",
                 entityType: "user",
                 details: {
@@ -404,7 +414,7 @@ export function createAuth(options: AuthOptions) {
             if (!("twoFactorEnabled" in data) || data.twoFactorEnabled === undefined) return
             const actor = actorOf(context as HookContext)
             if (!actor) return
-            await writeAudit(db, actor, {
+            await writeAudit(auditDb, actor, {
               action: data.twoFactorEnabled ? "account.totp_enable" : "account.totp_disable",
               entityType: "user",
               entityId: actor.userId,
@@ -425,7 +435,7 @@ export function createAuth(options: AuthOptions) {
             const userId = String((session as { userId?: string }).userId ?? "")
             const [row] = await db.select({ username: authUser.username }).from(authUser).where(eq(authUser.id, userId))
             await writeAudit(
-              db,
+              auditDb,
               { userId, label: row?.username ?? userId },
               {
                 action: "session.sign_in",
@@ -443,7 +453,7 @@ export function createAuth(options: AuthOptions) {
             if (!(data as { password?: string }).password) return
             const actor = actorOf(context as HookContext)
             if (!actor || (context as HookContext)?.path !== "/change-password") return
-            await writeAudit(db, actor, {
+            await writeAudit(auditDb, actor, {
               action: "account.password_change",
               entityType: "user",
               entityId: actor.userId,
