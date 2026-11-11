@@ -1,0 +1,33 @@
+# Environment-specific notes and reference paths (never public)
+docs/private/
+
+# Environment files: tracked only as examples; the real ones hold secrets (AGENTS.md, Secrets)
+.env
+.env.*
+!.env.example
+*.env
+!*.env.example
+
+# Machine-local development stack
+/docker-compose-dev.yml
+
+# Zendesk archives and any other customer data, if one is ever written inside a checkout by mistake
+/zendesk-archive*/
+
+# Dependencies and build output
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+*.tsbuildinfo
+playwright-report/
+test-results/
+
+# Production data, when the stack runs from a checkout
+/data/
+/postgres-data/
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
