@@ -7,7 +7,7 @@ export type ServerConfig = {
   databaseUrl: string
   /**
    * Better Auth's versioned `secrets` (MAANE_AUTH_SECRETS, "2:new,1:old"): the first signs cookies and encrypts new
-   * data (two-factor secrets among them), the others only decrypt. Each at least MIN_SECRET_BYTES bytes.
+   * data (two-factor secrets among them), the others only decrypt. Each MIN_SECRET_BYTES or more random bytes as hex.
    */
   authSecrets: VersionedKey[]
   /** MAANE_SETTINGS_KEYS ("2:new,1:old"): encrypts the secrets stored in settings. Never an auth secret. */
@@ -25,6 +25,17 @@ export type ServerConfig = {
 }
 
 export const MIN_SECRET_BYTES = 32
+/** The database password: generated like the keys (openssl rand -hex 32); the tests use 16 bytes. */
+export const MIN_DATABASE_PASSWORD_BYTES = 16
+
+/**
+ * A secret Maane's own scripts and deployment notes generate: random bytes written as hex, at least `bytes` of them.
+ * Any instruction or example text has letters beyond a to f, or punctuation, so it never passes; neither does one
+ * character repeated.
+ */
+export function isGeneratedHex(value: string, bytes: number): boolean {
+  return value.length >= bytes * 2 && /^[0-9a-fA-F]+$/.test(value) && !/^(.)\1*$/.test(value)
+}
 
 /** Configuration that refuses to start. Its message names variables, never a value. */
 export class ConfigError extends Error {
@@ -35,7 +46,7 @@ export class ConfigError extends Error {
 const FOREIGN_AUTH_VARIABLES = /^(BETTER_AUTH_|AUTH_SECRET$)/
 
 /** Words that mark a value as written by hand for an example, compared in any case. */
-export const PLACEHOLDER_WORDS: ReadonlySet<string> = new Set([
+const PLACEHOLDER_WORDS: ReadonlySet<string> = new Set([
   "changeme",
   "change",
   "replaceme",
@@ -61,26 +72,24 @@ export const PLACEHOLDER_WORDS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * A value copied from an example instead of generated: in angle brackets or `${...}`, one character repeated, or a
- * phrase with a word such as "changeme", "your", "example", or "placeholder" in it. A phrase splits on spaces, dots,
- * hyphens, underscores, and where letters meet digits, into numbers and words written as words: all lower case, all
- * upper case, or capitalized, as in "replace-me-with-32bytes" or "YOUR-SECRET-HERE123".
- *
- * Hex, which the scripts and the deployment notes generate, never matches: no placeholder word is made of the letters
- * a to f. In random base64url almost every run of letters mixes upper and lower case: of 2,000,000 random 32-byte
- * values, 11 split into such words and none held a placeholder word. The rare value refused is generated again.
+ * For a credential of an outside service set through the environment (its format is the service's, so it cannot be
+ * required to be hex): a value copied from an example, in angle brackets or `${...}`, one character repeated, or a
+ * phrase with a word such as "changeme", "your", "example", or "placeholder" in it. A phrase splits at every character
+ * that is not a letter or a digit, where letters meet digits, and where a lower-case letter meets an upper-case one,
+ * into numbers and words written as words, as in "replace-me-with-32bytes!", "YOUR-SECRET-HERE123", or
+ * "yourSecretHere". Maane's own keys and the database password are checked by isGeneratedHex instead.
  */
 export function isPlaceholder(value: string): boolean {
   const v = value.trim()
   if (/^<.*>$/.test(v) || /^\$\{.*\}$/.test(v) || /^(.)\1*$/.test(v)) return true
-  const words = v.split(/[-_ .]+|(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])/).filter(Boolean)
+  const words = v.split(/[^A-Za-z0-9]+|(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])|(?<=[a-z])(?=[A-Z])/).filter(Boolean)
   if (!words.every((word) => /^(?:\d+|[a-z]+|[A-Z]+|[A-Z][a-z]+)$/.test(word))) return false
   return words.some((word) => PLACEHOLDER_WORDS.has(word.toLowerCase()))
 }
 
 /**
- * Reads "2:new,1:old": versions are distinct non-negative integers, each value at least MIN_SECRET_BYTES bytes and
- * not a placeholder. Problems name the variable and the position, never a value.
+ * Reads "2:new,1:old": versions are distinct non-negative integers, each value MIN_SECRET_BYTES or more random bytes
+ * as hex. Problems name the variable and the position, never a value.
  */
 function parseKeys(name: string, text: string, problems: string[]): VersionedKey[] {
   const keys: VersionedKey[] = []
@@ -97,10 +106,10 @@ function parseKeys(name: string, text: string, problems: string[]): VersionedKey
     }
     if (seen.has(version)) problems.push(`${name} repeats version ${version}`)
     seen.add(version)
-    if (Buffer.byteLength(value, "utf8") < MIN_SECRET_BYTES) {
-      problems.push(`${name} entry ${index + 1} must be at least ${MIN_SECRET_BYTES} bytes (use 32 random bytes)`)
-    } else if (isPlaceholder(value)) {
-      problems.push(`${name} entry ${index + 1} is a placeholder; generate a random value`)
+    if (!isGeneratedHex(value, MIN_SECRET_BYTES)) {
+      problems.push(
+        `${name} entry ${index + 1} must be ${MIN_SECRET_BYTES} or more random bytes as hex (openssl rand -hex 32)`,
+      )
     }
     keys.push({ version, value })
   })
@@ -150,8 +159,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     const url = URL.canParse(databaseUrl) ? new URL(databaseUrl) : undefined
     if (!url || !/^postgres(ql)?:$/.test(url.protocol)) problems.push("DATABASE_URL must be a postgres:// URL")
     else if (!url.password) problems.push("DATABASE_URL must hold the database password")
-    else if (isPlaceholder(decodeURIComponent(url.password))) {
-      problems.push("DATABASE_URL holds a placeholder password; generate a random one")
+    else if (!isGeneratedHex(decodeURIComponent(url.password), MIN_DATABASE_PASSWORD_BYTES)) {
+      problems.push("DATABASE_URL's password must be random bytes as hex (openssl rand -hex 32)")
     }
   }
 
