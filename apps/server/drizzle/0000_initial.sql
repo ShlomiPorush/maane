@@ -70,6 +70,7 @@ CREATE TABLE "auth_user" (
 	"banned" boolean DEFAULT false,
 	"ban_reason" text,
 	"ban_expires" timestamp with time zone,
+	"setup_admin" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "auth_user_email_unique" UNIQUE("email"),
@@ -94,12 +95,6 @@ CREATE TABLE "setting" (
 	CONSTRAINT "setting_one_form" CHECK (("setting"."value" is null) <> ("setting"."ciphertext" is null))
 );
 --> statement-breakpoint
-CREATE TABLE "setup_claim" (
-	"id" integer PRIMARY KEY DEFAULT 1 NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "setup_claim_single_row" CHECK ("setup_claim"."id" = 1)
-);
---> statement-breakpoint
 ALTER TABLE "audit_log" ADD CONSTRAINT "audit_log_actor_user_id_auth_user_id_fk" FOREIGN KEY ("actor_user_id") REFERENCES "public"."auth_user"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "auth_account" ADD CONSTRAINT "auth_account_user_id_auth_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."auth_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "auth_session" ADD CONSTRAINT "auth_session_user_id_auth_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."auth_user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -109,4 +104,5 @@ CREATE INDEX "audit_log_actor_idx" ON "audit_log" USING btree ("actor_user_id");
 CREATE INDEX "auth_account_user_idx" ON "auth_account" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "auth_session_user_idx" ON "auth_session" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "auth_two_factor_secret_idx" ON "auth_two_factor" USING btree ("secret");--> statement-breakpoint
-CREATE INDEX "auth_two_factor_user_idx" ON "auth_two_factor" USING btree ("user_id");
+CREATE INDEX "auth_two_factor_user_idx" ON "auth_two_factor" USING btree ("user_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "auth_user_one_setup_admin" ON "auth_user" USING btree ((true)) WHERE "auth_user"."setup_admin";

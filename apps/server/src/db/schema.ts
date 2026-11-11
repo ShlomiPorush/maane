@@ -1,29 +1,49 @@
 import { sql } from "drizzle-orm"
-import { bigint, bigserial, boolean, check, index, integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core"
+import {
+  bigint,
+  bigserial,
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core"
 
 const at = (name: string) => timestamp(name, { withTimezone: true })
 const createdAt = () => at("created_at").notNull().defaultNow()
 
 // --- Better Auth (core, username, twoFactor, admin), in the shape its Drizzle adapter documents ---
 
-export const authUser = pgTable("auth_user", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  /** Better Auth requires an e-mail: Maane derives `<username>@maane.invalid`. */
-  email: text("email").notNull().unique(),
-  emailVerified: boolean("email_verified").notNull().default(false),
-  image: text("image"),
-  username: text("username").unique(),
-  displayUsername: text("display_username"),
-  twoFactorEnabled: boolean("two_factor_enabled").default(false),
-  /** `admin` or `agent` (admin plugin). */
-  role: text("role"),
-  banned: boolean("banned").default(false),
-  banReason: text("ban_reason"),
-  banExpires: at("ban_expires"),
-  createdAt: createdAt(),
-  updatedAt: at("updated_at").notNull().defaultNow(),
-})
+export const authUser = pgTable(
+  "auth_user",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    /** Better Auth requires an e-mail: Maane derives `<username>@maane.invalid`. */
+    email: text("email").notNull().unique(),
+    emailVerified: boolean("email_verified").notNull().default(false),
+    image: text("image"),
+    username: text("username").unique(),
+    displayUsername: text("display_username"),
+    twoFactorEnabled: boolean("two_factor_enabled").default(false),
+    /** `admin` or `agent` (admin plugin). */
+    role: text("role"),
+    banned: boolean("banned").default(false),
+    banReason: text("ban_reason"),
+    banExpires: at("ban_expires"),
+    /** The first admin, made by the setup screen (an additional field Maane declares to Better Auth). */
+    setupAdmin: boolean("setup_admin").notNull().default(false),
+    createdAt: createdAt(),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+  },
+  // One setup admin, ever: of two setup sign-ups that pass the checks together, the second fails at insert and its
+  // transaction rolls back.
+  (t) => [uniqueIndex("auth_user_one_setup_admin").on(sql`(true)`).where(sql`${t.setupAdmin}`)],
+)
 
 export const authSession = pgTable(
   "auth_session",
@@ -98,19 +118,6 @@ export const authRateLimit = pgTable("auth_rate_limit", {
 })
 
 // --- Maane ---
-
-/**
- * The first-run setup claim: at most one row ever (the check pins its id). The setup sign-up inserts it before the
- * first user is created, so of two requests that pass the open-setup check together only one gets this far.
- */
-export const setupClaim = pgTable(
-  "setup_claim",
-  {
-    id: integer("id").primaryKey().default(1),
-    claimedAt: createdAt(),
-  },
-  (t) => [check("setup_claim_single_row", sql`${t.id} = 1`)],
-)
 
 /** One row per setting the owner changed. A plain value in `value`; a secret only as `ciphertext`. */
 export const setting = pgTable(

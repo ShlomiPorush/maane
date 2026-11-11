@@ -1,5 +1,5 @@
 {
-  "id": "9071d940-753b-4056-9ee2-571c4161e9e8",
+  "id": "cbf87c3a-8467-4dc1-95a2-938d65563c19",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -553,6 +553,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "setup_admin": {
+          "name": "setup_admin",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -568,7 +575,24 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "auth_user_one_setup_admin": {
+          "name": "auth_user_one_setup_admin",
+          "columns": [
+            {
+              "expression": "(true)",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"auth_user\".\"setup_admin\"",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
@@ -683,38 +707,6 @@
         "setting_one_form": {
           "name": "setting_one_form",
           "value": "(\"setting\".\"value\" is null) <> (\"setting\".\"ciphertext\" is null)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.setup_claim": {
-      "name": "setup_claim",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "default": 1
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "setup_claim_single_row": {
-          "name": "setup_claim_single_row",
-          "value": "\"setup_claim\".\"id\" = 1"
         }
       },
       "isRLSEnabled": false
