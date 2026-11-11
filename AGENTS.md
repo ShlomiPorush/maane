@@ -9,24 +9,51 @@ Maane is a self-hosted helpdesk for email only. Mail reaches one Microsoft 365 s
 - Product requirements: `docs/requirements.md`
 - Foundation plan, decisions, order of work, and status: `docs/project-foundation.md`
 
-The foundation plan is the desired state. Items marked planned do not exist yet. Check the repository before assuming a file, command, or feature exists. Today the repository holds documentation and repository metadata only: no package manifest, script, workflow, Dockerfile, or Compose file.
+The foundation plan is the desired state. Items marked planned do not exist yet. Check the repository before assuming a file, command, or feature exists. Today the repository holds the workspace baseline (1a): manifests, the lockfile, `packages/shared` with the locale files, the toolchain image, the guards, `scripts/verify.sh`, CI, and Dependabot. No application, Compose file, or other workflow script exists yet.
 
 UI follows the `v3-ui-style` skill.
 
-## Planned layout
+## Layout
 
-Planned, not created. See the architecture table in `docs/project-foundation.md`.
+Exists:
+
+- `packages/shared`: the locale files `src/locales/en.json` and `src/locales/he.json` and `src/locales.ts` (locales, default Hebrew, direction). Imported as TypeScript source; no build step.
+- `config/tsconfig.base.json`: shared compiler settings. `biome.json` stays at the root (see Traps).
+- `docker/toolchain.Dockerfile`: Node, pnpm, git, jq, shellcheck, and shfmt for the scripts and CI.
+- `scripts/verify.sh`, and `scripts/lib/`: `common.sh` (shared helpers), `guards.sh` (repository guards), `test-guards.sh` (plants each violation in a scratch repository and expects its guard to fail).
+- `.github/`: `workflows/ci.yml`, `dependabot.yml`, the pull request template.
+
+Planned, not created (see the architecture table in `docs/project-foundation.md`):
 
 - `apps/server`: Hono, Better Auth, Drizzle with PostgreSQL, the UI API, the public routes, and the built UI.
 - `apps/web`: React and Vite UI. Hebrew and English, RTL and LTR, light and dark.
 - `apps/worker`: the PostgreSQL job queue consumer: Graph intake, sending, delivery polling, scheduled actions, Web Push, import.
 - `apps/zendesk-backup` and `packages/zendesk`: the phase 0 backup tool, and the Zendesk client and archive format it shares with the import.
-- `packages/shared`: schemas, codes, date helpers, and the locale files `src/locales/en.json` and `src/locales/he.json`.
-- `scripts/`: `local.sh`, `verify.sh`, `try-pr.sh`, `release.sh`, Bash for WSL. `docker/`: Dockerfiles, the development Compose template, env examples. `config/`: movable tool configuration.
+- `scripts/local.sh`, `scripts/try-pr.sh`, `scripts/release.sh`. `docker/`: the application Dockerfile, the development Compose template, env examples.
 
 ## Commands
 
-None exist yet. The planned contracts for `scripts/local.sh`, `scripts/verify.sh`, `scripts/try-pr.sh`, and `scripts/release.sh` are in `docs/project-foundation.md`. The 1a task adds the first ones and updates this section.
+All scripts are Bash for WSL or Linux with Docker. Node, pnpm, shellcheck, and shfmt run inside the toolchain container, so the host needs only Docker.
+
+- `scripts/verify.sh [--changed [BASE]] [--guards-only]`: the only verification entry point. Guards and their tests, then install from the lockfile, Biome, types, unit tests, and builds. `--changed` compares with `BASE` (default `origin/main`): documentation only runs the guards; changes only inside `apps/` or `packages/` run the changed packages and their dependents; anything else runs everything.
+- Ad-hoc commands in the toolchain: `source scripts/lib/common.sh && build_toolchain && in_toolchain "pnpm ..."`.
+- The planned contracts for `scripts/local.sh`, `scripts/try-pr.sh`, and `scripts/release.sh` are in `docs/project-foundation.md`.
+
+Verify in proportion to the risk, and report what ran and its result:
+
+- **Documentation only** (`docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`, `LICENSE`): `scripts/verify.sh --changed`, which then runs only the guards.
+- **Anything else**: the full `scripts/verify.sh` before opening the pull request.
+
+CI (`.github/workflows/ci.yml`) runs `Detect changes`, `Guards` always, `Checks` (`verify.sh --changed` against the base branch on pull requests, the full sweep on `main`, manual runs, and the weekly Monday sweep) unless only documentation changed, and `CI summary`, the one check to require.
+
+## Traps
+
+- Some editing tools turn `\u` escapes in the text they write into the literal characters. After writing a file that needs Hebrew code points or bidirectional controls in source, build them from code points (`String.fromCodePoint(0x5d0)`) or check the file: the guards fail on literal Hebrew outside `he.json` and on any literal bidirectional control.
+- Tests and guard tests assemble secret-like values at run time (`"gh""p_..."`), because the guards and GitHub push protection scan the literal text.
+- The guards scan tracked files and new files that are not ignored. The deny list `docs/private/deny-list.txt` exists only on the owner's machine; in CI the guard is skipped, and CI output never repeats a matched line.
+- pnpm 12 reads its settings only from `pnpm-workspace.yaml`. A dependency that needs an install script must be allowed there under `allowBuilds`.
+- Biome 2 must find `biome.json` at the repository root; a config under `config/` fails with "nested root configuration". Its Markdown and YAML formatters are off.
+- Inside the toolchain container pnpm keeps its store in `node_modules/.pnpm-store` (ignored).
 
 ## Repository policies
 
@@ -37,8 +64,9 @@ None exist yet. The planned contracts for `scripts/local.sh`, `scripts/verify.sh
 - Every setting the owner manages is stored in the database with a default and edited in the admin UI. An environment variable may override one field and locks it in the UI. Only the database connection, file paths, deployment wiring, and keys live in the environment alone.
 - Organization scope is enforced on the server for every read and write. The send point itself refuses customer sends in listening mode.
 - Keep the repository root minimal. Every root file is listed and justified in `docs/project-foundation.md`.
-- Add user-visible or operational changes under `Unreleased` in `CHANGELOG.md` once it exists. Do not bump versions in pull requests; the release workflow does that.
-- Install with the lockfile once one exists.
+- Add user-visible or operational changes under `Unreleased` in `CHANGELOG.md`. Do not bump versions in pull requests; the release workflow does that.
+- Install with the lockfile (`pnpm install --frozen-lockfile`, done by the scripts).
+- Pin every GitHub Action to a full commit SHA with the version in a comment. A guard enforces it.
 - Commits use the GitHub noreply address as `user.email`. No AI or authorship attribution in commits, pull requests, Issues, or code.
 - Desk, Pay, and hub are the owner's private projects. They are inspiration and reference only. Never copy code from them into this public repository without checking its license and content.
 
