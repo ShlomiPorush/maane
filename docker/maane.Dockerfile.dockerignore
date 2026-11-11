@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/coverage
+**/test-results
+**/playwright-report
+.git
+.github
+.pnpm-store
+docs
+scripts
+e2e
+.env
+.env.*
+docker-compose*.yml
+data
+postgres-data

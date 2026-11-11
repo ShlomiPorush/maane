@@ -1,0 +1,95 @@
+# Production deployment. Runs the image the release workflow publishes to GHCR; nothing is built here.
+# Behind Traefik on the external "traefik" network, so no port is published. Configure through .env next to this
+# file (copy .env.example and generate its secrets as docs/deployment.md describes); never commit .env.
+#
+# Compose interpolation is limited to VERSION, DOMAIN, and POSTGRES_PASSWORD (which builds the database URL and is the
+# only value PostgreSQL receives). Everything else the server and the worker read comes through env_file.
+name: maane
+
+x-app: &app
+  image: ghcr.io/shlomiporush/maane:${VERSION:?Set VERSION in .env to the release to run}
+  env_file:
+    - .env
+  environment:
+    DATABASE_URL: postgres://maane:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/maane
+    MAANE_PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in .env}
+  # Runs as node (set in the image) with no capability and no way to gain privileges, on a read-only root.
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  restart: unless-stopped
+
+services:
+  server:
+    <<: *app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - traefik
+      - internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.services.maane.loadbalancer.server.port=8080"
+      - "traefik.http.routers.maane.entrypoints=https"
+      - "traefik.http.routers.maane.rule=Host(`${DOMAIN:?Set DOMAIN in .env}`)"
+      - "traefik.http.routers.maane.tls=true"
+      - "traefik.http.routers.maane.service=maane"
+      - "traefik.http.routers.maane.middlewares=default@file"
+    healthcheck:
+      test: ["CMD", "node", "dist/server/healthcheck.js"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  worker:
+    <<: *app
+    command: ["node", "dist/worker/index.js"]
+    # The server runs the migrations; the worker starts once the server is healthy.
+    depends_on:
+      server:
+        condition: service_healthy
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "dist/worker/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+  postgres:
+    image: postgres:18.6-bookworm
+    # Only its own three values: the application's secrets never reach PostgreSQL.
+    environment:
+      POSTGRES_USER: maane
+      POSTGRES_DB: maane
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./postgres-data:/var/lib/postgresql
+    networks:
+      - internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  traefik:
+    external: true
+  # PostgreSQL and the worker have no route outside the stack.
+  internal:
+    internal: true
