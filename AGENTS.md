@@ -9,7 +9,7 @@ Maane is a self-hosted helpdesk for email only. Mail reaches one Microsoft 365 s
 - Product requirements: `docs/requirements.md`
 - Foundation plan, decisions, order of work, and status: `docs/project-foundation.md`
 
-The foundation plan is the desired state. Items marked planned do not exist yet. Check the repository before assuming a file, command, or feature exists. Today the repository holds the workspace baseline (1a): manifests, the lockfile, `packages/shared` with the locale files, the toolchain image, the guards, `scripts/verify.sh`, CI, and Dependabot; and the phase 0 Zendesk backup tool. No application server, web UI, worker, Compose file, or other workflow script exists yet.
+The foundation plan is the desired state. Items marked planned do not exist yet. Check the repository before assuming a file, command, or feature exists. Today the repository holds the workspace baseline (1a): manifests, the lockfile, `packages/shared` with the locale files, the toolchain image, the guards, `scripts/verify.sh`, CI, and Dependabot; the phase 0 Zendesk backup tool; and the server and worker of foundation 1b (sign-in, setup, settings, audit log, job queue). No web UI, Compose file, application image, or other workflow script exists yet.
 
 UI follows the `v3-ui-style` skill.
 
@@ -26,18 +26,19 @@ Exists:
 - `packages/zendesk`: the Zendesk API client (the token goes only to the API origin; downloads follow redirects without it, HTTPS only, with a size limit), the archive format (`archive.ts`), one backup run (`backup.ts`), and the offline check (`check.ts`). `src/testing/stand-in.ts` is a stand-in Zendesk API with a second origin for files; tests never reach Zendesk.
 - `apps/zendesk-backup`: the phase 0 command line (`backup`, `check`), bundled by esbuild into `dist/zendesk-backup.mjs` for Node 24 and later. It reads the token from a terminal only and refuses an archive folder inside a Git working tree. How to run it: `docs/zendesk-backup.md`.
 
+- `apps/server`: Hono on Node.js with Drizzle over `pg` (migrations in `apps/server/drizzle`, generated with `drizzle-kit generate`, run on start). `src/config.ts` reads and checks the environment and refuses missing or placeholder secrets and `BETTER_AUTH_*`. `src/auth/auth.ts` is Better Auth (username, twoFactor, admin) with the closed route list and its three groups, the setup window (`setup-window.ts`), and the audit rows from its documented hooks. `src/http/app.ts` mounts `/healthz/*`, `/api/auth/*`, `/api/setup/status`, `/api/v1` (session with two-factor, CSRF header and Origin, admin-only settings and audit log), and the built UI with its Content Security Policy. `src/settings/` holds the encrypted settings (`crypto.ts`) and their service. `src/testing/` holds the integration helpers: a migrated database per test file, a cookie-jar browser, an independent TOTP. Tests named `*.integration.test.ts` need the PostgreSQL that `scripts/verify.sh` starts.
+- `apps/worker`: pg-boss (schema `pgboss`) with the `heartbeat` job; its health check reads the heartbeat file. Imports the server's config, database, and log through `@maane/server/*`.
+
 Planned, not created (see the architecture table in `docs/project-foundation.md`):
 
-- `apps/server`: Hono, Better Auth, Drizzle with PostgreSQL, the UI API, the public routes, and the built UI.
 - `apps/web`: React and Vite UI. Hebrew and English, RTL and LTR, light and dark.
-- `apps/worker`: the PostgreSQL job queue consumer: Graph intake, sending, delivery polling, scheduled actions, Web Push, import.
 - `scripts/local.sh`, `scripts/try-pr.sh`, `scripts/release.sh`. `docker/`: the application Dockerfile, the development Compose template, env examples.
 
 ## Commands
 
 All scripts are Bash for WSL or Linux with Docker. Node, pnpm, shellcheck, and shfmt run inside the toolchain container, so the host needs only Docker.
 
-- `scripts/verify.sh [--changed [BASE]] [--guards-only]`: the only verification entry point. Guards and their tests, then install from the lockfile, Biome, types, unit tests, and builds. `--changed` compares with `BASE` (default `origin/main`): documentation only runs the guards; changes only inside `apps/` or `packages/` run the changed packages and their dependents; anything else runs everything.
+- `scripts/verify.sh [--changed [BASE]] [--guards-only] [--skip-integration]`: the only verification entry point. Guards and their tests, then install from the lockfile, Biome, types, unit tests, builds, a check that the schema needs no missing migration, and the integration tests against a disposable PostgreSQL (`postgres:18.6-bookworm` on a private network, a password new for every run, passed only through an owner-only `--env-file`). `--changed` compares with `BASE` (default `origin/main`): documentation only runs the guards; changes only inside `apps/` or `packages/` run the changed packages and their dependents; anything else runs everything.
 - Ad-hoc commands in the toolchain: `source scripts/lib/common.sh && build_toolchain && in_toolchain "pnpm ..."`.
 - The planned contracts for `scripts/local.sh`, `scripts/try-pr.sh`, and `scripts/release.sh` are in `docs/project-foundation.md`.
 
@@ -57,6 +58,12 @@ CI (`.github/workflows/ci.yml`) runs `Detect changes`, `Guards` always, `Checks`
 - pnpm 12 reads its settings only from `pnpm-workspace.yaml`. A dependency that needs an install script must be allowed there under `allowBuilds`.
 - Biome 2 must find `biome.json` at the repository root; a config under `config/` fails with "nested root configuration". Its Markdown and YAML formatters are off.
 - Inside the toolchain container pnpm keeps its store in `node_modules/.pnpm-store` (ignored).
+- New migration after a schema change: `in_toolchain "pnpm --filter @maane/server db:generate --name <change>"`. `scripts/verify.sh` fails when the schema and the migrations disagree. Never edit a generated migration.
+- **Better Auth is used only as it documents itself** (see Repository policies). The closed route list lives in `hooks.before` in `apps/server/src/auth/auth.ts`; a new Better Auth route stays closed until it is listed in one of the three groups, and `auth.integration.test.ts` fails when a listed path no longer exists.
+- Better Auth's session read does not refuse a banned user: the hook refuses one on every protected route, and `/api/v1` refuses one too. Keep both.
+- The setup admin (`setup_admin`) can be neither demoted nor banned (owner's decision, 2026-11-11). The accepted sign-in gaps are listed in "Foundation 1b design" in the foundation plan; each has a test that pins it.
+- Better Auth keys its rate limits on the client address: integration tests give each browser its own documentation-range address (`nextIp()`), or 5 sign-ins exhaust the limit.
+- A test that needs a URL with a password builds it at run time; the guards refuse credentials in a URL literal unless the password is a placeholder (`$NAME`, `${...}`, `%s`, `<name>`, or asterisks).
 
 ## Repository policies
 
