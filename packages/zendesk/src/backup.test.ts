@@ -151,7 +151,37 @@ describe("backup", () => {
     expect(result.sideConversations).toBe("unavailable")
     const check = await checkArchive(dir)
     expect(check.problems).toEqual([])
-    expect(check.warnings).toContain("side conversations were not available to the token")
+    expect(check.warnings.some((w) => w.includes("side conversations could not be read"))).toBe(true)
+    // Asked again on the next run: the add-on may have been added since.
+    zendesk.sideConversationsAvailable = true
+    zendesk.addComment(1, { id: 16, public: true, body: "Again", files: [] })
+    expect((await backup()).sideConversations).toBe("available")
+  })
+
+  it("keeps side conversations for other tickets when one ticket is deleted while it is saved", async () => {
+    zendesk.deletedDuringSave.add(1)
+    const result = await backup()
+    expect(result.sideConversations).toBe("available")
+    const check = await checkArchive(dir)
+    expect(check.problems).toEqual([])
+    expect(check.counts.goneTickets).toBe(2)
+  })
+
+  it("repairs a half-written line of the page index on the next run", async () => {
+    await backup()
+    await appendFile(join(dir, "raw-index.jsonl"), '{"path":"raw/x","sha')
+    expect((await checkArchive(dir)).problems.join("\n")).toContain("raw-index.jsonl line")
+    await backup()
+    expect((await checkArchive(dir)).problems).toEqual([])
+  })
+
+  it("fetches a stored file again when it went missing after it was recorded", async () => {
+    await backup()
+    const sha = (await manifest()).files["101"]?.sha256 ?? ""
+    await rm(join(dir, "files", sha.slice(0, 2), sha))
+    await backup()
+    expect((await manifest()).files["101"]?.status).toBe("ok")
+    expect((await checkArchive(dir)).problems).toEqual([])
   })
 
   it("records a collection the account cannot read and goes on", async () => {

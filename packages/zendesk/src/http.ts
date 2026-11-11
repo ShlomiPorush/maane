@@ -188,7 +188,15 @@ export class ZendeskClient {
         await response.body.cancel()
         throw new ZendeskError(`larger than the limit of ${maxBytes} bytes (${declared} bytes)`)
       }
-      const result = await save(response.body, target, maxBytes)
+      let result: Download
+      try {
+        result = await save(response.body, target, maxBytes)
+      } catch (error) {
+        // The connection dropped while the body arrived (fetch reports a TypeError): worth another attempt. A
+        // file system error (a full disk, no permission) is not, and stops the run.
+        if (error instanceof TypeError) throw new RetryableError(`the download of ${describe(url)} was cut off`)
+        throw error
+      }
       if (expectedBytes !== null && result.bytes !== expectedBytes) {
         throw new ZendeskError(`the download has ${result.bytes} bytes, Zendesk reported ${expectedBytes}`)
       }
@@ -226,7 +234,8 @@ async function save(body: ReadableStream<Uint8Array>, target: string, maxBytes: 
   await pipeline(
     Readable.fromWeb(body as import("node:stream/web").ReadableStream),
     meter,
-    createWriteStream(target, { flags: "wx" }),
+    // flush: the content is on the disk before the file is renamed and recorded as ok.
+    createWriteStream(target, { flags: "wx", flush: true }),
   )
   return { sha256: hash.digest("hex"), bytes }
 }

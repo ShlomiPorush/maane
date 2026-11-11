@@ -9,9 +9,12 @@ import {
   type ManifestEntry,
   seqName,
   stamp,
+  VERSION_MARKER,
+  type VersionMarker,
 } from "./archive.ts"
 import { temporaryName, type ZendeskClient, ZendeskError } from "./http.ts"
 import {
+  attachmentPath,
   auditsPath,
   COLLECTION_SOURCES,
   commentsPath,
@@ -46,6 +49,7 @@ export interface BackupResult {
   filesFailed: number
   /** Collections the account answered 403 or 404 for, with the reason in their unavailable.json. */
   collectionsUnavailable: string[]
+  /** Whether this run could read side conversations. */
   sideConversations: "available" | "unavailable" | "unknown"
   coveredUntil: string | null
 }
@@ -55,9 +59,12 @@ const EXPORT_DELAY_MS = 60_000
 
 type Attachment = { commentId: string; attachment: ZendeskAttachment }
 
+/** What this run learned about side conversations. Asked again on every run: an add-on can be added later. */
+type RunState = { sideConversations: "available" | "unavailable" | "unknown" }
+
 /**
  * One backup run. It continues where the previous run stopped: every page is written before the position moves
- * past it, and every ticket's comments, audits, side conversations, and files before the ticket counts as saved.
+ * past it, and a ticket version counts as saved only once its marker records that every list and file was handled.
  * A run that stops part way is resumed by the next one.
  */
 export async function runBackup(options: BackupOptions): Promise<BackupResult> {
@@ -65,17 +72,16 @@ export async function runBackup(options: BackupOptions): Promise<BackupResult> {
   const log = options.log ?? (() => {})
   const now = options.now ?? (() => new Date())
 
-  const info = await archive.info()
-  if (info) {
-    if (info.format !== ARCHIVE_FORMAT || info.version !== ARCHIVE_VERSION) {
-      throw new Error("the folder holds a different archive format")
-    }
-    if (info.apiOrigin !== client.apiOrigin) throw new Error("the archive belongs to another Zendesk account")
-  }
-
   const unlock = await archive.lock()
   try {
-    if (!info) {
+    // Read inside the lock: a run that waited cannot act on what another run changed meanwhile.
+    const info = await archive.info()
+    if (info) {
+      if (info.format !== ARCHIVE_FORMAT || info.version !== ARCHIVE_VERSION) {
+        throw new Error("the folder holds a different archive format")
+      }
+      if (info.apiOrigin !== client.apiOrigin) throw new Error("the archive belongs to another Zendesk account")
+    } else {
       await archive.writeJson("archive.json", {
         format: ARCHIVE_FORMAT,
         version: ARCHIVE_VERSION,
@@ -83,10 +89,12 @@ export async function runBackup(options: BackupOptions): Promise<BackupResult> {
         createdAt: now().toISOString(),
       })
     }
+    await archive.repairRawIndex()
     const state = await archive.state()
     state.runs += 1
     await archive.saveState(state)
     const run = seqName(state.runs)
+    const runState: RunState = { sideConversations: "unknown" }
     const result: BackupResult = {
       run: state.runs,
       pages: 0,
@@ -114,58 +122,76 @@ export async function runBackup(options: BackupOptions): Promise<BackupResult> {
         // An account without the feature or a token without the right answers 403 or 404. The collection is
         // settings, not customer data: record why it is missing and go on.
         if (!(error instanceof ZendeskError) || (error.status !== 403 && error.status !== 404)) throw error
-        await archive.writeJson(`raw/collections/${source.name}/${run}/unavailable.json`, {
-          status: error.status,
-          error: error.message,
-        })
+        await archive.writeRaw(
+          `raw/collections/${source.name}/${run}/unavailable.json`,
+          JSON.stringify({ status: error.status, error: error.message }),
+        )
         result.collectionsUnavailable.push(source.name)
         log(`${source.name}: not available (${error.status})`)
       }
     }
 
     const manifest = await archive.manifest()
+    await reclaimLostFiles(archive, manifest)
     const pending = Object.entries(state.tickets)
       .filter(([, ticket]) => ticket.status !== "deleted" && ticket.savedFor !== ticket.updatedAt)
       .sort(([a], [b]) => Number(a) - Number(b))
     log(`tickets to save: ${pending.length}`)
     const attempted = new Set<string>()
     for (const [ticketId] of pending) {
-      result.pages += await saveTicket(options, manifest, state, ticketId, attempted)
+      result.pages += await saveTicket(options, manifest, state, runState, ticketId, attempted)
       result.ticketsSaved++
       if (result.ticketsSaved % 50 === 0) log(`tickets saved: ${result.ticketsSaved} of ${pending.length}`)
     }
 
-    // Files that failed on an earlier run: read their ticket again first, which gives fresh download links, then try
-    // any file still failed and not tried in this run with the link it has.
-    const failedTickets = new Set(
-      Object.values(manifest.files)
-        .filter((entry) => entry.status === "failed" && !attempted.has(entry.attachmentId))
-        .map((entry) => entry.ticketId),
-    )
-    for (const ticketId of failedTickets) {
-      const ticket = state.tickets[ticketId]
-      if (!ticket || ticket.status === "deleted" || ticket.gone) continue
-      result.pages += await saveTicket(options, manifest, state, ticketId, attempted)
-    }
+    // Files that failed before and were not tried in this run. A comment attachment gets a fresh link from Show
+    // Attachment first; the saved pages of its ticket stay as they are.
     for (const entry of Object.values(manifest.files)) {
-      if (entry.status === "failed" && !attempted.has(entry.attachmentId) && entry.contentUrl) {
-        attempted.add(entry.attachmentId)
-        await fetchFile(options, entry, now)
-        await archive.saveManifest(manifest)
+      if (entry.status !== "failed" || attempted.has(entry.attachmentId)) continue
+      attempted.add(entry.attachmentId)
+      if (!entry.commentId.startsWith("side:") && isTicketId(entry.attachmentId)) {
+        try {
+          const page = await client.getJson(attachmentPath(entry.attachmentId))
+          const fresh = (page.json as { attachment?: ZendeskAttachment }).attachment
+          if (fresh?.content_url) entry.contentUrl = fresh.content_url
+          if (typeof fresh?.size === "number") entry.size = fresh.size
+        } catch (error) {
+          if (!(error instanceof ZendeskError)) throw error
+          entry.error = `no fresh link: ${error.message}`
+        }
       }
+      if (entry.contentUrl) await fetchFile(options, entry, now)
+      await archive.saveManifest(manifest)
     }
 
     for (const entry of Object.values(manifest.files)) {
       if (entry.status === "ok") result.filesSaved++
       else result.filesFailed++
     }
-    result.sideConversations = state.sideConversations ?? "unknown"
+    result.sideConversations = runState.sideConversations
     await archive.writeJson(`runs/${run}.json`, { ...result, finishedAt: now().toISOString() })
     log(`run ${state.runs} done: ${result.ticketsSaved} tickets saved, ${result.filesFailed} files failed`)
     return result
   } finally {
     await unlock()
   }
+}
+
+/** A file marked ok whose content is gone or the wrong size (a crash before the disk kept it) is fetched again. */
+async function reclaimLostFiles(archive: Archive, manifest: Manifest): Promise<void> {
+  let changed = false
+  for (const entry of Object.values(manifest.files)) {
+    if (entry.status !== "ok" || !entry.sha256) continue
+    const size = await stat(archive.filePath(entry.sha256)).then(
+      (s) => s.size,
+      () => -1,
+    )
+    if (size === entry.bytes) continue
+    entry.status = "failed"
+    entry.error = "the stored file was missing or incomplete; fetching it again"
+    changed = true
+  }
+  if (changed) await archive.saveManifest(manifest)
 }
 
 /**
@@ -259,11 +285,15 @@ function recordTickets(state: ArchiveState, records: unknown): void {
   }
 }
 
-/** Saves one ticket's comments, audits, side conversations, and files for its newest version. Returns the pages. */
+/**
+ * Saves one ticket's comments, audits, side conversations, and files for its newest version, then writes the
+ * version's marker. Returns the pages read.
+ */
 async function saveTicket(
   options: BackupOptions,
   manifest: Manifest,
   state: ArchiveState,
+  runState: RunState,
   ticketId: string,
   attempted: Set<string>,
 ): Promise<number> {
@@ -274,6 +304,8 @@ async function saveTicket(
   if (!isTicketId(ticketId)) throw new ZendeskError("a ticket ID that is not a number")
   const folder = `raw/tickets/${ticketId}/${stamp(ticket.updatedAt)}`
   let pages = 0
+  let gone = false
+  let sides: { status: "saved" | "unavailable"; ids: string[] } = { status: "unavailable", ids: [] }
   const attachments: Attachment[] = []
   try {
     pages += await fetchList(
@@ -293,17 +325,20 @@ async function saveTicket(
     )
   } catch (error) {
     // A ticket deleted after the export listed it answers 404. Its earlier versions, if any, stay saved.
-    if (error instanceof ZendeskError && error.status === 404) {
-      options.log?.(`ticket ${ticketId}: gone (404); kept what was saved before`)
-      ticket.gone = true
-      ticket.savedFor = ticket.updatedAt
-      await archive.saveState(state)
-      return pages
-    }
-    throw error
+    if (!(error instanceof ZendeskError) || error.status !== 404) throw error
+    gone = true
   }
-  pages += await saveSideConversations(options, state, ticketId, folder, attachments)
+  if (!gone) {
+    const saved = await saveSideConversations(options, runState, ticketId, folder, attachments)
+    if (saved === "gone") gone = true
+    else {
+      pages += saved.pages
+      sides = saved
+    }
+  }
 
+  // Every file a saved page lists gets a manifest entry, also for a ticket deleted while it was saved: downloaded, or
+  // failed with the reason.
   for (const { commentId, attachment } of attachments) {
     const id = String(attachment.id)
     const existing = manifest.files[id]
@@ -312,7 +347,8 @@ async function saveTicket(
       attachmentId: id,
       ticketId,
       commentId,
-      fileName: attachment.file_name ?? "",
+      // Comment attachments name the file `file_name`; side conversation attachments `name`.
+      fileName: attachment.file_name ?? attachment.name ?? "",
       contentType: attachment.content_type ?? null,
       inline: attachment.inline === true,
       size: typeof attachment.size === "number" ? attachment.size : null,
@@ -326,24 +362,43 @@ async function saveTicket(
     await fetchFile(options, entry, now)
   }
   await archive.saveManifest(manifest)
+  if (gone) return markGone(options, state, ticketId, pages)
+  const marker: VersionMarker = {
+    updatedAt: ticket.updatedAt,
+    sideConversations: sides.status,
+    sideConversationIds: sides.ids,
+    savedAt: now().toISOString(),
+  }
+  await archive.writeRaw(`${folder}/${VERSION_MARKER}`, JSON.stringify(marker))
   ticket.savedFor = ticket.updatedAt
   await archive.saveState(state)
   return pages
 }
 
+async function markGone(options: BackupOptions, state: ArchiveState, ticketId: string, pages: number) {
+  const ticket = state.tickets[ticketId]
+  if (!ticket) return pages
+  options.log?.(`ticket ${ticketId}: gone (404); kept what was saved before`)
+  ticket.gone = true
+  ticket.savedFor = ticket.updatedAt
+  await options.archive.saveState(state)
+  return pages
+}
+
 /**
  * Side conversations (an add-on): the list of a ticket's side conversations and each one's events, which hold the
- * messages and their attachments. An account without the add-on answers 403 or 404 once; the run then skips them.
+ * messages and their attachments. A 403 means the account or token cannot read them in this run; a 404 is checked
+ * against the ticket itself, so a ticket deleted meanwhile never turns side conversations off for the others.
  */
 async function saveSideConversations(
   options: BackupOptions,
-  state: ArchiveState,
+  runState: RunState,
   ticketId: string,
   folder: string,
   attachments: Attachment[],
-): Promise<number> {
+): Promise<{ status: "saved" | "unavailable"; ids: string[]; pages: number } | "gone"> {
   const { client, archive } = options
-  if (state.sideConversations === "unavailable") return 0
+  if (runState.sideConversations === "unavailable") return { status: "unavailable", ids: [], pages: 0 }
   const ids: string[] = []
   let pages = 0
   try {
@@ -358,15 +413,20 @@ async function saveSideConversations(
       },
     )
   } catch (error) {
-    if (error instanceof ZendeskError && (error.status === 403 || error.status === 404)) {
-      state.sideConversations = "unavailable"
-      await archive.saveState(state)
-      options.log?.(`side conversations: not available (${error.status})`)
-      return pages
+    if (!(error instanceof ZendeskError) || (error.status !== 403 && error.status !== 404)) throw error
+    if (error.status === 404) {
+      // Is the ticket itself gone, or only the add-on missing?
+      const ticketGone = await client.getJson(`/api/v2/tickets/${ticketId}.json`).then(
+        () => false,
+        (e: unknown) => e instanceof ZendeskError && e.status === 404,
+      )
+      if (ticketGone) return "gone"
     }
-    throw error
+    runState.sideConversations = "unavailable"
+    options.log?.(`side conversations: not available in this run (${error.status})`)
+    return { status: "unavailable", ids: [], pages }
   }
-  state.sideConversations = "available"
+  runState.sideConversations = "available"
   for (const id of ids) {
     if (!isSafeId(id)) throw new ZendeskError("a side conversation ID with unexpected characters")
     pages += await fetchList(
@@ -382,7 +442,7 @@ async function saveSideConversations(
       },
     )
   }
-  return pages
+  return { status: "saved", ids, pages }
 }
 
 /** Downloads one file into files/, content-addressed, and records the outcome on the entry. */

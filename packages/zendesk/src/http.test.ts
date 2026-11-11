@@ -83,6 +83,26 @@ describe("ZendeskClient", () => {
     for (const name of ["big", "short", "partial"]) await expect(stat(join(dir, name))).rejects.toThrow()
   })
 
+  it("tries a download again when the connection drops in the middle of the body", async () => {
+    let n = 0
+    const { fetchImpl } = fakeFetch({
+      [`${api}/f`]: () => {
+        n++
+        if (n > 1) return new Response("whole")
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("par"))
+            controller.error(new TypeError("terminated"))
+          },
+        })
+        return new Response(body)
+      },
+    })
+    const client = new ZendeskClient({ apiOrigin: api, authorization: "x", fetch: fetchImpl, sleep: noWait })
+    expect((await client.download(`${api}/f`, join(dir, "f"), 100, 5)).bytes).toBe(5)
+    expect(n).toBe(2)
+  })
+
   it("retries a download after a rate limit, honoring Retry-After", async () => {
     let n = 0
     const { fetchImpl } = fakeFetch({

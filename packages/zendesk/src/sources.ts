@@ -102,9 +102,16 @@ export function sideConversationEventsPath(ticketId: string, sideConversationId:
   return `/api/v2/tickets/${ticketId}/side_conversations/${sideConversationId}/events.json`
 }
 
+/** One attachment's current record (Show Attachment), with a fresh content URL. */
+export function attachmentPath(attachmentId: string): string {
+  return `/api/v2/attachments/${attachmentId}.json`
+}
+
 export interface ZendeskAttachment {
   id: number | string
   file_name?: string
+  /** Side conversation attachments name the file here instead of `file_name`. */
+  name?: string
   content_url?: string | null
   content_type?: string | null
   size?: number | null

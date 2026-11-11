@@ -47,9 +47,21 @@ export interface ArchiveState {
    * export, less the minute the export leaves out. Null when Zendesk sent no Date header.
    */
   coveredUntil: string | null
-  /** Side conversations: "unavailable" once the account answered 403 or 404 for them (an add-on). */
-  sideConversations?: "available" | "unavailable"
 }
+
+/**
+ * version.json in each saved ticket version: written last, once every list and file of that version was handled.
+ * The check requires it for the newest version and the lists it names.
+ */
+export interface VersionMarker {
+  updatedAt: string
+  /** "saved": the side conversations list and each one's events are in this folder. */
+  sideConversations: "saved" | "unavailable"
+  sideConversationIds: string[]
+  savedAt: string
+}
+
+export const VERSION_MARKER = "version.json"
 
 export type FileStatus = "ok" | "failed"
 
@@ -130,6 +142,21 @@ export class Archive {
   }
 
   /** Writes a raw API page and records its hash in raw-index.jsonl, which the check compares against. */
+  /**
+   * Drops a last line of raw-index.jsonl that a crash cut short, so the next entry starts on a line of its own. Runs
+   * under the lock, before anything is appended. A damaged line before the last stays for the check to report.
+   */
+  async repairRawIndex(): Promise<void> {
+    const path = this.path(RAW_INDEX)
+    const text = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null
+      throw error
+    })
+    if (text === null || text === "" || text.endsWith("\n")) return
+    const keep = text.slice(0, text.lastIndexOf("\n") + 1)
+    await this.write(RAW_INDEX, keep)
+  }
+
   async writeRaw(relativePath: string, text: string): Promise<void> {
     await this.write(relativePath, text)
     const entry: RawIndexEntry = {

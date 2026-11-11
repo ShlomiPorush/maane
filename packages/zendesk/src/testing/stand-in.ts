@@ -48,6 +48,8 @@ export class StandInZendesk {
   badTicketId = false
   /** The Date header of the last ticket export page. */
   lastDate: string | null = null
+  /** Tickets deleted in Zendesk right after their comments and audits were read: side conversations answer 404. */
+  readonly deletedDuringSave = new Set<number>()
   /** A collection whose next link points at another origin. */
   foreignLinkIn: string | null = null
   /** Collections that answer 403, as for an account without the feature. */
@@ -154,6 +156,27 @@ export class StandInZendesk {
       return this.#cursorExport(url, res, "users", this.users, 2)
     }
     if (path === "/api/v2/incremental/organizations.json") return this.#organizationExport(url, res)
+    const showTicket = /^\/api\/v2\/tickets\/(\d+)\.json$/.exec(path)
+    if (showTicket) {
+      const ticket = this.tickets.get(Number(showTicket[1]))
+      if (!ticket || ticket.gone || ticket.status === "deleted" || this.deletedDuringSave.has(ticket.id)) {
+        return send(res, 404, { error: "RecordNotFound" })
+      }
+      return send(res, 200, { ticket: { id: ticket.id, status: ticket.status, updated_at: ticket.updatedAt } })
+    }
+    const showAttachment = /^\/api\/v2\/attachments\/(\d+)\.json$/.exec(path)
+    if (showAttachment) {
+      const file = this.allFiles().find((f) => f.id === Number(showAttachment[1]))
+      if (!file) return send(res, 404, { error: "RecordNotFound" })
+      return send(res, 200, {
+        attachment: {
+          id: file.id,
+          file_name: file.name,
+          content_url: `${this.apiOrigin}/attachments/token/t${file.id}/?name=${encodeURIComponent(file.name)}`,
+          size: file.content.length,
+        },
+      })
+    }
     const sideList = /^\/api\/v2\/tickets\/(\d+)\/side_conversations\.json$/.exec(path)
     if (sideList) return this.#sideConversations(res, Number(sideList[1]))
     const sideEvents = /^\/api\/v2\/tickets\/(\d+)\/side_conversations\/([^/]+)\/events\.json$/.exec(path)
@@ -240,7 +263,9 @@ export class StandInZendesk {
   }
 
   #sideConversations(res: ServerResponse, ticketId: number) {
-    if (!this.sideConversationsAvailable) return send(res, 404, { error: "InvalidEndpoint" })
+    if (!this.sideConversationsAvailable || this.deletedDuringSave.has(ticketId)) {
+      return send(res, 404, { error: "InvalidEndpoint" })
+    }
     const list = ticketId === 1 ? [{ id: "sc-1", subject: "Asking the supplier", state: "open" }] : []
     send(res, 200, { side_conversations: list, next_page: null, count: list.length })
   }
