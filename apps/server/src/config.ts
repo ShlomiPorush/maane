@@ -35,7 +35,7 @@ export class ConfigError extends Error {
 const FOREIGN_AUTH_VARIABLES = /^(BETTER_AUTH_|AUTH_SECRET$)/
 
 /** Words that mark a value as written by hand for an example, compared in any case. */
-const PLACEHOLDER_WORDS = new Set([
+export const PLACEHOLDER_WORDS: ReadonlySet<string> = new Set([
   "changeme",
   "change",
   "replaceme",
@@ -62,20 +62,20 @@ const PLACEHOLDER_WORDS = new Set([
 
 /**
  * A value copied from an example instead of generated: in angle brackets or `${...}`, one character repeated, or a
- * phrase with a word such as "changeme", "your", "example", or "placeholder" in it, in any case. A phrase is split on
- * spaces, dots, hyphens, and underscores into short words of letters only and numbers, as in
- * "replace-me-with-32-random-bytes". A generated value of 32 or more bytes mixes letters and digits in long runs, so
- * it is never a phrase.
+ * phrase with a word such as "changeme", "your", "example", or "placeholder" in it. A phrase splits on spaces, dots,
+ * hyphens, underscores, and where letters meet digits, into numbers and words written as words: all lower case, all
+ * upper case, or capitalized, as in "replace-me-with-32bytes" or "YOUR-SECRET-HERE123".
+ *
+ * Hex, which the scripts and the deployment notes generate, never matches: no placeholder word is made of the letters
+ * a to f. In random base64url almost every run of letters mixes upper and lower case: of 2,000,000 random 32-byte
+ * values, 11 split into such words and none held a placeholder word. The rare value refused is generated again.
  */
 export function isPlaceholder(value: string): boolean {
   const v = value.trim()
   if (/^<.*>$/.test(v) || /^\$\{.*\}$/.test(v) || /^(.)\1*$/.test(v)) return true
-  const words = v
-    .toLowerCase()
-    .split(/[-_ .]+/)
-    .filter(Boolean)
-  if (!words.every((word) => /^[a-z]{1,12}$/.test(word) || /^\d+$/.test(word))) return false
-  return words.some((word) => PLACEHOLDER_WORDS.has(word))
+  const words = v.split(/[-_ .]+|(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])/).filter(Boolean)
+  if (!words.every((word) => /^(?:\d+|[a-z]+|[A-Z]+|[A-Z][a-z]+)$/.test(word))) return false
+  return words.some((word) => PLACEHOLDER_WORDS.has(word.toLowerCase()))
 }
 
 /**

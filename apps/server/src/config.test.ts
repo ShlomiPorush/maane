@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { ConfigError, isPlaceholder, loadConfig } from "./config.ts"
+import { ConfigError, isPlaceholder, loadConfig, PLACEHOLDER_WORDS } from "./config.ts"
 
 const key = () => randomBytes(32).toString("hex")
 const password = () => randomBytes(16).toString("hex")
@@ -79,8 +79,7 @@ describe("isPlaceholder", () => {
       expect(isPlaceholder(randomBytes(32).toString("hex"))).toBe(false)
       expect(isPlaceholder(randomBytes(32).toString("base64url"))).toBe(false)
     }
-    // A generated value has digits, also when it happens to begin like a placeholder word (a digit is appended so the
-    // case is certain, not only likely).
+    // A random value stays random when it happens to begin like a placeholder word.
     for (const prefix of ["YOUR_A", "your-", "example", "changeme"]) {
       expect(isPlaceholder(`${prefix}${randomBytes(32).toString("base64url")}7`), prefix).toBe(false)
     }
@@ -88,13 +87,26 @@ describe("isPlaceholder", () => {
     for (const value of ["YOUR-SETTINGS-SECRET-REPLACE-ME-HERE", "Change_Me_To_Something_Random_Please", "EXAMPLE"]) {
       expect(isPlaceholder(value), value).toBe(true)
     }
-    // Numbers in the instructions do not hide them.
+    // Numbers in the instructions, also next to a word, and long words do not hide them.
     for (const value of [
       "replace-me-with-32-random-bytes-before-starting",
       "YOUR-SETTINGS-SECRET-REPLACE-ME-HERE-123",
+      "replace-me-with-32bytes-before-starting",
+      "YOUR-SETTINGS-SECRET-REPLACE-ME-HERE123",
+      "replace-this-with-a-cryptographically-random-secret",
     ]) {
       expect(isPlaceholder(value), value).toBe(true)
     }
+  })
+
+  it("never takes hex for a phrase: no placeholder word is made of the hex letters", () => {
+    for (const word of PLACEHOLDER_WORDS) expect(/^[a-f]+$/.test(word), word).toBe(false)
+  })
+
+  it("takes almost no random base64url value for a phrase", () => {
+    let matched = 0
+    for (let i = 0; i < 20_000; i++) if (isPlaceholder(randomBytes(32).toString("base64url"))) matched++
+    expect(matched).toBe(0)
   })
 
   it("refuses an instruction with numbers in it as a settings key", () => {
