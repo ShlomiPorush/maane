@@ -109,6 +109,7 @@ plant "a URL password with an apostrophe" "$secret" docs/db.md "postgres""://maa
 plant "credentials with an uppercase scheme" "$secret" docs/db.md "HTTPS""://user:$(repeat x 12)@example.com"$'\n'
 plant "credentials with an unusual username" "$secret" docs/db.md "https""://user!name:$(repeat x 12)@example.com"$'\n'
 plant "a half placeholder" "$secret" docs/db.md "postgres""://maane:\$PASSWORD}@db"$'\n'
+plant "a password with an empty username" "$secret" docs/db.md "postgresql""://:$(repeat x 12)@db/maane"$'\n'
 plant "a shellcheck finding" "SC2086" scripts/lib/bad.sh $'#!/usr/bin/env bash\necho $1\n'
 plant "a badly formatted script" "not formatted" scripts/lib/ugly.sh $'#!/usr/bin/env bash\nif true; then\necho ok\nfi\n'
 # A script that holds a token and cannot be parsed: neither shellcheck's nor shfmt's message may repeat the line.
@@ -168,7 +169,10 @@ printf 'services:\n  server:\n    image: maane:dev\n' >"$scratch/docker/docker-c
 # shellcheck disable=SC2016 # the placeholders must stay literal
 printf '%s\n' 'Use 192.0.2.10 or 127.0.0.1. Version 1.2.3.4.5.' \
   'postgres://maane:${PASSWORD}@db postgres://maane:$PASSWORD@db postgres://maane:<password>@db' \
-  'postgres://maane:***@db postgres://maane:%s@db postgres://maane:${password()}@db' >"$scratch/docs/allowed.md"
+  'postgres://maane:***@db postgres://maane:%s@db postgres://maane:${password()}@db' \
+  'postgres://${user}:${readSecret({name:"database-password"})}@${host}/maane' \
+  'https://example.com?reply=mailto:agent@example.com https://example.com#contact=mailto:agent@example.com' \
+  >"$scratch/docs/allowed.md"
 printf 'MAANE_AUTH_SECRETS=\nDATABASE_URL=""\nPOSTGRES_PASSWORD='"''"' # generated\n' >"$scratch/.env.example"
 printf '\x89PNG\r\n\x1a\n\000\000' >"$scratch/docs/logo.png"
 expect_pass "on allowed forms"

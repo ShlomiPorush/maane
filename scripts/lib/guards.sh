@@ -169,8 +169,9 @@ secret_pattern+='|\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}'
 secret_pattern+='|\bAIza[0-9A-Za-z_-]{35}'
 secret_pattern+='|\bapi-[A-F0-9]{32}\b'
 secret_pattern+='|\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
-secret_pattern+='|\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:'
-secret_pattern+='(?!(?:\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^\s{}]+\}|%s|<[^\s<>@]*>|\*+)@)[^\s/@]+@'
+# The user part may be empty, and neither part crosses into the path, query, or fragment (?, #, /).
+secret_pattern+='|\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@?#]*:'
+secret_pattern+='(?!(?:\$[A-Za-z_][A-Za-z0-9_]*|\$\{(?:[^{}]|\{[^{}]*\})*\}|%s|<[^\s<>@]*>|\*+)@)[^\s/@?#]+@'
 secrets="$(search -P -e "$secret_pattern" -- "${files[@]}")"
 if [ -n "$secrets" ]; then
   echo "A secret-like value is in the repository. Remove it, and replace it wherever it is used:"

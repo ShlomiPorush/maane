@@ -11,7 +11,7 @@ This document separates what exists in the repository from the approved foundati
 - No application, Compose file, application Dockerfile, environment example, or other workflow script exists.
 - The local Git repository uses the GitHub noreply address as `user.email`. `core.autocrlf` is on for the owner's machine, so `.gitattributes` forces LF for every text file.
 - GitHub repository `ShlomiPorush/maane` exists, public, default branch `main`, with the approved settings read back on 2026-11-11. See [GitHub configuration](#github-configuration).
-- Verified locally on 2026-11-11 in WSL (Docker 29.8.2): the `scripts/verify.sh` full sweep passes (guards; the 38 planted violations in `test-guards.sh` each fail with their own guard, without repeating the planted value in CI output, and pass once removed; install from the lockfile; Biome; `tsc`; 3 unit tests). CI results are on the 1a pull request.
+- Verified locally on 2026-11-11 in WSL (Docker 29.8.2): the `scripts/verify.sh` full sweep passes (guards; the 39 planted violations in `test-guards.sh` each fail with their own guard, without repeating the planted value in CI output, and pass once removed; install from the lockfile; Biome; `tsc`; 3 unit tests). CI results are on the 1a pull request.
 
 ## Product intent and boundaries
 
