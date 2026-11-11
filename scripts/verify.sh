@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The single verification entry point, used locally and in CI.
-# Usage: scripts/verify.sh [--changed [BASE]] [--guards-only] [--skip-integration]
+# Usage: scripts/verify.sh [--changed [BASE]] [--guards-only] [--skip-integration] [--only checks|integration|e2e]
 set -euo pipefail
 
 # shellcheck source=scripts/lib/common.sh
@@ -11,19 +11,24 @@ MERGE_BASE=""
 CHANGED=""
 CHECKS=1
 INTEGRATION=1
+ONLY=""
 
 usage() {
   cat <<'EOF'
 Usage: scripts/verify.sh [options]
 
   (no options)      Full sweep: guards and their tests, then install from the lockfile, lint and format,
-                    types, unit tests and builds of every package.
+                    types, unit tests and builds of every package, the integration tests, and the container
+                    stack with the end-to-end tests.
   --changed [BASE]  Compare with BASE (default origin/main). Guards only when every change is documentation;
                     only the changed packages and their dependents when every change is inside apps/ or
                     packages/; otherwise the full sweep.
   --guards-only     Only the repository guards and their tests.
   --skip-integration  Skip the integration tests against a disposable PostgreSQL, the container stack checks, and
                     the end-to-end tests.
+  --only STAGE      One stage while working on it, without the guards: checks (install, lint, types, unit tests,
+                    builds, schema), integration (install, then the integration tests), or e2e (install, then the
+                    image, the stack checks, and the end-to-end tests). Not a substitute for the full sweep.
 EOF
 }
 
@@ -38,6 +43,11 @@ while [ $# -gt 0 ]; do
       ;;
     --guards-only) CHECKS=0 ;;
     --skip-integration) INTEGRATION=0 ;;
+    --only)
+      ONLY="${2:-}"
+      [[ "$ONLY" =~ ^(checks|integration|e2e)$ ]] || die "--only needs checks, integration, or e2e"
+      shift
+      ;;
     -h | --help)
       usage
       exit 0
@@ -203,6 +213,27 @@ run_stack() {
 main() {
   require_docker
   build_toolchain
+
+  if [ -n "$ONLY" ]; then
+    if [ -n "$CHANGED_BASE" ] || [ $CHECKS -eq 0 ] || [ $INTEGRATION -eq 0 ]; then
+      die "--only runs one stage and takes no other option"
+    fi
+    case "$ONLY" in
+      checks) run_checks "" ;;
+      integration)
+        info "Install from the lockfile"
+        install_deps
+        run_integration ""
+        ;;
+      e2e)
+        info "Install from the lockfile"
+        install_deps
+        run_stack
+        ;;
+    esac
+    info "Stage $ONLY passed (not the full sweep)"
+    return
+  fi
 
   local filter=""
   if [ -n "$CHANGED_BASE" ] && [ $CHECKS -eq 1 ]; then
