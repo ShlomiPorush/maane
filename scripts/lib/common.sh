@@ -6,6 +6,7 @@ export REPO_ROOT
 
 TOOLCHAIN_IMAGE="maane-toolchain:local"
 POSTGRES_IMAGE="postgres:18.6-bookworm"
+export POSTGRES_IMAGE
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/maane"
 
 die() {
