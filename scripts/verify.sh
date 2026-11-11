@@ -22,7 +22,8 @@ Usage: scripts/verify.sh [options]
                     only the changed packages and their dependents when every change is inside apps/ or
                     packages/; otherwise the full sweep.
   --guards-only     Only the repository guards and their tests.
-  --skip-integration  Skip the integration tests against a disposable PostgreSQL and the container stack checks.
+  --skip-integration  Skip the integration tests against a disposable PostgreSQL, the container stack checks, and
+                    the end-to-end tests.
 EOF
 }
 
@@ -160,6 +161,19 @@ fail_stack() {
   die "$1"
 }
 
+# Runs e2e/ in the Playwright image on the stack's network. e2e/global-setup.ts forwards 127.0.0.1:8095, the stack's
+# MAANE_PUBLIC_URL, to the server, so the server's Origin checks see its own address.
+run_e2e() {
+  local pinned
+  pinned="$(sed -nE 's|.*"@playwright/test": "([^"]+)".*|\1|p' "$REPO_ROOT/e2e/package.json")"
+  [ "v$pinned-noble" = "${PLAYWRIGHT_IMAGE##*:}" ] ||
+    die "@playwright/test $pinned does not match $PLAYWRIGHT_IMAGE; keep both on one version"
+  docker run --rm --ipc=host --network "${STACK_PROJECT}_default" \
+    --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" -e E2E_TARGET=server:8080 \
+    -v "$REPO_ROOT:/repo" -w /repo/e2e "$PLAYWRIGHT_IMAGE" \
+    npx --no-install playwright test
+}
+
 run_stack() {
   build_image verify "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
   STACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-stack.XXXXXX")"
@@ -175,6 +189,9 @@ run_stack() {
   TOOLCHAIN_EXTRA_ARGS=()
   check_non_root "$STACK_PROJECT" server worker postgres
   check_hardening "$STACK_PROJECT" server worker
+
+  info "End-to-end: the web UI against the stack (Playwright, $PLAYWRIGHT_IMAGE)"
+  run_e2e || fail_stack "end-to-end tests failed"
 
   info "Stopping $STACK_PROJECT"
   stack down --remove-orphans || die "the verification stack did not stop"

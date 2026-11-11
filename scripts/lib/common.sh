@@ -7,6 +7,9 @@ export REPO_ROOT
 TOOLCHAIN_IMAGE="maane-toolchain:local"
 POSTGRES_IMAGE="postgres:18.6-bookworm"
 export POSTGRES_IMAGE
+# Keep its version equal to @playwright/test in e2e/package.json: scripts/verify.sh refuses a mismatch.
+PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:v1.64.1-noble"
+export PLAYWRIGHT_IMAGE
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/maane"
 
 die() {
