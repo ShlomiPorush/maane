@@ -17,7 +17,8 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  timeout: 30_000,
+  // A sign-in may wait up to 30 seconds for a TOTP step no earlier test used.
+  timeout: 90_000,
   expect: { timeout: 10_000 },
   use: {
     baseURL: "http://127.0.0.1:8095",
