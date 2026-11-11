@@ -63,7 +63,7 @@ write_compose() {
     -e "s|\${MAANE_PUBLIC_URL:-http://127.0.0.1:\${MAANE_PORT:-8095}}|http://127.0.0.1:$PORT|g" \
     -e "s|\${MAANE_PORT:-8095}|$PORT|g" \
     "$WORKTREE/docker/docker-compose-dev.example.yml" >"$COMPOSE_FILE"
-  if grep -q '\${MAANE_' "$COMPOSE_FILE"; then
+  if grep -qF "\${MAANE_" "$COMPOSE_FILE"; then
     die "the pull request's docker/docker-compose-dev.example.yml uses variables this script does not set"
   fi
 }
