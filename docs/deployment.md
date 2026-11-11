@@ -9,6 +9,7 @@ Every command block below runs in Bash on the Docker host and is safe to run aga
 ## What you deploy
 
 - **Image.** `ghcr.io/shlomiporush/maane:<version>`, published by the Release workflow. Each release has an immutable version tag (for example `0.1.0`) and moves `latest`. Run a version tag, never `latest`: `docker-compose.yml` refuses to start without `VERSION`.
+- **Package visibility.** GitHub creates a new package as private, also for a public repository, and a server that is not logged in cannot pull a private one. Once, after the first release and before the first deployment, open the package on GitHub (the repository's Packages, `maane`, Package settings) and change its visibility to public. To keep it private instead, log the server in with a token that can only read packages, taken from your secret store and piped to `docker login ghcr.io --username <your GitHub user> --password-stdin`; never type it on the command line.
 - **Services.** `docker-compose.yml` runs `server` (the web UI and the API, behind Traefik), `worker` (background jobs), and `postgres` (PostgreSQL 18, data in `./postgres-data`). `server` and `worker` run as `node`, with no capabilities, no new privileges, and a read-only root file system. Only `server` is on the `traefik` network; `postgres` and `worker` are on a network with no route outside the stack. No port is published.
 - **Migrations** run every time `server` starts, before it reports healthy. The worker starts after the server is healthy. There is no separate migration step.
 - **Backups** are yours. Maane has no backup feature. [Back up](#5-back-up) lists what your backup must hold.
@@ -179,9 +180,12 @@ A dump, while the stack runs. It writes an owner-only file under `~/maane/backup
   cd "$HOME/maane"
   mkdir -p backups
   file="backups/maane-$(date -u +%Y%m%dT%H%M%SZ).dump"
-  [ ! -e "$file" ] || { echo "error: $file exists" >&2; exit 1; }
-  docker compose exec -T postgres pg_dump -U maane -d maane -Fc >"$file.partial"
-  mv -n -- "$file.partial" "$file"
+  # This run's own partial file, removed however the block ends.
+  partial="$(mktemp backups/.partial-XXXXXX)"
+  trap 'rm -f -- "$partial"' EXIT
+  docker compose exec -T postgres pg_dump -U maane -d maane -Fc >"$partial"
+  # ln refuses an existing name, also one another run created meanwhile: a dump is never replaced.
+  ln -- "$partial" "$file"
   echo "Wrote $HOME/maane/$file"
 )
 ```
@@ -240,9 +244,11 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
      docker pull "ghcr.io/shlomiporush/maane:$version"
      mkdir -p backups
      file="backups/maane-before-$version-$(date -u +%Y%m%dT%H%M%SZ).dump"
-     [ ! -e "$file" ] || { echo "error: $file exists" >&2; exit 1; }
-     docker compose exec -T postgres pg_dump -U maane -d maane -Fc >"$file.partial"
-     mv -n -- "$file.partial" "$file"
+     partial="$(mktemp backups/.partial-XXXXXX)"
+     trap 'rm -f -- "$partial"' EXIT
+     docker compose exec -T postgres pg_dump -U maane -d maane -Fc >"$partial"
+     # Only this run's own dump, published under a name nothing else holds, lets the upgrade go on.
+     ln -- "$partial" "$file"
      echo "Wrote $HOME/maane/$file"
      sed -i "s/^VERSION=.*/VERSION=$version/" .env
      docker compose up -d --wait
@@ -272,4 +278,5 @@ Checked on 2026-11-11, before the first release, with stand-ins and throwaway co
   - The `./postgres-data` bind mount, and `server` or `worker` started on a restored database.
   - Traefik routing, the setup screen in a browser, the restore test's sign-in, an upgrade with real migrations, and key rotation.
   - No Maane release exists yet, nothing has been deployed, and the Release workflow has not run on GitHub.
-  - Whether the server can pull `ghcr.io/shlomiporush/maane` without `docker login`. That depends on the package's visibility on GitHub after the first release; check it then.
+  - Pulling `ghcr.io/shlomiporush/maane` on a server without `docker login` after the package is made public.
+  - Since sections 5 to 7 were run, the dump and upgrade blocks write to a temporary file of their own and publish it with `ln`. That version ran only with a stand-in `docker`: two dumps in the same second leave one dump and stop the other run, and a failing `pg_dump` leaves no file.

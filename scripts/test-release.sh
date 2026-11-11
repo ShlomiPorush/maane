@@ -338,6 +338,34 @@ MOCK_GH_DOWN=1 release
 check "GitHub that cannot be read stops the run" [ $? -ne 0 ]
 check "  and starts no new version" lacks_tag v0.2.0
 
+# --- one run at a time -----------------------------------------------------------------------
+
+lock_rev() { git -C "$WORK/case/origin.git" rev-parse -q --verify refs/maane/release-lock; }
+no_lock() { [ -z "$(lock_rev)" ]; }
+
+sandbox
+release
+check "a finished release leaves no lock on origin" no_lock
+BUMP=patch MOCK_FAIL_BUILD=1 release
+check "a run that stops removes its lock too" no_lock
+
+# Another run holds the lock: this one stops before it looks at anything.
+sandbox
+other="$(checkout)"
+held="$(git -C "$other" commit-tree "$(git -C "$other" hash-object -t tree -w /dev/null)" -m "another run")"
+git -C "$other" push --quiet origin "$held:refs/maane/release-lock"
+release
+check "a run while another holds the lock: refused" said "another release run holds refs/maane/release-lock"
+check "  and nothing was tagged" lacks_tag v0.1.0
+check "  nor published" nothing_published
+check "  and the other run's lock is left as it was" [ "$(lock_rev)" = "$held" ]
+run_in --target ghcr --bump minor --dry-run
+check "a dry run needs no lock: it runs while another run holds it" [ $? -eq 0 ]
+check "  and leaves that lock as it was" [ "$(lock_rev)" = "$held" ]
+git -C "$other" push --quiet origin --delete refs/maane/release-lock
+release
+check "once the lock is gone, the release runs" complete 0.1.0
+
 # --- release_notes on its own ----------------------------------------------------------------
 
 # shellcheck source=scripts/release.sh

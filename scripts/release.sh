@@ -19,6 +19,10 @@ EXPECT_SHA=""
 SKIP_VERIFY=0
 DRY_RUN=0
 RESUME=0
+# One release at a time, also a run by hand next to the workflow: a ref on origin that only one run can create.
+LOCK_REF="refs/maane/release-lock"
+LOCK_COMMIT=""
+SRC_DIR=""
 VERSION=""
 TAG=""
 
@@ -30,7 +34,8 @@ Usage: scripts/release.sh --target ghcr --bump <patch|minor|major> [--skip-verif
   --bump KIND       Required. Semantic version part to increase.
   --expect-sha SHA  Refuse unless main is exactly this commit (the one the workflow verified).
   --skip-verify     Do not run scripts/verify.sh. Only with --expect-sha.
-  --dry-run         Check everything and print the plan without changing anything.
+  --dry-run         Run the preflight checks and print the plan. Runs no verification, builds nothing,
+                    and changes nothing.
 
 Steps: preflight (clean main in sync with origin, release notes present, version unused), full
 scripts/verify.sh, version and changelog update, release commit and tag pushed together, the image
@@ -177,13 +182,35 @@ create_tag() {
     die "pushing the release commit and $TAG failed, so nothing was published. Run the release again."
 }
 
+# Takes the release lock: pushes a commit made for this run to LOCK_REF, which git accepts only while the ref does not
+# exist (--force-with-lease with an empty expected value). Another run, or a run that was killed, holds it otherwise.
+take_lock() {
+  local tree
+  tree="$(git_ hash-object -t tree -w /dev/null)"
+  LOCK_COMMIT="$(git_ commit-tree "$tree" -m "Release lock: run ${GITHUB_RUN_ID:-by hand}, pid $$, at $(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+  if ! git_ push --quiet --force-with-lease="$LOCK_REF:" origin "$LOCK_COMMIT:$LOCK_REF"; then
+    LOCK_COMMIT=""
+    die "another release run holds $LOCK_REF on origin. Wait for it to finish. If no release runs (one was killed),
+       read who took it with: git fetch origin $LOCK_REF && git log -1 FETCH_HEAD
+       and remove it with: git push origin --delete $LOCK_REF"
+  fi
+}
+
+# Removes the lock this run took, and nothing else: the lease names this run's commit.
+cleanup() {
+  [ -z "$SRC_DIR" ] || rm -rf "$SRC_DIR"
+  if [ -n "$LOCK_COMMIT" ]; then
+    git_ push --quiet --force-with-lease="$LOCK_REF:$LOCK_COMMIT" origin ":$LOCK_REF" ||
+      echo "warning: could not remove $LOCK_REF on origin; remove it with: git push origin --delete $LOCK_REF" >&2
+  fi
+}
+
 publish_image() {
   local revision src ref state
   revision="$(git_ rev-parse "$TAG^{commit}")"
   ref="$(image_ref "$VERSION")"
   src="$(mktemp -d)"
-  # shellcheck disable=SC2064 # expand now: the path is fixed
-  trap "rm -rf '$src'" EXIT
+  SRC_DIR="$src"
   git_ archive "$TAG" | tar -x -C "$src"
   state="$(image_state "$ref" "$revision")"
   case "$state" in
@@ -255,6 +282,9 @@ main() {
   [ -z "$EXPECT_SHA" ] || [[ "$EXPECT_SHA" =~ ^[0-9a-f]{40}$ ]] || die "--expect-sha must be a full commit SHA"
   [ $SKIP_VERIFY -eq 0 ] || [ -n "$EXPECT_SHA" ] || die "--skip-verify needs --expect-sha of the verified commit"
 
+  trap cleanup EXIT
+  # Before preflight, so the run that decides what to publish is the only one running.
+  [ $DRY_RUN -eq 1 ] || take_lock
   preflight
   if [ $DRY_RUN -eq 1 ]; then
     if [ $RESUME -eq 1 ]; then
