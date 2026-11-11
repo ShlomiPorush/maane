@@ -81,6 +81,16 @@ describe("setup", () => {
     expect(await database.db.select().from(authUser)).toHaveLength(0)
   })
 
+  it("refuses a setup without a username, so the first admin can always sign in again", async () => {
+    const res = await browser().call("POST", "/api/auth/sign-up/email", {
+      name: "No Name",
+      email: userEmail("no.name"),
+      password,
+    })
+    expect(res.json.code).toBe("INVALID_USERNAME")
+    expect(await database.db.select().from(authUser)).toHaveLength(0)
+  })
+
   it("refuses a sign-up whose e-mail is not the one derived from the username", async () => {
     const b = browser()
     const res = await b.call("POST", "/api/auth/sign-up/email", {
@@ -231,6 +241,28 @@ describe("roles and admin actions", () => {
     expect((await admin.call("POST", "/api/auth/admin/ban-user", { userId: agent.id })).status).toBe(200)
     expect((await agent.b.call("GET", "/api/v1/me")).status).toBe(401)
     expect((await browser().passwordSignIn("agent.three", password)).status).not.toBe(200)
+  })
+
+  it("refuses a banned user whose sessions were not cleaned up, on every protected route", async () => {
+    const { b: admin } = await firstAdmin()
+    const other = await newUser(admin, "admin.three", "admin")
+    // The ban stored, the session cleanup not done: what a failure between the plugin's two steps leaves.
+    await database.db.update(authUser).set({ banned: true }).where(eq(authUser.id, other.id))
+    expect((await other.b.call("GET", "/api/v1/me")).status).toBe(401)
+    const res = await other.b.call("GET", "/api/auth/admin/list-users")
+    expect(res.json.code).toBe("BANNED")
+  })
+
+  it("refuses extra fields and a setup marker through create-user's data", async () => {
+    const { b: admin } = await firstAdmin()
+    const res = await admin.call("POST", "/api/auth/admin/create-user", {
+      email: userEmail("sneaky.one"),
+      password,
+      name: "sneaky.one",
+      role: "agent",
+      data: { username: "sneaky.one", setupAdmin: true, role: "admin" },
+    })
+    expect(res.json.code).toBe("INVALID_FIELDS")
   })
 
   it("ends the sessions of a user whose password an admin set", async () => {

@@ -154,7 +154,12 @@ export function createAuth(options: AuthOptions) {
     }
     if (path === "/sign-up/email") {
       if (!setup.isOpen() || (await anyUser(db))) throw refuse("FORBIDDEN", "SETUP_CLOSED", "Setup is closed.")
-      if (typeof body.username !== "string" || body.email !== userEmail(body.username)) {
+      // The username plugin treats a missing username as optional; Maane signs in by username only, so the first
+      // admin must have one, or nobody could sign in again once the setup session ends.
+      if (typeof body.username !== "string" || !isValidUsername(body.username)) {
+        throw refuse("BAD_REQUEST", "INVALID_USERNAME", "Choose a valid username.")
+      }
+      if (body.email !== userEmail(body.username)) {
         throw refuse("BAD_REQUEST", "INVALID_EMAIL", "The e-mail must be the one Maane derives from the username.")
       }
       return
@@ -169,6 +174,10 @@ export function createAuth(options: AuthOptions) {
       return
     }
     if (!enabled) throw refuse("FORBIDDEN", "TOTP_REQUIRED", "Set up two-factor authentication first.")
+    // Better Auth's session read does not refuse a banned user: a ban whose session cleanup failed would otherwise
+    // leave the user signed in.
+    if ((session.user as { banned?: boolean | null }).banned)
+      throw refuse("FORBIDDEN", "BANNED", "This account is disabled.")
 
     const actor: Actor = {
       userId: session.user.id,
@@ -184,6 +193,10 @@ export function createAuth(options: AuthOptions) {
       const name = data.username
       if (typeof name !== "string" || !isValidUsername(name) || body.email !== userEmail(name)) {
         throw refuse("BAD_REQUEST", "INVALID_USERNAME", "Choose a valid username.")
+      }
+      // create-user passes `data` straight to the new row: only the username may come through it.
+      if (Object.keys(data).some((key) => key !== "username")) {
+        throw refuse("BAD_REQUEST", "INVALID_FIELDS", "Only a username may be set this way.")
       }
       return // audited when the user row is created
     }
