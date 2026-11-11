@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export REPO_ROOT
 
 TOOLCHAIN_IMAGE="maane-toolchain:local"
+POSTGRES_IMAGE="postgres:18.6-bookworm"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/maane"
 
 die() {
@@ -44,6 +45,11 @@ in_toolchain() {
     "$TOOLCHAIN_IMAGE" bash -c "$*"
 }
 TOOLCHAIN_EXTRA_ARGS=()
+
+# 32 bytes from the kernel's cryptographically secure generator, as hex.
+random_hex() {
+  od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+}
 
 # Installs dependencies from the lockfile.
 install_deps() {
