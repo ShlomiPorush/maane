@@ -34,6 +34,7 @@ export const ERROR_TEXT: Record<string, string> = {
   address_default_not_exact: "errors.code.addressDefaultNotExact",
   intake_no_default_address: "errors.code.intakeNoDefaultAddress",
   intake_default_required: "errors.code.intakeDefaultRequired",
+  preview_refused: "errors.code.previewRefused",
   internal: "errors.server",
   // Maane's refusals on Better Auth's routes (apps/server/src/auth/auth.ts)
   UNAUTHORIZED: "errors.code.unauthorized",

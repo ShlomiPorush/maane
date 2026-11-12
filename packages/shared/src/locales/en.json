@@ -31,7 +31,9 @@
     "users": "Users",
     "settings": "Settings",
     "audit": "Audit log",
-    "organizations": "Organizations"
+    "organizations": "Organizations",
+    "intake": "Intake log",
+    "more": "More"
   },
   "shell": {
     "tagline": "Email helpdesk",
@@ -143,7 +145,8 @@
       "addressNotFound": "This address no longer exists. Reload the page.",
       "addressDefaultNotExact": "Only an exact address can be the default address.",
       "intakeNoDefaultAddress": "Live intake needs a default address. Make an exact address the default under Organizations first.",
-      "intakeDefaultRequired": "Intake is live, so the default address cannot be removed. Make another address the default first, or switch intake to listening."
+      "intakeDefaultRequired": "Intake is live, so the default address cannot be removed. Make another address the default first, or switch intake to listening.",
+      "previewRefused": "This file cannot be previewed. Download it instead."
     }
   },
   "auth": {
@@ -224,11 +227,171 @@
     "useBackup": "Use a backup code",
     "back": "Back"
   },
-  "home": {
+  "tickets": {
     "title": "Tickets",
-    "description": "Customer email that needs an answer.",
-    "emptyTitle": "No tickets yet",
-    "emptyHint": "Tickets appear here once Maane reads the shared mailbox."
+    "description": "Customer email from every organization you can see, newest activity first.",
+    "listTitle": "Tickets",
+    "loading": "Loading the tickets",
+    "failed": "Could not load the tickets",
+    "empty": "No tickets yet",
+    "emptyHint": "Tickets appear here once Maane reads the shared mailbox.",
+    "emptyFiltered": "No tickets match these filters",
+    "emptyFilteredHint": "Clear the filters to see every ticket.",
+    "clearFilters": "Clear filters",
+    "organization": "Organization",
+    "allOrganizations": "All organizations",
+    "review": "Review",
+    "all": "All",
+    "needsReview": "Needs review",
+    "noSubject": "(no subject)",
+    "unknownSender": "Unknown sender",
+    "messages": {
+      "one": "1 message",
+      "two": "2 messages",
+      "other": "{count} messages"
+    },
+    "more": "Show older tickets",
+    "loadingMore": "Loading older tickets",
+    "moreFailed": "Could not load older tickets.",
+    "end": "That is every ticket."
+  },
+  "ticket": {
+    "loading": "Loading the ticket",
+    "failed": "Could not load the ticket",
+    "notFound": "No such ticket",
+    "notFoundHint": "It does not exist, or it belongs to an organization you cannot see.",
+    "back": "Back to tickets",
+    "status": {
+      "new": "New",
+      "open": "Open"
+    },
+    "details": "Details",
+    "organization": "Organization",
+    "supportAddress": "Support address",
+    "reference": "Reference code",
+    "opened": "Opened",
+    "lastActivity": "Last activity",
+    "participants": "Participants",
+    "linked": "Linked tickets",
+    "messagesTitle": "Messages",
+    "from": "From",
+    "to": "To",
+    "cc": "Cc",
+    "frameTitle": "Message from {sender}",
+    "showImages": "Show remote images",
+    "hideImages": "Hide remote images",
+    "imagesHidden": {
+      "one": "1 remote image is hidden to protect your privacy.",
+      "two": "2 remote images are hidden to protect your privacy.",
+      "other": "{count} remote images are hidden to protect your privacy."
+    },
+    "imagesShown": "Remote images are shown for this message.",
+    "noBody": "This message has no text Maane can show.",
+    "content": {
+      "unavailable": "The message was gone from the mailbox before Maane could read it.",
+      "unparsed": "Maane could not read this message. Open it in the mailbox.",
+      "too_large": "This message is larger than the file size limit, so Maane did not read it."
+    },
+    "field": {
+      "text": "The text of this message",
+      "html": "The formatted version of this message",
+      "headers": "The subject, names, and file names of this message"
+    },
+    "fieldNotice": "{field}: {status}",
+    "files": "Files",
+    "inline": "In the message",
+    "noFileName": "(no name)",
+    "preview": "Preview",
+    "download": "Download",
+    "previewTitle": "Preview: {name}",
+    "previewLoading": "Loading the preview",
+    "previewFailed": "Could not show the preview",
+    "previewTooLarge": "This file is too large to preview. Download it instead.",
+    "pdfPage": "Page {page} of {pages}",
+    "pdfPrevious": "Previous page",
+    "pdfNext": "Next page",
+    "signature": "Signature",
+    "blockedBy": "Blocked by"
+  },
+  "scan": {
+    "status": {
+      "clean": "Clean",
+      "infected": "Blocked: malicious file found",
+      "not_fully_scanned": "Not fully scanned",
+      "blocked_type": "Blocked: file type not allowed",
+      "waiting": "Waiting for scan",
+      "not_scanned": "Not scanned",
+      "unavailable": "Unavailable",
+      "too_large": "Too large to scan"
+    },
+    "hint": {
+      "infected": "Maane did not keep it. The original stays only in the mailbox.",
+      "not_fully_scanned": "Encrypted or beyond the scan limits. Open it only if you trust the sender.",
+      "blocked_type": "This type of file is blocked in Settings. The original stays only in the mailbox.",
+      "waiting": "The scanner is unavailable. Maane scans it again once the scanner answers.",
+      "not_scanned": "The scanner was unavailable and Settings allow keeping files unscanned. Open it only if you trust the sender.",
+      "unavailable": "The message was gone from the mailbox before this could be scanned.",
+      "too_large": "Larger than the file size limit, so Maane did not scan or keep it."
+    }
+  },
+  "flag": {
+    "unavailable": "Gone from the mailbox",
+    "parse_failed": "Could not be read",
+    "too_large": "Message too large",
+    "invalid_characters": "Invalid characters replaced",
+    "reused_message_id": "Message-ID used before",
+    "no_default_address": "No default address",
+    "part_too_large": "A file too large to scan",
+    "store_failed": "Could not be stored",
+    "blocked_content": "Content blocked",
+    "possibly_automated": "Possibly automated",
+    "sender_not_participant": "Sender not a participant",
+    "ambiguous_original": "Original of several tickets"
+  },
+  "intake": {
+    "title": "Intake log",
+    "description": "What Maane did with each message it read, or would have done while listening.",
+    "listTitle": "Messages read",
+    "loading": "Loading the intake log",
+    "failed": "Could not load the intake log",
+    "empty": "No messages read yet",
+    "emptyHint": "Entries appear here once Maane reads the shared mailbox.",
+    "emptyFiltered": "No entries match these filters",
+    "modeLabel": "Mode",
+    "all": "All",
+    "mode": {
+      "listening": "Listening",
+      "live": "Live"
+    },
+    "review": "Review",
+    "needsReview": "Needs review",
+    "outcome": {
+      "copy": "Copy of an earlier message",
+      "automated": "Automated mail",
+      "unreadable": "Content not read",
+      "no_address": "No support address",
+      "new_ticket": "New ticket",
+      "joined": "Joined a ticket",
+      "new_linked_ticket": "New linked ticket"
+    },
+    "outcomeWould": {
+      "copy": "Copy of an earlier message",
+      "automated": "Automated mail, no ticket",
+      "unreadable": "Content not read",
+      "no_address": "No support address, no ticket",
+      "new_ticket": "Would open a new ticket",
+      "joined": "Would join a ticket",
+      "new_linked_ticket": "Would open a linked ticket"
+    },
+    "ticket": "Ticket",
+    "matched": "Matched",
+    "reason": "Reason",
+    "unknownSender": "Unknown sender",
+    "noSubject": "(no subject)",
+    "more": "Show older entries",
+    "loadingMore": "Loading older entries",
+    "moreFailed": "Could not load older entries.",
+    "end": "That is every entry."
   },
   "notFound": {
     "title": "This page does not exist",

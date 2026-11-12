@@ -102,6 +102,8 @@ export interface MessageView {
   body: "html" | "text" | null
   /** How many remote images the HTML holds; they are removed until the agent shows them. */
   remoteImages: number
+  /** About how many lines the body takes, so the UI can size its frame (a sandboxed frame cannot be measured). */
+  bodyLines: number
   fields: FieldNotice[]
   attachments: AttachmentView[]
 }

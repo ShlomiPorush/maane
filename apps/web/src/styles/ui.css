@@ -55,6 +55,8 @@
   --ui-bg: #ffffff;
   --ui-panel: #f4f6f5;
   --ui-raise: #ffffff;
+  /* Paper behind incoming mail and PDF pages: white in both themes, as the sender wrote them for it. */
+  --ui-paper: #ffffff;
   --ui-ink: #111814;
   --ui-muted: #5e6863;
   --ui-line: #e3e7e5;
@@ -2207,5 +2209,350 @@ textarea.ui-input.ui-textarea {
   }
   .ui-set-control > .ui-hint {
     text-align: start;
+  }
+}
+
+/* ---------- Tickets, the ticket view, file preview, the intake log (plan 2.4) ---------- */
+
+/* A list that reads its next filter keeps its rows, dimmed only when the answer takes longer than 200ms (TB-5). */
+.ui-panel[data-reloading] .ui-item {
+  opacity: 0.55;
+  transition: opacity 0.15s ease 0.2s;
+}
+
+/* Filters above a list: each a muted label over its control; they wrap on narrow screens. */
+.ui-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 18px;
+}
+.ui-filter {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.ui-select {
+  min-width: 200px;
+  max-width: 100%;
+  padding-inline-end: 8px;
+  cursor: pointer;
+}
+
+/* A ticket row: its number in mono before the subject, which keeps its own direction. */
+.ui-ticket-num {
+  color: var(--ui-muted);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ui-ticket-subject {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ui-ticket-row .ui-item-end {
+  flex-wrap: nowrap;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+}
+.ui-ticket-desc {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+/* Key and value facts of one item: the key muted at the start, the value after it. */
+.ui-facts {
+  display: grid;
+  margin: 0;
+  padding: 0 var(--ui-pad-x) 10px;
+}
+.ui-facts > div {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  gap: 4px 14px;
+  padding: 7px 0;
+  border-top: 1px solid var(--ui-line);
+}
+.ui-facts dt {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+  font-weight: 600;
+}
+.ui-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ui-facts-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.ui-section-title {
+  margin: 6px 0 -4px;
+  font-size: var(--ui-fs-h2);
+  font-weight: 650;
+}
+
+/* An address with its name: the address in mono, isolated left to right. */
+.ui-address {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ui-address-value {
+  color: var(--ui-muted);
+  font-size: 0.92em;
+}
+
+/* One message: who and when, to whom, notices, the framed body, its files. */
+.ui-message {
+  display: grid;
+  gap: 10px;
+  padding: 12px var(--ui-pad-x) 14px;
+}
+.ui-message-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 14px;
+}
+.ui-message-from {
+  min-width: 0;
+  font-weight: 650;
+}
+.ui-message-head .ui-time {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+}
+.ui-message-to {
+  display: grid;
+  gap: 2px;
+  margin: -6px 0 0;
+  font-size: var(--ui-fs-sm);
+}
+.ui-message-to > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+.ui-message-to dt {
+  color: var(--ui-muted);
+  font-weight: 600;
+}
+.ui-message-to dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  min-width: 0;
+  margin: 0;
+}
+.ui-message-empty {
+  margin: 0;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+}
+
+/* The body's frame: white like the mail it shows, in both themes; its height follows the text, and the agent may
+   make it taller. */
+.ui-mail {
+  display: grid;
+  gap: 8px;
+}
+.ui-mail-images {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 7px 10px;
+  border-radius: var(--ui-radius-sm);
+  background: color-mix(in srgb, var(--ui-info) 12%, transparent);
+  font-size: var(--ui-fs-sm);
+}
+.ui-mail-images[data-images="shown"] {
+  background: color-mix(in srgb, var(--ui-warn) 13%, transparent);
+}
+.ui-mail-frame {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  max-height: 80dvh;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-paper);
+  resize: vertical;
+  overflow: auto;
+}
+
+/* A message's files: name, status in words, size, and what can be done with each. */
+.ui-files {
+  display: grid;
+  gap: 4px;
+}
+.ui-files-title {
+  margin: 4px 0 0;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+  font-weight: 650;
+}
+.ui-files ul {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ui-file {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--ui-line);
+}
+.ui-file-icon {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: var(--ui-muted);
+}
+.ui-file-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.ui-file-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.ui-file-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+  font-variant-numeric: tabular-nums;
+}
+.ui-file-meta bdi {
+  color: var(--ui-ink);
+}
+.ui-file-hint {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+}
+.ui-file-acts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.ui-file-acts .ui-btn {
+  text-decoration: none;
+}
+
+/* A preview in the dialog. */
+.ui-preview {
+  display: grid;
+  justify-items: center;
+  min-height: 160px;
+}
+.ui-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: 70dvh;
+  object-fit: contain;
+  background: repeating-conic-gradient(var(--ui-line) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+}
+.ui-preview-text {
+  justify-self: stretch;
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-panel);
+  font-family: var(--ui-mono);
+  font-size: var(--ui-fs-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Each line takes the direction of its own first strong character. */
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+.ui-pdf {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.ui-pdf-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ui-pdf-page {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+[dir="rtl"] .ui-pdf-nav svg {
+  transform: scaleX(-1);
+}
+.ui-pdf-page-frame {
+  display: grid;
+  justify-items: center;
+  width: 100%;
+}
+.ui-pdf-canvas {
+  max-width: 100%;
+  height: auto;
+  background: var(--ui-paper);
+  box-shadow: 0 0 0 1px var(--ui-line);
+}
+
+/* An intake log entry: what was done or would be done, its tickets and reason. */
+.ui-intake-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+  margin-top: 3px;
+  font-size: var(--ui-fs-sm);
+}
+.ui-intake-outcome b {
+  font-weight: 650;
+}
+.ui-intake-row .ui-item-end {
+  align-self: start;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+}
+
+@media (max-width: 760px) {
+  .ui-filters {
+    align-items: stretch;
+  }
+  .ui-filter,
+  .ui-select {
+    min-width: 0;
+    width: 100%;
+  }
+  .ui-facts > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .ui-file {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .ui-file-acts {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+  .ui-file-acts .ui-btn {
+    min-height: var(--ui-touch);
+  }
+  .ui-mail-images .ui-btn {
+    min-height: var(--ui-touch);
   }
 }

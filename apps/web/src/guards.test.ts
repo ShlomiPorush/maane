@@ -18,11 +18,18 @@ import {
   ADDRESS_KINDS,
   GRAPH_PROBLEMS,
   INTAKE_MODES,
+  INTAKE_OUTCOMES,
+  MESSAGE_CONTENTS,
+  MESSAGE_FLAGS,
   MESSAGES,
+  PART_STATUSES,
   ROLES,
   SCANNER_CHECKS,
   SCANNER_POLICIES,
   SETTING_KEYS,
+  TEXT_FIELDS,
+  TICKET_FLAGS,
+  TICKET_STATUSES,
 } from "@maane/shared"
 import { describe, expect, it } from "vitest"
 import { ERROR_TEXT, STATUS_TEXT } from "./api/errors.ts"
@@ -177,7 +184,6 @@ function floatingCssViolations(css: string): string[] {
 
 /** Pages without a refresh of their own, each with its reason. */
 const NO_REFRESH: Record<string, string> = {
-  HomePage: "says there are no tickets yet; it reads nothing until tickets arrive in phase 2",
   NotFoundPage: "says the address names no page; it reads nothing",
   LoginPage: "signs in; it reads whether a user exists and the session once, on opening",
   SetupPage: "creates the first admin; it reads the setup state on opening and after each step",
@@ -292,6 +298,15 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "settings.scannerPolicy.explain.": SCANNER_POLICIES,
   "settings.scanner.check.": SCANNER_CHECKS,
   "settings.graph.problem.": GRAPH_PROBLEMS,
+  "ticket.status.": TICKET_STATUSES,
+  "ticket.content.": MESSAGE_CONTENTS.filter((content) => content !== "parsed"),
+  "ticket.field.": TEXT_FIELDS,
+  "scan.status.": PART_STATUSES,
+  "scan.hint.": PART_STATUSES.filter((status) => status !== "clean"),
+  "flag.": [...MESSAGE_FLAGS, ...TICKET_FLAGS],
+  "intake.mode.": INTAKE_MODES,
+  "intake.outcome.": INTAKE_OUTCOMES,
+  "intake.outcomeWould.": INTAKE_OUTCOMES,
 }
 
 // --- Language policy: Hebrew only in he.json, bidirectional controls only as escapes ---

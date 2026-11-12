@@ -97,6 +97,24 @@ export async function request<T>(method: HttpMethod, path: string, body?: unknow
   throw error
 }
 
+/**
+ * A file of Maane's API as bytes (a preview the UI draws itself: a PDF for pdf.js, a text). Same origin, with the
+ * session cookie; a refusal becomes an ApiError like any other answer, and a 401 is reported the same way.
+ */
+export async function requestFile(url: string): Promise<Response> {
+  let response: Response
+  try {
+    response = await fetch(url, { credentials: "same-origin", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS * 3) })
+  } catch {
+    throw new ApiError(0, "network")
+  }
+  if (response.ok) return response
+  const body = await response.json().catch(() => null)
+  const error = errorFrom(response.status, body)
+  if (error.status === 401 || error.code === "totp_required") unauthorizedHandler?.(error)
+  throw error
+}
+
 /** A query string from the defined values only. */
 export function query(params: Record<string, string | number | null | undefined>): string {
   const search = new URLSearchParams()

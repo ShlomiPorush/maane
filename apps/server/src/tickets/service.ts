@@ -128,6 +128,16 @@ function senderOf(row: { fromAddress: string | null; fromName: string | null; gr
   return { address: address.toLowerCase(), name: typeof graph?.from?.name === "string" ? graph.from.name : null }
 }
 
+/** About how many lines a body takes at a usual width: its text wrapped at 90 characters, and room for images. */
+function bodyLines(text: string | null, html: string | null): number {
+  const source = text ?? (html ? html.replace(/<[^>]*>/g, " ") : "")
+  let lines = 0
+  for (const line of source.split(/\r?\n/)) lines += Math.max(1, Math.ceil(line.length / 90))
+  // Only an estimate of the frame height: the HTML itself is never rewritten by a pattern.
+  const images = html ? (html.match(/<img\b/gi)?.length ?? 0) : 0
+  return Math.min(400, lines + images * 6)
+}
+
 export interface ListFilters {
   organization?: string
   status?: TicketStatus
@@ -334,6 +344,7 @@ export class Tickets {
         reviewFlags: m.reviewFlags,
         body: html ? "html" : text ? "text" : null,
         remoteImages: html ? renderMailHtml(html, { remoteImages: false, inline: () => null }).remoteImages : 0,
+        bodyLines: bodyLines(text, html),
         fields: fieldNotices(m.fieldScans),
         attachments,
       }
