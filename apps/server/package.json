@@ -14,7 +14,7 @@
     "db:generate": "drizzle-kit generate --config drizzle.config.ts"
   },
   "dependencies": {
-    "@hono/node-server": "2.1.5",
+    "@hono/node-server": "2.1.6",
     "@maane/shared": "workspace:*",
     "better-auth": "1.7.18",
     "drizzle-orm": "0.45.4",
