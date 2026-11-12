@@ -298,7 +298,9 @@ function recordTickets(state: ArchiveState, records: unknown): void {
       status: typeof record.status === "string" ? record.status : "unknown",
       savedFor: known?.savedFor ?? null,
       ...(known?.gone ? { gone: known.gone } : {}),
-      ...(known?.filesRecorded ? { filesRecorded: true } : {}),
+      // Only for the same version: a new one (a ticket restored, then maybe deleted again) may get pages whose files
+      // are not recorded yet, and the state saved with this page drops the mark before any such page is written.
+      ...(known?.filesRecorded && known.updatedAt === record.updated_at ? { filesRecorded: true } : {}),
       // The export returns a ticket again for system updates that keep its updated_at: the saved version still lacks
       // its side conversations.
       ...(known?.sideConversationsMissing ? { sideConversationsMissing: true } : {}),

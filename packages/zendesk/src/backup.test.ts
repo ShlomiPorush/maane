@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { appendFile, chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -231,6 +231,27 @@ describe("backup", () => {
     }
     await backup()
     expect((await manifest()).files["201"]).toBeDefined()
+    expect((await checkArchive(dir)).problems).toEqual([])
+  })
+
+  it("records files of pages saved after a deleted ticket was restored, when it is deleted again", async () => {
+    await backup()
+    zendesk.setStatus(2, "deleted")
+    await backup()
+    // Restored with a new comment and file; the next run saves its comments, then stops before the files.
+    zendesk.setStatus(2, "pending")
+    zendesk.addComment(2, {
+      id: 22,
+      public: true,
+      body: "After the restore",
+      files: [{ id: 202, name: "after.txt", content: randomBytes(40), serve: "redirect" }],
+    })
+    zendesk.failWhen = (path) => path.includes("/tickets/2/audits")
+    await expect(backup(2)).rejects.toThrow("500")
+    zendesk.failWhen = null
+    zendesk.setStatus(2, "deleted")
+    await backup()
+    expect((await manifest()).files["202"]).toBeDefined()
     expect((await checkArchive(dir)).problems).toEqual([])
   })
 
