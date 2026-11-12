@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { expect, test } from "@playwright/test"
-import { fillSecret, freshAddress, he, signIn } from "./helpers.ts"
+import { fillSecret, freshAddress, he, signIn, waitShown } from "./helpers.ts"
 import { totp } from "./totp.ts"
 
 // An admin adds an agent; the agent's first sign-in sets up two-factor, and admin pages stay closed to them.
@@ -34,11 +34,11 @@ test("the agent sets up two-factor on first sign-in and cannot open admin pages"
   await page.getByRole("button", { name: he("login.submit"), exact: true }).click()
 
   const shown = page.getByTestId("totp-secret")
-  await expect(shown).toBeVisible()
+  await waitShown(page, '[data-testid="totp-secret"]')
   const secret = ((await shown.textContent()) ?? "").replace(/[^A-Z2-7]/g, "")
   // The sixth digit sends the code. The agent's secret is new, so any current code is unused.
   await fillSecret(page.getByLabel(he("auth.code"), { exact: true }), totp(secret))
-  await expect(page.getByTestId("backup-codes").locator("li").first()).toBeVisible()
+  await waitShown(page, '[data-testid="backup-codes"] li')
   await page.getByLabel(he("backupCodes.saved"), { exact: true }).check()
   await page.getByRole("button", { name: he("enroll.continue"), exact: true }).click()
   await expect(page).toHaveURL(/\/$/)

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { ADMIN, fillSecret, freshAddress, he, password, signIn } from "./helpers.ts"
+import { ADMIN, fillSecret, freshAddress, he, password, signIn, waitShown } from "./helpers.ts"
 import { loadState, saveState } from "./state.ts"
 import { freshTotp } from "./totp.ts"
 
@@ -37,7 +37,7 @@ test("creates the first admin with two-factor and backup codes", async ({ page, 
 
   // The backup codes, shown once.
   const list = page.getByTestId("backup-codes").locator("li")
-  await expect(list.first()).toBeVisible()
+  await waitShown(page, '[data-testid="backup-codes"] li')
   expect(await list.count()).toBeGreaterThan(0)
   const done = page.getByRole("button", { name: he("enroll.continue"), exact: true })
   await expect(done).toBeDisabled()
