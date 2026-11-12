@@ -47,6 +47,7 @@ export const AUDIT_ACTIONS = [
   "organization.address_add",
   "organization.address_remove",
   "organization.address_default",
+  "organization.memberships_clear",
 ] as const
 
 const KNOWN = new Set<string>(AUDIT_ACTIONS)

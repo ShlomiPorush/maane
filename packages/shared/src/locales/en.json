@@ -454,7 +454,8 @@
         "member_remove": "Agent removed from an organization",
         "address_add": "Support address added",
         "address_remove": "Support address removed",
-        "address_default": "Default address changed"
+        "address_default": "Default address changed",
+        "memberships_clear": "Organization memberships removed after a role change"
       }
     }
   },
@@ -551,7 +552,7 @@
       "adding": "Adding",
       "addDone": "{name} is added.",
       "loadingAgents": "Loading the agents",
-      "noAgents": "Every agent is already in this organization, or there are no agents yet. Add agents on the Users page.",
+      "noAgents": "There are no agents yet. Add agents on the Users page.",
       "toUsers": "Open Users",
       "choose": "Agent",
       "remove": "Remove {name}",
@@ -559,7 +560,11 @@
       "removeMessage": "They stop seeing this organization's tickets at once.",
       "removeDone": "{name} is removed.",
       "disabled": "Disabled",
-      "added": "Added"
+      "added": "Added",
+      "search": "Find an agent by username",
+      "noMatch": "No agent's username contains {search}.",
+      "allMembers": "Every agent found is already in this organization.",
+      "more": "Showing the first {shown} of {total} agents. Type more of a username to find the others."
     }
   }
 }

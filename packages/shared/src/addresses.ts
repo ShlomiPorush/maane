@@ -73,15 +73,32 @@ export function literalCount(pattern: string): number {
   return pattern.length - (pattern.match(/\*/g)?.length ?? 0)
 }
 
-const ESCAPE = /[.*+?^${}()|[\]\\/-]/g
-
-/** Whether a stored pattern matches an address in its stored form. */
+/**
+ * Whether a stored pattern matches an address in its stored form: each `*` stands for one or more characters that are
+ * not `@`, every other character for itself. Dynamic programming over the two texts, so the work is at most
+ * pattern length times address length (about 65,000 steps for the longest), whatever the pattern. A regular
+ * expression built from the pattern would backtrack exponentially on patterns such as `a*a*a*...b@example.com`, and
+ * the server runs this on every incoming address.
+ */
 export function patternMatches(pattern: string, address: string): boolean {
-  const source = pattern
-    .split("*")
-    .map((part) => part.replace(ESCAPE, "\\$&"))
-    .join("[^@]+")
-  return new RegExp(`^${source}$`).test(address)
+  const width = address.length
+  // previous[j]: the pattern so far matches the first j characters of the address.
+  let previous: boolean[] = Array.from({ length: width + 1 }, (_, j) => j === 0)
+  // Both texts are read by UTF-16 unit, the same way on each side (stored values are ASCII anyway).
+  for (let i = 0; i < pattern.length; i++) {
+    const token = pattern[i]
+    const current: boolean[] = new Array(width + 1).fill(false)
+    for (let j = 1; j <= width; j++) {
+      const char = address[j - 1]
+      current[j] =
+        token === "*"
+          ? // One more character for this star: it starts here (after the earlier tokens) or continues.
+            char !== "@" && ((previous[j - 1] ?? false) || (current[j - 1] ?? false))
+          : char === token && (previous[j - 1] ?? false)
+    }
+    previous = current
+  }
+  return previous[width] ?? false
 }
 
 const encoder = new TextEncoder()

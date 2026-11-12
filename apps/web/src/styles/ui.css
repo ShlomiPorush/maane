@@ -1867,6 +1867,10 @@ html.ui-layer-on .ui-page {
   .ui-item-end {
     justify-content: flex-start;
   }
+  /* A row that is itself a link keeps its chevron at the end of the row's line (it has no other control). */
+  .ui-item.ui-item-link {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
   .ui-set-row {
     grid-template-columns: minmax(0, 1fr);
   }

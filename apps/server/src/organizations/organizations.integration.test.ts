@@ -7,7 +7,7 @@ import { auditLog, organizationMember, setting, supportAddress } from "../db/sch
 import { createSettingsCipher } from "../settings/crypto.ts"
 import { Settings } from "../settings/service.ts"
 import { createTestApp } from "../testing/app.ts"
-import { nextIp, TestBrowser, testPassword } from "../testing/browser.ts"
+import { type Answer, nextIp, TestBrowser, testPassword } from "../testing/browser.ts"
 import { createTestDatabase, testKey } from "../testing/db.ts"
 import { INTAKE_CONFIG_LOCK } from "./intake.ts"
 import { Refusal } from "./refusal.ts"
@@ -188,7 +188,7 @@ describe("support addresses", () => {
     const two = await createOrganization(admin, "Two")
     const pattern = await addAddress(admin, one, "pattern", "*@example.com")
     const first = await addAddress(admin, one, "exact", "help@example.com")
-    const second = await addAddress(admin, two, "exact", "help@example.org")
+    const second = await addAddress(admin, two, "exact", "help@two.example.com")
     expect((await admin.call("PUT", `${BASE}/${one}/addresses/${pattern}/default`)).json).toEqual({
       error: "address_default_not_exact",
     })
@@ -197,7 +197,7 @@ describe("support addresses", () => {
     // An address of another organization is not found through this one.
     expect((await admin.call("PUT", `${BASE}/${one}/addresses/${second}/default`)).status).toBe(404)
     const defaults = await database.db.select().from(supportAddress).where(eq(supportAddress.isDefault, true))
-    expect(defaults.map((row) => row.value)).toEqual(["help@example.org"])
+    expect(defaults.map((row) => row.value)).toEqual(["help@two.example.com"])
     const listed = (await admin.call("GET", BASE)).json.organizations
     expect(listed.map((o: { name: string; hasDefault: boolean }) => [o.name, o.hasDefault])).toEqual([
       ["One", false],
@@ -206,7 +206,7 @@ describe("support addresses", () => {
     const moved = (await database.db.select().from(auditLog)).filter((r) => r.action === "organization.address_default")
     expect(moved.map((r) => r.details)).toEqual([
       { name: "One", value: "help@example.com", previous: null },
-      { name: "Two", value: "help@example.org", previous: "help@example.com" },
+      { name: "Two", value: "help@two.example.com", previous: "help@example.com" },
     ])
   })
 
@@ -227,15 +227,18 @@ describe("support addresses", () => {
     })
     expect(await check("billing@example.com")).toMatchObject({ via: "exact", organization: { name: "Two" } })
     expect(await check("info@example.com")).toMatchObject({ via: "pattern", organization: { name: "One" } })
-    expect(await check("info@example.net")).toEqual({
-      address: "info@example.net",
+    expect(await check("info@elsewhere.example.com")).toEqual({
+      address: "info@elsewhere.example.com",
       via: "none",
       organization: null,
       rule: null,
     })
     const fallback = await addAddress(admin, one, "exact", "help@example.com")
     await admin.call("PUT", `${BASE}/${one}/addresses/${fallback}/default`)
-    expect(await check("info@example.net")).toMatchObject({ via: "default", rule: { value: "help@example.com" } })
+    expect(await check("info@elsewhere.example.com")).toMatchObject({
+      via: "default",
+      rule: { value: "help@example.com" },
+    })
     expect(await check("not an address")).toEqual({ error: "address_invalid", field: "address" })
   })
 })
@@ -294,6 +297,76 @@ describe("membership and scope", () => {
       organizationIds: [two],
     })
     expect(await db.select().from(organizationMember)).toHaveLength(1)
+  })
+})
+
+describe("a role change and memberships", () => {
+  const setRole = (admin: TestBrowser, userId: string, role: "admin" | "agent") =>
+    admin.call("POST", "/api/auth/admin/set-role", { userId, role })
+  const rowsOf = async (userId: string) =>
+    database.db.select().from(organizationMember).where(eq(organizationMember.userId, userId))
+
+  it("removes every membership when an agent becomes an admin, audits it, and a demoted admin has none", async () => {
+    const { b: admin } = await firstAdmin()
+    const agent = await newUser(admin, "agent.one", "agent")
+    const one = await createOrganization(admin, "One")
+    const two = await createOrganization(admin, "Two")
+    await admin.call("POST", `${BASE}/${one}/members`, { userId: agent.id })
+    await admin.call("POST", `${BASE}/${two}/members`, { userId: agent.id })
+    expect(await rowsOf(agent.id)).toHaveLength(2)
+
+    expect((await setRole(admin, agent.id, "admin")).status).toBe(200)
+    expect(await rowsOf(agent.id)).toEqual([])
+    const cleared = (await database.db.select().from(auditLog)).filter(
+      (row) => row.action === "organization.memberships_clear",
+    )
+    expect(cleared.map((row) => [row.entityId, row.actorLabel, row.details])).toEqual([
+      [agent.id, "first.admin", { username: "agent.one", role: "admin", organizations: 2 }],
+    ])
+    // An admin is never added.
+    expect((await admin.call("POST", `${BASE}/${one}/members`, { userId: agent.id })).json).toEqual({
+      error: "member_not_agent",
+    })
+
+    // Made an agent again: no old membership comes back, and nothing to audit.
+    expect((await setRole(admin, agent.id, "agent")).status).toBe(200)
+    expect(await rowsOf(agent.id)).toEqual([])
+    expect(await visibleOrganizations(database.db, { id: agent.id, role: "agent" })).toEqual({
+      all: false,
+      organizationIds: [],
+    })
+    expect((await actions()).filter((a) => a === "organization.memberships_clear")).toHaveLength(1)
+  })
+
+  it("removes the memberships on a demotion too, so a promotion whose clearing failed is repaired", async () => {
+    const { b: admin } = await firstAdmin()
+    const user = await newUser(admin, "agent.two", "agent")
+    const one = await createOrganization(admin, "One")
+    expect((await setRole(admin, user.id, "admin")).status).toBe(200)
+    // A row left behind, as a failed clearing after the promotion would leave it.
+    await database.db.insert(organizationMember).values({ organizationId: one, userId: user.id })
+    expect((await setRole(admin, user.id, "agent")).status).toBe(200)
+    expect(await rowsOf(user.id)).toEqual([])
+  })
+
+  it("never leaves an admin with a membership when adding them and promoting them race", async () => {
+    const { b: admin } = await firstAdmin()
+    const user = await newUser(admin, "agent.race", "agent")
+    const id = await createOrganization(admin, "Race")
+    for (let round = 0; round < 6; round++) {
+      const add = admin.call("POST", `${BASE}/${id}/members`, { userId: user.id })
+      const promote = setRole(admin, user.id, "admin")
+      // Both requests are in flight together; the order they were sent in alternates.
+      let added: Answer
+      let promoted: Answer
+      if (round % 2 === 0) [added, promoted] = await Promise.all([add, promote])
+      else [promoted, added] = await Promise.all([promote, add])
+      expect(promoted.status).toBe(200)
+      // Either the membership came first and the promotion removed it, or the promotion came first and adding refused.
+      expect([201, 400]).toContain(added.status)
+      expect(await rowsOf(user.id), `round ${round}: ${JSON.stringify(added.json)}`).toEqual([])
+      expect((await setRole(admin, user.id, "agent")).status).toBe(200)
+    }
   })
 })
 

@@ -18,6 +18,7 @@ import { PageHead } from "../shell/chrome.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { useDiscardGuard } from "../ui/confirm.tsx"
 import { Dialog } from "../ui/Dialog.tsx"
+import { useMounted } from "../ui/mounted.ts"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { Banner, Empty, ErrorState, Loading, StaleNote } from "../ui/states.tsx"
 import { showToast } from "../ui/Toast.tsx"
@@ -87,8 +88,9 @@ function OrganizationRow({ organization }: { organization: OrganizationSummary }
       data-organization={organization.name}
     >
       <span className="ui-item-main">
-        <span className="ui-item-title">
+        <span className="ui-item-title ui-item-tags">
           <bdi dir="auto">{organization.name}</bdi>
+          {organization.hasDefault ? <Tag tone="info">{t("organizations.holdsDefault")}</Tag> : null}
         </span>
         <span className="ui-item-meta">
           <span>{tc("organizations.addressCount", organization.addresses)}</span>
@@ -97,7 +99,6 @@ function OrganizationRow({ organization }: { organization: OrganizationSummary }
         </span>
       </span>
       <span className="ui-item-end">
-        {organization.hasDefault ? <Tag tone="info">{t("organizations.holdsDefault")}</Tag> : null}
         <ChevronRight className="ui-item-chevron" aria-hidden="true" />
       </span>
     </Link>
@@ -112,6 +113,7 @@ function CreateOrganizationDialog({ onClose }: { onClose: () => void }) {
   const formId = useId()
   const nameId = useId()
   const hintId = useId()
+  const mounted = useMounted()
   const [name, setName] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -126,10 +128,12 @@ function CreateOrganizationDialog({ onClose }: { onClose: () => void }) {
     setError(null)
     try {
       const { organization } = await api.createOrganization(trimmed)
+      showToast(t("organizations.createDone", { name: organization.name }), "success")
+      void queryClient.invalidateQueries({ queryKey: qk.organizations })
+      // Closed meanwhile, or the page was left: this answer closes no other dialog and goes nowhere.
+      if (!mounted.current) return
       guardedClose.dismiss()
       onClose()
-      showToast(t("organizations.createDone", { name: organization.name }), "success")
-      await queryClient.invalidateQueries({ queryKey: qk.organizations })
       navigate(`/organizations/${organization.id}`)
     } catch (failure) {
       setError(errorText(t, failure))

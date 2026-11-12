@@ -7,10 +7,11 @@
 // takes effect on their next request.
 
 import { ADDRESS_KINDS, type AddressKind, ORGANIZATION_NAME_MAX, parseSupportAddress } from "@maane/shared"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Ellipsis, Pencil, Plus, Star, Trash2, UserMinus, UserPlus } from "lucide-react"
-import { type FormEvent, useId, useRef, useState } from "react"
+import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router"
+import { authClient, authData } from "../api/auth.ts"
 import { ApiError } from "../api/client.ts"
 import { api, type OrganizationDetail, type OrganizationMember, qk, type SupportAddress } from "../api/endpoints.ts"
 import { ADDRESS_EXAMPLES, errorText } from "../api/errors.ts"
@@ -22,6 +23,7 @@ import { Copyable } from "../ui/Copyable.tsx"
 import { confirmDialog, useDiscardGuard } from "../ui/confirm.tsx"
 import { Dialog } from "../ui/Dialog.tsx"
 import { Menu, type MenuEntry } from "../ui/Menu.tsx"
+import { useMounted } from "../ui/mounted.ts"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { Empty, ErrorState, Loading, StaleNote } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
@@ -29,7 +31,7 @@ import { showToast } from "../ui/Toast.tsx"
 import { Tag } from "../ui/tags.tsx"
 import { AdminOnly } from "./AdminOnly.tsx"
 import { FormError } from "./auth/parts.tsx"
-import { readUsers } from "./UsersPage.tsx"
+import type { ListedUser } from "./UsersPage.tsx"
 
 export function OrganizationPage() {
   const { t } = useI18n()
@@ -74,6 +76,7 @@ function Organization() {
   const name = data?.organization.name ?? ""
   usePageMeta(name || t("organization.loadingTitle"), [{ label: t("organizations.title"), to: "/organizations" }])
   const change = useChange(id, name)
+  const mounted = useMounted()
   const [renaming, setRenaming] = useState(false)
   const [addingAddress, setAddingAddress] = useState(false)
   const [addingMember, setAddingMember] = useState(false)
@@ -91,7 +94,7 @@ function Organization() {
       danger: true,
     })
     if (!confirmed) return
-    if (await change(() => api.deleteOrganization(id), t("organization.deleteDone", { name })))
+    if ((await change(() => api.deleteOrganization(id), t("organization.deleteDone", { name }))) && mounted.current)
       navigate("/organizations")
   }
 
@@ -352,6 +355,7 @@ function RenameDialog({ id, name, onClose }: { id: string; name: string; onClose
   const formId = useId()
   const nameId = useId()
   const hintId = useId()
+  const mounted = useMounted()
   const [value, setValue] = useState(name)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -366,9 +370,12 @@ function RenameDialog({ id, name, onClose }: { id: string; name: string; onClose
     setError(null)
     try {
       await api.renameOrganization(id, trimmed)
-      guardedClose.dismiss()
-      onClose()
       showToast(t("organization.renameDone", { name: trimmed }), "success")
+      // Closed meanwhile: this answer closes nothing (another dialog may be open now).
+      if (mounted.current) {
+        guardedClose.dismiss()
+        onClose()
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: qk.organization(id) }),
         queryClient.invalidateQueries({ queryKey: qk.organizations, exact: true }),
@@ -425,6 +432,7 @@ function AddAddressDialog({ id, onClose }: { id: string; onClose: () => void }) 
   const valueId = useId()
   const hintId = useId()
   const valueRef = useRef<HTMLInputElement>(null)
+  const mounted = useMounted()
   const [kind, setKind] = useState<AddressKind>("exact")
   const [value, setValue] = useState("")
   const [busy, setBusy] = useState(false)
@@ -443,9 +451,12 @@ function AddAddressDialog({ id, onClose }: { id: string; onClose: () => void }) 
     setError(null)
     try {
       await api.addAddress(id, kind, parsed.value)
-      guardedClose.dismiss()
-      onClose()
       showToast(t("organization.addresses.addDone", { value: parsed.value }), "success")
+      // Closed meanwhile: this answer closes nothing (another dialog may be open now).
+      if (mounted.current) {
+        guardedClose.dismiss()
+        onClose()
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: qk.organization(id) }),
         queryClient.invalidateQueries({ queryKey: qk.organizations, exact: true }),
@@ -524,34 +535,75 @@ function AddAddressDialog({ id, onClose }: { id: string; onClose: () => void }) 
   )
 }
 
-/** One of the agents who are not in this organization yet. Admins are never offered: they see every organization. */
+/** How many agents one search shows; more are found by typing more of a username. */
+export const AGENT_PAGE = 50
+
+/** Agents whose username contains the text, through the admin plugin's documented search of /admin/list-users. */
+export function searchAgents(search: string): Promise<{ users: ListedUser[]; total: number }> {
+  return authData(
+    authClient.admin.listUsers({
+      query: {
+        limit: AGENT_PAGE,
+        sortBy: "name",
+        sortDirection: "asc",
+        filterField: "role",
+        filterValue: "agent",
+        filterOperator: "eq",
+        // Maane gives every user their username as the name, so the name search is the username search.
+        ...(search ? { searchValue: search, searchField: "name" as const, searchOperator: "contains" as const } : {}),
+      },
+    }),
+  ) as Promise<{ users: ListedUser[]; total: number }>
+}
+
+/**
+ * One of the agents who are not in this organization yet, found by part of their username. Admins are never offered:
+ * they see every organization.
+ */
 function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose: () => void }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
+  const mounted = useMounted()
   const formId = useId()
+  const searchId = useId()
+  const [typed, setTyped] = useState("")
+  const [search, setSearch] = useState("")
   const [userId, setUserId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const users = useQuery({ queryKey: qk.users, queryFn: readUsers, staleTime: EVERY.live })
+  // The search follows the typing after a short pause, not on every key.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(typed.trim().toLowerCase()), 250)
+    return () => window.clearTimeout(timer)
+  }, [typed])
+  const found = useQuery({
+    queryKey: ["agents", search],
+    queryFn: () => searchAgents(search),
+    placeholderData: keepPreviousData,
+    staleTime: EVERY.live,
+  })
   const present = new Set(data.members.map((member) => member.userId))
-  const agents = (users.data?.users ?? []).filter((user) => (user.role ?? "agent") === "agent" && !present.has(user.id))
+  const shown = found.data?.users ?? []
+  const total = found.data?.total ?? 0
+  const agents = shown.filter((user) => !present.has(user.id))
+  const chosen = agents.find((agent) => agent.id === userId)
   const name = data.organization.name
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    const chosen = agents.find((agent) => agent.id === userId)
     // The button stays disabled until an agent is chosen.
     if (!chosen) return
     setBusy(true)
     setError(null)
     try {
       await api.addMember(data.organization.id, chosen.id)
-      onClose()
       showToast(t("organization.members.addDone", { name: chosen.username ?? chosen.name }), "success")
-      await Promise.all([
+      void Promise.all([
         queryClient.invalidateQueries({ queryKey: qk.organization(data.organization.id) }),
         queryClient.invalidateQueries({ queryKey: qk.organizations, exact: true }),
       ])
+      // Closed meanwhile: this answer closes nothing (another dialog may be open now).
+      if (mounted.current) onClose()
     } catch (failure) {
       setError(errorText(t, failure))
     } finally {
@@ -559,33 +611,25 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
     }
   }
 
-  return (
-    <Dialog
-      title={t("organization.members.addTitle", { name })}
-      size="sm"
-      onClose={onClose}
-      foot={
-        agents.length > 0 ? (
-          <button type="submit" form={formId} className="ui-btn ui-btn-primary" disabled={busy || !userId}>
-            {busy ? t("organization.members.adding") : t("organization.members.add")}
-          </button>
-        ) : undefined
-      }
-    >
-      {users.isPending ? <Loading label={t("organization.members.loadingAgents")} /> : null}
-      {users.isError ? (
-        <ErrorState title={t("users.failed")} error={users.error} onRetry={() => void users.refetch()} />
-      ) : null}
-      {users.data && agents.length === 0 ? (
-        <div className="ui-form-stack">
-          <p className="ui-hint">{t("organization.members.noAgents")}</p>
-          <Link className="ui-btn" to="/users">
-            {t("organization.members.toUsers")}
-          </Link>
-        </div>
-      ) : null}
-      {agents.length > 0 ? (
-        <form id={formId} className="ui-form-stack" onSubmit={(event) => void submit(event)} noValidate>
+  let list: ReactNode = null
+  if (found.isPending) list = <Loading label={t("organization.members.loadingAgents")} />
+  else if (found.isError && !found.data)
+    list = <ErrorState title={t("users.failed")} error={found.error} onRetry={() => void found.refetch()} />
+  else if (total === 0 && !search)
+    list = (
+      <div className="ui-form-stack">
+        <p className="ui-hint">{t("organization.members.noAgents")}</p>
+        <Link className="ui-btn" to="/users">
+          {t("organization.members.toUsers")}
+        </Link>
+      </div>
+    )
+  else if (total === 0) list = <p className="ui-hint">{t("organization.members.noMatch", { search })}</p>
+  else
+    list = (
+      <>
+        {agents.length === 0 ? <p className="ui-hint">{t("organization.members.allMembers")}</p> : null}
+        {agents.length > 0 ? (
           <fieldset className="ui-field ui-choice">
             <legend className="ui-label">{t("organization.members.choose")}</legend>
             {agents.map((agent) => (
@@ -610,9 +654,46 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
               </label>
             ))}
           </fieldset>
-          {error ? <FormError>{error}</FormError> : null}
-        </form>
-      ) : null}
+        ) : null}
+        {total > shown.length ? (
+          <p className="ui-hint" data-testid="agents-more">
+            {t("organization.members.more", { shown: shown.length, total })}
+          </p>
+        ) : null}
+      </>
+    )
+
+  return (
+    <Dialog
+      title={t("organization.members.addTitle", { name })}
+      size="sm"
+      onClose={onClose}
+      foot={
+        <button type="submit" form={formId} className="ui-btn ui-btn-primary" disabled={busy || !chosen}>
+          {busy ? t("organization.members.adding") : t("organization.members.add")}
+        </button>
+      }
+    >
+      <form id={formId} className="ui-form-stack" onSubmit={(event) => void submit(event)} noValidate>
+        <div className="ui-field">
+          <label className="ui-label" htmlFor={searchId}>
+            {t("organization.members.search")}
+          </label>
+          <input
+            id={searchId}
+            className="ui-input"
+            type="search"
+            dir="ltr"
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            value={typed}
+            onChange={(event) => setTyped(event.target.value)}
+          />
+        </div>
+        {list}
+        {error ? <FormError>{error}</FormError> : null}
+      </form>
     </Dialog>
   )
 }

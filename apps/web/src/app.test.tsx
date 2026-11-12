@@ -439,7 +439,7 @@ describe("organizations", () => {
     organization: { id: ORG, name: "Example Support", createdAt: when },
     addresses: [
       { id: "a1", kind: "exact", value: "help@example.com", isDefault: true, createdAt: when },
-      { id: "a2", kind: "pattern", value: "*@example.org", isDefault: false, createdAt: when },
+      { id: "a2", kind: "pattern", value: "*@two.example.com", isDefault: false, createdAt: when },
     ],
     members: [{ userId: "u2", username: "agent.one", role: "agent", banned: false, createdAt: when }],
   })
@@ -473,10 +473,10 @@ describe("organizations", () => {
       "/api/v1/me": admin,
       "/api/v1/admin/organizations": ok({ organizations: [] }),
       "/api/v1/admin/organizations/address-check": ok({
-        address: "billing@example.org",
+        address: "billing@two.example.com",
         via: "pattern",
         organization: { id: ORG, name: "Example Support" },
-        rule: { id: "a2", kind: "pattern", value: "*@example.org" },
+        rule: { id: "a2", kind: "pattern", value: "*@two.example.com" },
       }),
     })
     await vi.waitFor(() => expect(text()).toContain(he("organizations.empty")))
@@ -486,13 +486,13 @@ describe("organizations", () => {
     expect(text()).toContain(he("errors.code.addressInvalid", ERROR_VARS))
     expect(requests.some((r) => r.url.includes("address-check"))).toBe(false)
 
-    await act(async () => type(field, "Billing@example.org"))
+    await act(async () => type(field, "Billing@two.example.com"))
     await act(async () => button(he("organizations.check.submit"))?.click())
-    await vi.waitFor(() => expect(text()).toContain("*@example.org"))
+    await vi.waitFor(() => expect(text()).toContain("*@two.example.com"))
     const asked = requests.find((r) => r.url.includes("address-check"))
-    expect(asked?.url).toBe("/api/v1/admin/organizations/address-check?address=Billing%40example.org")
+    expect(asked?.url).toBe("/api/v1/admin/organizations/address-check?address=Billing%40two.example.com")
     // The address shows isolated left to right inside the right-to-left page.
-    expect(document.querySelector('.ui-banner bdi[dir="ltr"]')?.textContent).toBe("billing@example.org")
+    expect(document.querySelector('.ui-banner bdi[dir="ltr"]')?.textContent).toBe("billing@two.example.com")
   })
 
   it("shows the addresses with their kind and the default mark, and the agents", async () => {
@@ -509,7 +509,7 @@ describe("organizations", () => {
     expect(exact.textContent).toContain(he("organization.kind.exact"))
     expect(exact.textContent).toContain(he("organization.addresses.default"))
     expect(exact.querySelector('bdi[dir="ltr"]')?.textContent).toBe("help@example.com")
-    const pattern = document.querySelector('[data-address="*@example.org"]')
+    const pattern = document.querySelector('[data-address="*@two.example.com"]')
     expect(pattern?.textContent).toContain(he("organization.kind.pattern"))
     expect(pattern?.textContent).not.toContain(he("organization.addresses.default"))
     expect(document.querySelector('[data-member="agent.one"]')).not.toBeNull()
@@ -582,6 +582,135 @@ describe("organizations", () => {
       ),
     )
     expect(JSON.parse(requests.find((r) => r.method === "PUT")?.body ?? "{}")).toEqual({ "intake.mode": "live" })
+  })
+})
+
+describe("organization dialogs", () => {
+  const ORG = "0d7c6f0e-6a55-4b8e-9c55-5f0b6a3e2a11"
+  const when = "2026-11-12T08:00:00.000Z"
+  const detail = ok({
+    organization: { id: ORG, name: "Example Support", createdAt: when },
+    addresses: [],
+    members: [{ userId: "u2", username: "agent.one", role: "agent", banned: false, createdAt: when }],
+  })
+  const button = (label: string, within: ParentNode = document) =>
+    Array.from(within.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+  const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')
+  const agent = (id: string, username: string) => ({ id, username, name: username, role: "agent", createdAt: when })
+  /** A request that answers only when the test says so. */
+  function held() {
+    let release: (answer: TransportResponse) => void = () => {}
+    const answer = new Promise<TransportResponse>((resolve) => {
+      release = resolve
+    })
+    return { answer: answer as unknown as TransportResponse, release: (a: TransportResponse) => release(a) }
+  }
+  /** Closes the open dialog by its X and confirms dropping what was typed. */
+  async function closeTyped() {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(`[role=dialog] button[aria-label="${he("common.close")}"]`)?.click(),
+    )
+    const question = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[role="alertdialog"]')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    await act(async () => button(he("unsaved.discard"), question)?.click())
+    await vi.waitFor(() => expect(dialog()).toBeNull())
+  }
+
+  it("finds any agent through the admin plugin's search, and says when the list is cut short", async () => {
+    auth.listUsers.mockImplementation(async ({ query }: { query: Record<string, unknown> }) => ({
+      data:
+        query.searchValue === "dana"
+          ? { users: [agent("u9", "dana.levi")], total: 1 }
+          : {
+              users: [agent("u2", "agent.one"), ...Array.from({ length: 49 }, (_, i) => agent(`a${i}`, `agent${i}`))],
+              total: 120,
+            },
+      error: null,
+    }))
+    await renderAt(`/organizations/${ORG}`, {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      [`/api/v1/admin/organizations/${ORG}`]: detail,
+    })
+    await vi.waitFor(() => expect(button(he("organization.members.add"))).toBeDefined())
+    await act(async () => button(he("organization.members.add"))?.click())
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="agents-more"]')).not.toBeNull())
+    expect(auth.listUsers.mock.calls[0]?.[0]).toEqual({
+      query: {
+        limit: 50,
+        sortBy: "name",
+        sortDirection: "asc",
+        filterField: "role",
+        filterValue: "agent",
+        filterOperator: "eq",
+      },
+    })
+    // The agent already in the organization is not offered.
+    expect(dialog()?.querySelector('input[type="radio"][value="u2"]')).toBeNull()
+    expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(49)
+
+    const search = dialog()?.querySelector<HTMLInputElement>('input[type="search"]') as HTMLInputElement
+    await act(async () => type(search, "Dana"))
+    await vi.waitFor(() => expect(dialog()?.querySelector('input[type="radio"][value="u9"]')).not.toBeNull())
+    expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({
+      query: { searchValue: "dana", searchField: "name", searchOperator: "contains", filterValue: "agent" },
+    })
+    expect(document.querySelector('[data-testid="agents-more"]')).toBeNull()
+  })
+
+  it("keeps a newly opened address dialog open when the answer to a closed one arrives late", async () => {
+    const pending = held()
+    await renderAt(`/organizations/${ORG}`, {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      [`/api/v1/admin/organizations/${ORG}`]: detail,
+      [`/api/v1/admin/organizations/${ORG}/addresses`]: () => pending.answer,
+    })
+    await vi.waitFor(() => expect(button(he("organization.addresses.add"))).toBeDefined())
+    await act(async () => button(he("organization.addresses.add"))?.click())
+    const first = dialog()?.querySelector<HTMLInputElement>('input[type="text"]') as HTMLInputElement
+    await act(async () => type(first, "help2@example.com"))
+    await act(async () => document.querySelector<HTMLButtonElement>("[role=dialog] .ui-dialog-foot button")?.click())
+    await vi.waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true))
+    await closeTyped()
+
+    await act(async () => button(he("organization.addresses.add"))?.click())
+    const second = dialog()?.querySelector<HTMLInputElement>('input[type="text"]') as HTMLInputElement
+    await act(async () => type(second, "typed@example.com"))
+    await act(async () => pending.release({ status: 201, body: { address: { id: "a9" } } }))
+    await vi.waitFor(() =>
+      expect(text()).toContain(he("organization.addresses.addDone", { value: "help2@example.com" })),
+    )
+    expect(dialog()).not.toBeNull()
+    expect(dialog()?.querySelector<HTMLInputElement>('input[type="text"]')?.value).toBe("typed@example.com")
+  })
+
+  it("neither closes a new create dialog nor navigates when the answer to a closed one arrives late", async () => {
+    const pending = held()
+    await renderAt("/organizations", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/organizations": (request) =>
+        request.method === "POST" ? pending.answer : ok({ organizations: [] }),
+    })
+    await vi.waitFor(() => expect(button(he("organizations.create"))).toBeDefined())
+    await act(async () => button(he("organizations.create"))?.click())
+    const first = dialog()?.querySelector<HTMLInputElement>("input") as HTMLInputElement
+    await act(async () => type(first, "First try"))
+    await act(async () => document.querySelector<HTMLButtonElement>("[role=dialog] .ui-dialog-foot button")?.click())
+    await vi.waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true))
+    await closeTyped()
+
+    await act(async () => button(he("organizations.create"))?.click())
+    const second = dialog()?.querySelector<HTMLInputElement>("input") as HTMLInputElement
+    await act(async () => type(second, "Second try"))
+    await act(async () => pending.release({ status: 201, body: { organization: { id: ORG, name: "First try" } } }))
+    await vi.waitFor(() => expect(text()).toContain(he("organizations.createDone", { name: "First try" })))
+    expect(where()).toBe("/organizations")
+    expect(dialog()?.querySelector<HTMLInputElement>("input")?.value).toBe("Second try")
   })
 })
 

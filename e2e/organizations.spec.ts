@@ -71,7 +71,7 @@ test.describe("desktop", () => {
     await page.goto("/organizations")
     const listed = page.locator(`a[data-organization="${ORGANIZATION}"]`)
     await expect(listed).toContainText(he("organizations.holdsDefault"))
-    await page.locator(".ui-check-form input").fill("someone@example.net")
+    await page.locator(".ui-check-form input").fill("someone@elsewhere.example.com")
     await page.getByRole("button", { name: he("organizations.check.submit"), exact: true }).click()
     await expect(page.locator(".ui-banner")).toContainText(ADDRESS)
 

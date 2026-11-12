@@ -227,10 +227,15 @@ export class Organizations {
     try {
       await this.db.transaction(async (tx) => {
         const name = await organizationName(tx, id)
+        // FOR SHARE on the user's row: a role change (an UPDATE of that row) waits for this transaction, and this read
+        // waits for a role change in flight and then sees the new role. So a membership is added either before a
+        // promotion, which then clears it, or not at all. (The foreign key's own KEY SHARE lock does not block an
+        // update of the role.)
         const [user] = await tx
           .select({ username: authUser.username, name: authUser.name, role: authUser.role })
           .from(authUser)
           .where(eq(authUser.id, userId))
+          .for("share")
         if (!user || (user.role ?? "agent") !== "agent") throw new Refusal("member_not_agent", 400)
         await tx.insert(organizationMember).values({ organizationId: id, userId })
         await writeAudit(tx, acting.actor, {
@@ -367,6 +372,38 @@ export class Organizations {
       rule: { id: rule.id, kind: rule.kind, value: rule.value },
     }
   }
+}
+
+/**
+ * Removes every membership of a user whose role changed, in either direction (owner's decision, 2026-11-12): an admin
+ * needs none, and an agent made from an admin starts with none, so old rows never come back into force. Called from
+ * Better Auth's documented after hook of /admin/set-role, once the new role is stored; one audit row when rows went.
+ * Clearing on both directions also repairs a promotion whose clearing failed, at the next role change.
+ */
+export async function clearMemberships(db: Db, userId: string, role: unknown, acting: Acting): Promise<number> {
+  return db.transaction(async (tx) => {
+    const removed = await tx
+      .delete(organizationMember)
+      .where(eq(organizationMember.userId, userId))
+      .returning({ organizationId: organizationMember.organizationId })
+    if (removed.length === 0) return 0
+    const [user] = await tx
+      .select({ username: authUser.username, name: authUser.name })
+      .from(authUser)
+      .where(eq(authUser.id, userId))
+    await writeAudit(tx, acting.actor, {
+      action: "organization.memberships_clear",
+      entityType: "user",
+      entityId: userId,
+      details: {
+        username: user?.username ?? user?.name ?? null,
+        role: typeof role === "string" ? role : null,
+        organizations: removed.length,
+      },
+      ipAddress: acting.ipAddress,
+    })
+    return removed.length
+  })
 }
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
