@@ -250,6 +250,13 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
     if (folderMatch) return json(res, 200, { id: `folder-${folderMatch[1]}`, displayName: folderMatch[1] })
     const deltaMatch = /^mailFolders\/(inbox|junkemail)\/messages\/delta$/.exec(rest)
     if (deltaMatch) return delta(res, url, box, deltaMatch[1] as GraphFolder)
+    const metadata = /^messages\/([^/$]+)$/.exec(rest)
+    if (metadata?.[1]) {
+      const message = messages.get(metadata[1])
+      if (!message || message.mailbox !== box || message.removedSeq !== null || message.vanished)
+        return graphError(res, 404, "ErrorItemNotFound", "The specified object was not found in the store.")
+      return json(res, 200, itemOf(message))
+    }
     const value = /^messages\/([^/]+)\/\$value$/.exec(rest)
     if (value?.[1]) {
       const message = messages.get(value[1])

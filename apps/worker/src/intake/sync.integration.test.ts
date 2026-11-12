@@ -509,6 +509,26 @@ describe("text fields scanned like files (review G1)", () => {
   })
 })
 
+describe("records retried (review G14)", () => {
+  it("scans a record's Graph metadata again once the scanner is back", async () => {
+    const h = await start()
+    await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
+    const unparsable = h.graph.add(Buffer.from(`Subject: broken\r\nX-Long: ${"a".repeat(1_100_000)}\r\n\r\nbody\r\n`))
+    await h.sync.run()
+    expect(await h.messageOf(unparsable)).toMatchObject({ content: "unparsed", subject: null })
+    expect(((await h.messageOf(unparsable)).fieldScans as Record<string, { status: string }>).headers?.status).toBe(
+      "waiting",
+    )
+    await h.settings.update({ "scanner.address": clamd.address }, SYSTEM)
+    expect(await h.retry.run()).toMatchObject({ messages: 1, decided: 1 })
+    expect(await h.messageOf(unparsable)).toMatchObject({ subject: "broken" })
+    expect(((await h.messageOf(unparsable)).fieldScans as Record<string, { status: string }>).headers?.status).toBe(
+      "clean",
+    )
+    expect(await h.retry.run()).toMatchObject({ messages: 0 })
+  })
+})
+
 describe("the intake source", () => {
   it("discards what a held $value fetched when the mailbox changes meanwhile, and stops the round", async () => {
     const h = await start()

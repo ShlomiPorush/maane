@@ -450,6 +450,13 @@ export const message = pgTable(
     fieldScans: jsonb("field_scans").notNull().default(sql`'{}'::jsonb`),
     /** Listening: the shadow conversation the message belongs to (live mode uses tickets). */
     conversationId: uuid("conversation_id").references(() => intakeConversation.id, { onDelete: "restrict" }),
+    /**
+     * Listening: the existing ticket the message would have joined (review G4). The ticket itself is not changed; later
+     * listening replies to this message match that ticket too.
+     */
+    wouldTicketId: uuid("would_ticket_id").references(() => ticket.id, { onDelete: "restrict" }),
+    /** From MAILER-DAEMON or postmaster without a sign of automated mail (classified at stage one, review G13). */
+    possiblyAutomated: boolean("possibly_automated").notNull().default(false),
     /** Processing runs that failed on this message; after a few it is recorded for review instead. */
     processAttempts: integer("process_attempts").notNull().default(0),
     /** Fetches of this message again for what waits for the scanner, and the last one. */
@@ -457,7 +464,7 @@ export const message = pgTable(
     retryAt: at("retry_at"),
     /** `@maane/shared` MESSAGE_FLAGS. */
     reviewFlags: text("review_flags").array().notNull().default(sql`'{}'::text[]`),
-    /** `customer` or `automated`, set by processing. */
+    /** `customer` or `automated`, classified at stage one from the parsed headers, before any is dropped. */
     classification: text("classification"),
     automatedReasons: text("automated_reasons").array().notNull().default(sql`'{}'::text[]`),
     ticketId: uuid("ticket_id").references(() => ticket.id, { onDelete: "restrict" }),

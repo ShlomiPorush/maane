@@ -12,6 +12,7 @@ import { SYSTEM, writeAudit } from "@maane/server/audit"
 import type { Db } from "@maane/server/db/client"
 import { type FieldScan, type PartStatus, STORED_STATUSES, type TextField } from "@maane/shared"
 import { type FileService, FileTooLargeError } from "../files/service.ts"
+import { classify } from "./classify.ts"
 import type { MailAddress, ParsedMessage } from "./parse.ts"
 import { wellFormed } from "./text.ts"
 
@@ -180,6 +181,8 @@ export function columnsOf(content: MessageContent, scans: Partial<Record<TextFie
   const s = content.structured
   const h = content.headers
   const headersOk = storable(scans.headers)
+  // Classified from the parsed headers before any is dropped (review G13): only the bounded result is stored.
+  const classification = classify({ headers: h.lines, contentType: s.contentType, from: s.fromAddress })
   const named = (addresses: string[], names: (string | null)[]) =>
     addresses.map((address, index) => ({ address, name: headersOk ? (names[index] ?? null) : null }))
   return {
@@ -206,6 +209,9 @@ export function columnsOf(content: MessageContent, scans: Partial<Record<TextFie
     textBody: storable(scans.text) ? content.text : null,
     htmlBody: storable(scans.html) ? content.html : null,
     fieldScans: scans,
+    classification: classification.automated ? "automated" : "customer",
+    automatedReasons: classification.signs,
+    possiblyAutomated: classification.possiblyAutomated,
   }
 }
 

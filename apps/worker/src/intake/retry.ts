@@ -22,9 +22,11 @@ import {
   partNamesOf,
   refused,
   scanFields,
+  storable,
 } from "./content.ts"
-import { type GraphGateway, graphConfig, graphStatus, isGone } from "./graph.ts"
+import { type DeltaItem, type GraphConfig, type GraphGateway, graphConfig, graphStatus, isGone } from "./graph.ts"
 import { type ParsedMessage, parseMessage } from "./parse.ts"
+import { wellFormed } from "./text.ts"
 
 /** The most messages one run fetches again. */
 export const MAX_RETRIES_PER_RUN = 50
@@ -61,16 +63,13 @@ export class WaitingFiles {
   async run(limit = MAX_RETRIES_PER_RUN): Promise<RetrySummary> {
     const summary: RetrySummary = { messages: 0, decided: 0, unavailable: 0, stillWaiting: 0 }
     const waiting = await this.#db
-      .select({ id: message.id, graphId: message.graphId, mailbox: intakeSource.mailbox })
+      .select({ id: message.id, graphId: message.graphId, mailbox: intakeSource.mailbox, content: message.content })
       .from(message)
       .innerJoin(intakeSource, eq(intakeSource.id, message.sourceId))
       .where(
         or(
           eq(message.rawStatus, "waiting"),
-          and(
-            eq(message.content, "parsed"),
-            sql`jsonb_path_exists(${message.fieldScans}, '$.* ? (@.status == "waiting")')`,
-          ),
+          sql`jsonb_path_exists(${message.fieldScans}, '$.* ? (@.status == "waiting")')`,
           exists(
             this.#db
               .select({ id: messagePart.id })
@@ -92,6 +91,14 @@ export class WaitingFiles {
         .update(message)
         .set({ retryAttempts: sql`${message.retryAttempts} + 1`, retryAt: this.#now() })
         .where(eq(message.id, item.id))
+      // A record kept only Graph's metadata: its header values come from that metadata, fetched again (review G14).
+      if (item.content !== "parsed") {
+        const result = await this.#retryRecord(config, item)
+        if (result === "waiting") summary.stillWaiting++
+        else if (result === "unavailable") summary.unavailable++
+        else summary.decided++
+        continue
+      }
       let bytes: Buffer | null = null
       let gone: string | null = null
       try {
@@ -122,6 +129,58 @@ export class WaitingFiles {
       else summary.decided++
     }
     return summary
+  }
+
+  /** A record's header values (Graph's subject and sender name) fetched again and scanned. */
+  async #retryRecord(
+    config: GraphConfig,
+    item: { id: string; graphId: string; mailbox: string },
+  ): Promise<"waiting" | "decided" | "unavailable"> {
+    let meta: DeltaItem
+    try {
+      meta = await this.#graph.metadata(config, item.mailbox, item.graphId)
+    } catch (error) {
+      const status = graphStatus(error)
+      if (isGone(status)) {
+        await this.#unavailable(item.id, `graph_${status}`)
+        return "unavailable"
+      }
+      log.warn("fetching a record's metadata again failed; it keeps waiting", errorFacts(error))
+      return "waiting"
+    }
+    const fixed = wellFormed({ subject: meta.subject ?? null, name: meta.from?.emailAddress?.name ?? null })
+    const block = [fixed.value.subject, fixed.value.name].filter(Boolean).join("\n")
+    const scan = block ? (await scanFields(this.#files, { headers: block })).headers : undefined
+    if (scan?.status === "waiting") return "waiting"
+    await this.#db.transaction(async (tx) => {
+      const [locked] = await tx.select().from(message).where(eq(message.id, item.id)).for("update")
+      const before = (locked?.fieldScans ?? {}) as Scans
+      if (!locked || before.headers?.status !== "waiting") return
+      const decided: FieldScan = scan ?? { status: "clean", signature: null, blockedBy: null }
+      const scans: Scans = { ...before, headers: decided }
+      const graph = (locked.graph ?? {}) as Record<string, unknown> & { from?: Record<string, unknown> | null }
+      const ok = storable(decided)
+      await tx
+        .update(message)
+        .set({
+          fieldScans: scans,
+          ...(ok
+            ? {
+                subject: fixed.value.subject,
+                fromName: fixed.value.name,
+                graph: {
+                  ...graph,
+                  subject: fixed.value.subject,
+                  from: { ...(graph.from ?? {}), name: fixed.value.name },
+                },
+              }
+            : {}),
+          ...(refused(decided) ? { reviewFlags: [...new Set([...locked.reviewFlags, "blocked_content"])] } : {}),
+        })
+        .where(eq(message.id, item.id))
+      await auditBlockedFields(tx, item.id, before, scans)
+    })
+    return "decided"
   }
 
   /** What waits on a message becomes unavailable, with the reason. Its text fields then stay unstored. */

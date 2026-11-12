@@ -8,10 +8,13 @@ import { REFERENCE_CODE } from "@maane/shared"
 import { eq, sql } from "drizzle-orm"
 import { PgBoss } from "pg-boss"
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
+import { eicar } from "../files/samples.ts"
+import { clamdScanner, type Scanner } from "../files/scanner.ts"
 import { registerJobs } from "../jobs.ts"
 import { type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
 import { type IntakeHarness, startIntake } from "../testing/intake.ts"
 import { mime } from "../testing/mime.ts"
+import { DEPENDENCY_WAIT_MS } from "./process.ts"
 
 let clamd: StandInClamd
 let intake: IntakeHarness | null = null
@@ -240,7 +243,9 @@ describe("missing originals", () => {
     const original = h.graph.add(mime({ messageId: "same-round@example.com" }), { receivedAt: at(2) })
     await h.round()
     expect((await h.ticketOf(original))?.id).toBe((await h.ticketOf(reply))?.id)
-    expect(await h.recordOf(original)).toMatchObject({ outcome: "joined", matchLayer: "original" })
+    // The reply waited for the stored original (review G15): the original opened the ticket, the reply joined it.
+    expect(await h.recordOf(original)).toMatchObject({ outcome: "new_ticket" })
+    expect(await h.recordOf(reply)).toMatchObject({ outcome: "joined", matchLayer: "header" })
     expect(await h.tickets()).toHaveLength(1)
   })
 
@@ -407,6 +412,158 @@ describe("listening mode", () => {
     await h.round()
     expect(await h.recordOf(id)).toMatchObject({ outcome: "no_address", supportAddress: null })
     expect((await h.messageOf(id)).reviewFlags).toEqual(["no_default_address"])
+  })
+})
+
+describe("review round 2", () => {
+  it("in listening mode, says a participant's reply would join an existing ticket, and leaves the ticket as it was (G4)", async () => {
+    const h = await live()
+    const original = h.graph.add(mime({ messageId: "t1@example.com", subject: "Printer" }), { receivedAt: at(1) })
+    await h.round()
+    const opened = await h.ticketOf(original)
+    await h.mode("listening")
+    const byHeader = h.graph.add(mime({ messageId: "t2@example.com", inReplyTo: "t1@example.com" }), {
+      receivedAt: at(2),
+    })
+    const byCode = h.graph.add(mime({ subject: "no headers", text: { content: `Ref: ${opened?.referenceCode}` } }), {
+      receivedAt: at(3),
+    })
+    const bySubject = h.graph.add(mime({ subject: `Re: [#${opened?.number}]` }), { receivedAt: at(4) })
+    // A listening reply to the listening reply: it still reaches the ticket.
+    const deeper = h.graph.add(mime({ inReplyTo: "t2@example.com" }), { receivedAt: at(5) })
+    const stranger = h.graph.add(mime({ from: "Mallory <mallory@example.com>", inReplyTo: "t1@example.com" }), {
+      receivedAt: at(6),
+    })
+    await h.round()
+    for (const [id, layer] of [
+      [byHeader, "header"],
+      [byCode, "reference"],
+      [bySubject, "subject"],
+      [deeper, "header"],
+    ] as const)
+      expect(await h.recordOf(id), layer).toMatchObject({
+        mode: "listening",
+        outcome: "joined",
+        ticketId: null,
+        matchedTicketId: opened?.id,
+        matchLayer: layer,
+      })
+    expect(await h.recordOf(stranger)).toMatchObject({
+      outcome: "new_linked_ticket",
+      matchedTicketId: opened?.id,
+      reason: "sender_not_participant",
+    })
+    // The ticket did not change: one message, still new, no ticket opened.
+    expect(await h.tickets()).toHaveLength(1)
+    expect((await h.ticketOf(original))?.status).toBe("new")
+    const onTicket = await h.database.db
+      .select()
+      .from(message)
+      .where(eq(message.ticketId, opened?.id ?? ""))
+    expect(onTicket).toHaveLength(1)
+  })
+
+  it("looks at the first reference codes of a body only, in one query, and still finds a real one (G12)", async () => {
+    const h = await live()
+    const original = h.graph.add(mime({ messageId: "g12@example.com" }), { receivedAt: at(1) })
+    await h.round()
+    const code = (await h.ticketOf(original))?.referenceCode ?? ""
+    const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+    const candidate = (i: number) => {
+      let text = ""
+      for (let n = i, k = 0; k < 8; k++, n = Math.floor(n / alphabet.length)) {
+        if (k === 4) text += "-"
+        text += alphabet[n % alphabet.length]
+      }
+      return text
+    }
+    const many = Array.from({ length: 100_000 }, (_, i) => candidate(i + 7)).join(" ")
+    const flood = h.graph.add(mime({ subject: "codes", text: { content: many } }), { receivedAt: at(2) })
+    const found = h.graph.add(mime({ subject: "a real code", text: { content: `AAAA-AAAB ${code} ${many}` } }), {
+      receivedAt: at(3),
+    })
+    await h.sync.run()
+    const started = Date.now()
+    expect(await h.processor.run()).toEqual({ processed: 2, failed: 0 })
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(await h.recordOf(flood)).toMatchObject({ outcome: "new_ticket" })
+    expect(await h.recordOf(found)).toMatchObject({ outcome: "joined", matchLayer: "reference" })
+  }, 60_000)
+
+  it("classifies from the parsed headers even when the header block is blocked (G13)", async () => {
+    const h = await live()
+    const original = h.graph.add(mime({ messageId: "g13@example.com" }), { receivedAt: at(1) })
+    await h.round()
+    const auto = h.graph.add(
+      mime({
+        inReplyTo: "g13@example.com",
+        headers: [
+          ["Auto-Submitted", "auto-replied"],
+          ["X-Anything", eicar().toString("latin1")],
+        ],
+      }),
+      { receivedAt: at(2) },
+    )
+    await h.round()
+    expect(await h.messageOf(auto)).toMatchObject({ headers: [], classification: "automated", ticketId: null })
+    expect(await h.recordOf(auto)).toMatchObject({ outcome: "automated" })
+    expect((await h.ticketOf(original))?.status).toBe("new")
+  })
+
+  it("makes a reply wait for its stored original that waits for the scanner, in live and listening mode (G15)", async () => {
+    for (const mode of ["live", "listening"] as const) {
+      const state = { down: true }
+      const scanner: Scanner = {
+        ...clamdScanner,
+        scan: async (address, bytes, deadline) =>
+          state.down && Buffer.from(bytes).includes("HOLD-ORIGINAL")
+            ? { kind: "error" }
+            : clamdScanner.scan(address, bytes, deadline),
+      }
+      intake = await startIntake(clamd, {}, { scanner })
+      const h = intake
+      await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
+      if (mode === "live") await h.mode("live")
+      const original = h.graph.add(
+        mime({ messageId: "dana@example.com", cc: "Ron <ron@example.com>", text: { content: "HOLD-ORIGINAL" } }),
+        { receivedAt: at(1) },
+      )
+      const ron = h.graph.add(mime({ from: "Ron <ron@example.com>", inReplyTo: "dana@example.com" }), {
+        receivedAt: at(2),
+      })
+      await h.round()
+      // The original waits for the scanner, and Ron's reply waits for the original.
+      expect((await h.messageOf(original)).state, mode).toBe("stored")
+      expect((await h.messageOf(ron)).state, mode).toBe("stored")
+      state.down = false
+      await h.retry.run()
+      await h.processor.run()
+      const thread = async (id: string) => {
+        const row = await h.messageOf(id)
+        return mode === "live" ? row.ticketId : row.conversationId
+      }
+      expect(await thread(ron), mode).toBe(await thread(original))
+      expect(await h.recordOf(ron), mode).toMatchObject({ outcome: "joined" })
+      await h.close()
+      intake = null
+    }
+  })
+
+  it("stops a reply waiting once its original has waited longer than the limit (G15)", async () => {
+    const h = await live()
+    const original = h.graph.add(mime({ messageId: "slow@example.com" }), { receivedAt: at(1) })
+    const reply = h.graph.add(mime({ inReplyTo: "slow@example.com" }), { receivedAt: at(2) })
+    await h.sync.run()
+    // The original cannot be processed (its text waits), and was stored long ago.
+    await h.database.db
+      .update(message)
+      .set({
+        fieldScans: { text: { status: "waiting", signature: null, blockedBy: null } },
+        createdAt: new Date(Date.now() - DEPENDENCY_WAIT_MS - 60_000),
+      })
+      .where(eq(message.graphId, original))
+    expect(await h.processor.run()).toEqual({ processed: 1, failed: 0 })
+    expect((await h.messageOf(reply)).state).toBe("processed")
   })
 })
 

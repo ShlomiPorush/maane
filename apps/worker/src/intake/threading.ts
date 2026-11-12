@@ -19,17 +19,36 @@ const CODE_CHAR = `[${REFERENCE_ALPHABET}]`
 /** A code standing alone: not inside a longer run of letters, digits, or hyphens. */
 const CODE_IN_TEXT = new RegExp(`(?<![A-Za-z0-9-])(${CODE_CHAR}{4}-${CODE_CHAR}{4})(?![A-Za-z0-9-])`, "g")
 
-/** The reference codes in a text, in order, each once. Capital letters only, as Maane writes them. */
-export function referenceCodesIn(text: string | null): string[] {
-  if (!text) return []
-  return [...new Set([...text.matchAll(CODE_IN_TEXT)].map((match) => match[1] ?? ""))].filter(Boolean)
+/**
+ * How many reference codes and subject numbers one message may name (review G12): the first ones in the text, where
+ * Maane's code sits at the top of a reply, looked up in one query each.
+ */
+export const MAX_CANDIDATES = 20
+
+/** The first distinct items a pattern finds in a text, in order, at most MAX_CANDIDATES; it stops reading there. */
+function firstDistinct<T>(text: string, pattern: RegExp, read: (match: RegExpExecArray) => T | null): T[] {
+  const found = new Set<T>()
+  for (const match of text.matchAll(pattern)) {
+    const value = read(match)
+    if (value !== null) found.add(value)
+    if (found.size >= MAX_CANDIDATES) break
+  }
+  return [...found]
 }
 
-/** The ticket numbers written as `[#n]` in a subject, in order, each once. */
+/** The reference codes in a text, in order, each once, at most MAX_CANDIDATES. Capital letters only, as Maane writes them. */
+export function referenceCodesIn(text: string | null): string[] {
+  if (!text) return []
+  return firstDistinct(text, CODE_IN_TEXT, (match) => match[1] ?? null)
+}
+
+/** The ticket numbers written as `[#n]` in a subject, in order, each once, at most MAX_CANDIDATES. */
 export function ticketNumbersIn(subject: string | null): number[] {
   if (!subject) return []
-  const numbers = [...subject.matchAll(/\[#(\d{1,15})\]/g)].map((match) => Number(match[1]))
-  return [...new Set(numbers.filter((n) => Number.isSafeInteger(n) && n > 0))]
+  return firstDistinct(subject, /\[#(\d{1,15})\]/g, (match) => {
+    const n = Number(match[1])
+    return Number.isSafeInteger(n) && n > 0 ? n : null
+  })
 }
 
 /** The most Message-IDs one message may refer to (review G2): every query over them stays small. */

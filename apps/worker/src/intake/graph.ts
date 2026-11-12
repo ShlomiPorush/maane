@@ -198,6 +198,16 @@ export class GraphGateway {
     }
   }
 
+  /** A message's metadata again (subject, sender), for a record whose header values wait for the scanner. */
+  async metadata(config: GraphConfig, mailbox: string, graphId: string): Promise<DeltaItem> {
+    return (await this.#clientFor(config)
+      .api(`${this.#mailboxPath(mailbox)}/messages/${encodeURIComponent(graphId)}`)
+      .header("Prefer", PREFER_IDS)
+      .select(DELTA_SELECT)
+      .option("signal", AbortSignal.timeout(REQUEST_TIMEOUT_MS))
+      .get()) as DeltaItem
+  }
+
   /**
    * A message's raw MIME, read up to `limit` bytes: past it the download is cancelled and only that is reported.
    * Throws Graph's error (graphStatus says 404 for a vanished message).
