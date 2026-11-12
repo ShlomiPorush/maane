@@ -1,16 +1,17 @@
 # Maane project foundation
 
-Status: Preparation. No product code, script, workflow, Dockerfile, or Compose file exists.
+Status: Foundation 1a (repository baseline) built and verified locally on 2026-11-11, on its pull request. No application code, Compose file, or application Dockerfile exists.
 
 This document separates what exists in the repository from the approved foundation that later tasks build. A planned item does not exist until its status and its verification evidence say so. Product behavior is in [requirements.md](requirements.md). This document covers the repository contract, the architecture, the order of work, and how each part is verified.
 
 ## Current truth
 
-- The repository holds documentation and repository metadata only: `README.md`, `AGENTS.md`, `LICENSE` (MIT), `.gitignore`, `.gitattributes`, `docs/requirements.md`, and this document.
-- No package manifest, lockfile, source code, test, script, CI workflow, Dockerfile, Compose file, or environment example exists. No command in this document runs yet.
+- On `main`: documentation and repository metadata: `README.md`, `AGENTS.md`, `LICENSE` (MIT), `.gitignore`, `.gitattributes`, `docs/requirements.md`, and this document.
+- On the 1a pull request (branch `foundation-1a-baseline`): the pnpm workspace (`package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`), `biome.json`, `config/tsconfig.base.json`, `packages/shared` with the two locale files and a unit test, `CHANGELOG.md`, `docker/toolchain.Dockerfile`, `scripts/verify.sh` with `scripts/lib/common.sh`, `guards.sh`, and `test-guards.sh`, `.github/workflows/ci.yml`, `.github/dependabot.yml`, and the pull request template.
+- No application, Compose file, application Dockerfile, environment example, or other workflow script exists.
 - The local Git repository uses the GitHub noreply address as `user.email`. `core.autocrlf` is on for the owner's machine, so `.gitattributes` forces LF for every text file.
 - GitHub repository `ShlomiPorush/maane` exists, public, default branch `main`, with the approved settings read back on 2026-11-11. See [GitHub configuration](#github-configuration).
-- No check other than the manual documentation checks listed in the preparation hand-off has run.
+- Verified locally on 2026-11-11 in WSL (Docker 29.8.2): the `scripts/verify.sh` full sweep passes (guards; the 39 planted violations in `test-guards.sh` each fail with their own guard, without repeating the planted value in CI output, and pass once removed; install from the lockfile; Biome; `tsc`; 3 unit tests). CI results are on the 1a pull request.
 
 ## Product intent and boundaries
 
@@ -34,7 +35,7 @@ This document separates what exists in the repository from the approved foundati
 | Runtime shape | Approved | Docker Compose: `server`, `worker`, `postgres`, `clamav`, behind Traefik. | Matches the owner's host. See [Docker decisions](#docker-decisions). |
 | Stack | Approved | TypeScript pnpm monorepo, Hono, Better Auth, Drizzle, PostgreSQL, React and Vite, a PostgreSQL job queue, encrypted settings, an audit log. | Same as n8n-ops and Mikud. The foundation (sign-in, settings, audit, queue) is taken from them with the changes in [Security design](#security-design). |
 | Layout | Approved | `apps/server`, `apps/web`, `apps/worker`, `packages/shared`, as in n8n-ops. Phase 0 adds `apps/zendesk-backup` and `packages/zendesk`. | `packages/zendesk` holds the Zendesk API client and the archive format that the backup tool, the import, and the old-replies job share. |
-| Versions | Provisional | Start from the versions the templates pin today: Node.js 26 (Mikud) for the runtime image, pnpm 12, TypeScript 7.0, Biome 2.6, Better Auth 1.7, Hono 4.13, Drizzle ORM 0.45 with drizzle-kit 0.31, the `postgres` driver 4, React 19.3, Vite 8.3, Vitest 5, Playwright 1.64, PostgreSQL 18. | Taken from the template manifests, not from their docs, which lag. The foundation task pins exact current releases and records them here. |
+| Versions | Approved for 1a, provisional for the rest | Pinned in 1a: Node.js 26.13.1 (toolchain image), pnpm 12.18.0, TypeScript 7.0.2, Biome 2.6.6, Vitest 5.1.0, `@types/node` 26.6.6. Starting points for later tasks: Better Auth 1.7, Hono 4.13, Drizzle ORM 0.45 with drizzle-kit 0.31, the `postgres` driver 4, React 19.3, Vite 8.3, Playwright 1.64, PostgreSQL 18. | 1a pinned the current releases. Each later task pins what it adds and records it here. |
 | UI design language | Approved | The `v3-ui-style` skill, as in Mikud. | Owner's choice. Mikud already runs it with Hebrew, RTL, and both themes. |
 | UI localization | Approved | Hebrew (default) and English, RTL and LTR, light and dark themes, phone to desktop. | Baseline for a UI, and Hebrew is the hard requirement. |
 | Customer email | Approved | Built server-side by the rules of the owner's `html-email` skill. Customer-facing fixed text comes from the locale files. Per-organization templates and signatures are data in the database. | [requirements.md](requirements.md#4-customer-email-layout) |
@@ -59,16 +60,16 @@ This document separates what exists in the repository from the approved foundati
 
 | Component | Responsibility | Expected path | Status | Dependencies or blockers |
 |---|---|---|---|---|
-| Repository baseline | Workspace manifests, lockfile, Biome, TypeScript base config, toolchain image, guards, CI, Dependabot, `CHANGELOG.md`, pull request template | root, `config/`, `docker/`, `scripts/`, `.github/` | Planned (1a) | None |
+| Repository baseline | Workspace manifests, lockfile, Biome, TypeScript base config, toolchain image, guards, CI, Dependabot, `CHANGELOG.md`, pull request template | root, `config/`, `docker/`, `scripts/`, `.github/` | Built (1a pull request) | None |
 | `zendesk-backup` | Phase 0 command-line tool: raw records, attachments with inline images, resumable runs, a manifest, a restore check | `apps/zendesk-backup` | Planned (0) | 1a. See [Phase 0 contract](#phase-0-contract). |
 | `zendesk` | Zendesk API client with the token-host rule, and the archive format and reader | `packages/zendesk` | Planned (0) | 1a |
-| `shared` | Schemas, enum codes, the locale files `en.json` and `he.json`, date and time helpers for `Asia/Jerusalem` | `packages/shared` | Planned (1a skeleton, 1b content) | None |
+| `shared` | Schemas, enum codes, the locale files `en.json` and `he.json`, date and time helpers for `Asia/Jerusalem` | `packages/shared` | Skeleton built (1a pull request), content planned (1b) | None |
 | `server` | Hono app: Better Auth at `/api/auth`, the setup screen API, the UI API, the public routes (link redirect, file download, SMTP2GO webhook), health endpoints, the built UI, and migrations on start | `apps/server` | Planned (1b) | Better Auth evidence in [Known unknowns](#known-unknowns-and-blockers) |
 | `web` | React UI in the `v3-ui-style` design: sign-in, setup, two-factor enrollment, an empty shell, Settings, users, and the audit log in 1b. PWA manifest and service worker arrive in phase 4. | `apps/web` | Planned (1b) | None |
 | `worker` | Job queue consumer: Graph intake (phase 2), sending and delivery polling (phase 3), scheduled actions and Web Push (phase 4), import (phase 5) | `apps/worker` | Planned (1b runs the queue and a no-op job) | None |
 | Database schema | Drizzle schema and generated migrations. 1b creates the Better Auth tables, settings, the audit log, and the job queue. | `apps/server/src/db`, `apps/server/drizzle` | Planned (1b) | None |
 | Image | Multi-stage build, esbuild bundles, runs as `node` with a health check | `docker/maane.Dockerfile` | Planned (1b) | None |
-| Toolchain image | Node, pnpm, git, jq, shellcheck, shfmt for the scripts and CI | `docker/toolchain.Dockerfile` | Planned (1a) | None |
+| Toolchain image | Node, pnpm, git, jq, shellcheck, shfmt for the scripts and CI | `docker/toolchain.Dockerfile` | Built (1a pull request) | None |
 | Production Compose | `server`, `worker`, `postgres`, `clamav` with Traefik labels | `docker-compose.yml` | Planned (1b) | ClamAV runtime user in [Known unknowns](#known-unknowns-and-blockers) |
 | Deployment notes | Traefik, secret generation on the server, the setup window, backup contents, the restore test | `docs/deployment.md` | Planned (1b) | None |
 
@@ -125,11 +126,11 @@ Every file the completed foundation keeps at the root:
 | `LICENSE` | Tracked | GitHub license detection | Exists |
 | `.gitignore` | Tracked | Git reads it from the root | Exists |
 | `.gitattributes` | Tracked | Git reads it from the root. Forces LF. | Exists |
-| `CHANGELOG.md` | Tracked | The release workflow and readers expect it at the root | Planned (1a) |
-| `package.json` | Tracked | pnpm workspace root and the product version | Planned (1a) |
-| `pnpm-workspace.yaml` | Tracked | pnpm requires it at the workspace root. pnpm 12 reads its settings, including `allowBuilds`, only from this file. | Planned (1a) |
-| `pnpm-lock.yaml` | Tracked | pnpm writes the lockfile at the workspace root | Planned (1a) |
-| `biome.json` | Tracked | Biome 2 rejects a configuration outside the scanned root ("nested root configuration") | Planned (1a) |
+| `CHANGELOG.md` | Tracked | The release workflow and readers expect it at the root | Exists (1a pull request) |
+| `package.json` | Tracked | pnpm workspace root and the product version | Exists (1a pull request) |
+| `pnpm-workspace.yaml` | Tracked | pnpm requires it at the workspace root. pnpm 12 reads its settings, including `allowBuilds`, only from this file. | Exists (1a pull request) |
+| `pnpm-lock.yaml` | Tracked | pnpm writes the lockfile at the workspace root | Exists (1a pull request) |
+| `biome.json` | Tracked | Biome 2 rejects a configuration outside the scanned root ("nested root configuration") | Exists (1a pull request) |
 | `docker-compose.yml` | Tracked | Production deployment contract, run from the deployment directory | Planned (1b) |
 | `.env.example` | Tracked | Environment contract that Compose reads beside `docker-compose.yml`. Names with empty values only. | Planned (1b) |
 | `docker-compose-dev.yml` | Ignored, never committed | Machine-local development stack, used only through `scripts/local.sh`. Created with `cp docker/docker-compose-dev.example.yml docker-compose-dev.yml`. | Planned (1b) |
@@ -165,12 +166,12 @@ Each row is one pull request or a coherent set of pull requests, each green in C
 
 | Order | Deliverable | Status | Acceptance criteria | Required verification |
 |---|---|---|---|---|
-| 1a.1 | Repository baseline | Planned | Root manifests with `packageManager` pinned, the lockfile, Biome, `config/tsconfig.base.json`, `packages/shared` skeleton with the two locale files, `CHANGELOG.md` with `Unreleased`, pull request template | `pnpm install --frozen-lockfile`, Biome, and `tsc` pass inside the toolchain container |
-| 1a.2 | Toolchain image | Planned | `docker/toolchain.Dockerfile` with Node, pnpm, git, jq, shellcheck, shfmt. The host needs only Docker in WSL. | Every script runs in WSL with no Node on the host |
-| 1a.3 | Guards | Planned | Hebrew outside `he.json`, a tracked environment file that is not an example, secret-like literals and private IPv4 addresses (with a local deny list in `docs/private/` that CI skips), `build:` in Compose files, shellcheck, shfmt, executable bits, LF, actions not pinned to a commit SHA, `en.json` and `he.json` keys out of sync | Each guard fails on a planted violation and passes once it is removed |
-| 1a.4 | `scripts/verify.sh` (first cut) | Planned | Guards, Biome, types, unit tests, builds, with `--changed [BASE]` and `--guards-only` | Full sweep passes locally |
-| 1a.5 | Path-filtered CI | Planned | Change detection, guards always, checks gated by changes, a final summary job, cancelled superseded pull request runs, never-cancelled `main` runs, manual full run, weekly full sweep, read-only token, SHA-pinned actions | Green run on the 1a pull request. A documentation-only change runs the guards only. |
-| 1a.6 | Dependency management | Planned | `.github/dependabot.yml`: weekly npm, GitHub Actions, and Docker updates, minor and patch grouped, majors separate, no auto-merge | Dependabot shows the configuration as valid |
+| 1a.1 | Repository baseline | Done locally (1a pull request) | Root manifests with `packageManager` pinned, the lockfile, Biome, `config/tsconfig.base.json`, `packages/shared` skeleton with the two locale files, `CHANGELOG.md` with `Unreleased`, pull request template | `pnpm install --frozen-lockfile`, Biome, and `tsc` pass inside the toolchain container |
+| 1a.2 | Toolchain image | Done locally (1a pull request) | `docker/toolchain.Dockerfile` with Node, pnpm, git, jq, shellcheck, shfmt. The host needs only Docker in WSL. | Every script runs in WSL with no Node on the host |
+| 1a.3 | Guards | Done locally (1a pull request) | Hebrew outside `he.json`, a tracked environment file that is not an example, secret-like literals and private IPv4 addresses (with a local deny list in `docs/private/` that CI skips), `build:` in Compose files, shellcheck, shfmt, executable bits, LF, actions not pinned to a commit SHA, `en.json` and `he.json` keys out of sync | Each guard fails on a planted violation and passes once it is removed |
+| 1a.4 | `scripts/verify.sh` (first cut) | Done locally (1a pull request) | Guards, Biome, types, unit tests, builds, with `--changed [BASE]` and `--guards-only` | Full sweep passes locally |
+| 1a.5 | Path-filtered CI | Built; runs on the 1a pull request | Change detection, guards always, checks gated by changes, a final summary job, cancelled superseded pull request runs, never-cancelled `main` runs, manual full run, weekly full sweep, read-only token, SHA-pinned actions | Green run on the 1a pull request. A documentation-only change runs the guards only. |
+| 1a.6 | Dependency management | Done locally (1a pull request) | `.github/dependabot.yml`: weekly npm, GitHub Actions, and Docker updates, minor and patch grouped, majors separate, no auto-merge | Dependabot shows the configuration as valid |
 | 0 | Zendesk backup | Planned | [Phase 0 contract](#phase-0-contract) | Tests against a stand-in Zendesk API, run by `verify.sh`. A real run and a restore check by the owner. |
 | 1b.1 | Server, worker, schema | Planned | Hono server with health endpoints, Drizzle migrations on start, the job queue with a no-op job, the audit log, startup refusal on missing or placeholder secrets and on `BETTER_AUTH_*` | Integration tests against a disposable PostgreSQL |
 | 1b.2 | Sign-in and setup | Planned | [Security design](#security-design): closed route list, username and password, mandatory two-factor with enrollment-only sessions, the `admin` plugin with roles, the 5-minute setup window, atomic first admin | HTTP tests: parallel setup requests create one admin, the window closes after 5 minutes on a movable clock, routes not on the list answer 404, a session without two-factor reaches only enrollment and sign-out, a role change ends sessions, rate limits with a forged forwarding header |
