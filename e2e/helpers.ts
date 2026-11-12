@@ -67,12 +67,10 @@ export async function signIn(page: Page): Promise<void> {
 }
 
 /**
- * Waits until an element that shows a secret (the TOTP secret, backup codes) is on screen. A failed `expect(...)`
- * on such an element would print its text in the call log; this polls in the page and prints only a timeout.
+ * Waits until an element that shows a secret (the TOTP secret, backup codes) is visible, as Playwright judges it. A
+ * failed `expect(locator)` on such an element would print its text in the call log; polling `isVisible()` reports
+ * only true or false.
  */
 export async function waitShown(page: Page, selector: string): Promise<void> {
-  await page.waitForFunction((css) => {
-    const element = document.querySelector(css)
-    return element instanceof HTMLElement && element.offsetParent !== null
-  }, selector)
+  await expect.poll(() => page.locator(selector).first().isVisible()).toBe(true)
 }
