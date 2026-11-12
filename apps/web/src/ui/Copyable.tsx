@@ -6,7 +6,8 @@ import { useState } from "react"
 import { useI18n } from "../i18n/i18n.tsx"
 import { showToast } from "./Toast.tsx"
 
-export function Copyable({ value }: { value: string }) {
+/** `dir="ltr"` for a value that must read left to right inside right-to-left text (an address, a pattern). */
+export function Copyable({ value, dir }: { value: string; dir?: "ltr" }) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   return (
@@ -31,7 +32,9 @@ export function Copyable({ value }: { value: string }) {
         }
       }}
     >
-      <bdi className="ui-mono">{value}</bdi>
+      <bdi className="ui-mono" dir={dir}>
+        {value}
+      </bdi>
       {copied ? (
         <Check className="ui-copy-icon" aria-hidden="true" />
       ) : (

@@ -3,8 +3,8 @@ import { LOCALES } from "./locales.ts"
 
 /**
  * Every setting the owner manages: its type, default, whether it is secret, and the environment variable that may
- * override it. An environment value wins over the stored one and locks the field in the UI. Later phases add their
- * settings here.
+ * override it. An environment value wins over the stored one and locks the field in the UI. A setting without a
+ * variable is stored only. Later phases add their settings here.
  */
 export interface SettingDefinition<T> {
   /** Validates a value from the UI or the environment. */
@@ -12,11 +12,15 @@ export interface SettingDefinition<T> {
   defaultValue: T
   /** Stored encrypted and never returned by the API. */
   secret: boolean
-  /** The variable that overrides and locks this field. */
-  env: string
+  /** The variable that overrides and locks this field, or null when no variable may set it. */
+  env: string | null
   /** Parses the text of the environment variable. */
-  fromEnv: (text: string) => unknown
+  fromEnv: ((text: string) => unknown) | null
 }
+
+/** Listening records what intake would do and opens no ticket; live opens tickets (requirements 6.2). */
+export const INTAKE_MODES = ["listening", "live"] as const
+export type IntakeMode = (typeof INTAKE_MODES)[number]
 
 const define = <T>(definition: SettingDefinition<T>) => definition
 
@@ -34,6 +38,15 @@ export const SETTINGS = {
     secret: false,
     env: "MAANE_SESSION_DAYS",
     fromEnv: (text) => Number(text),
+  }),
+  // No variable: the owner's operational switch. One stored row is the only truth the UI, the processing, and the
+  // default-address rule read, and the first migration of phase 2 creates it, so it can be locked (FOR SHARE).
+  "intake.mode": define({
+    schema: z.enum(INTAKE_MODES),
+    defaultValue: "listening" as IntakeMode,
+    secret: false,
+    env: null,
+    fromEnv: null,
   }),
 } as const
 

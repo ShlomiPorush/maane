@@ -4,9 +4,11 @@
 // disabled, and names its variable. The server refuses a locked field (setting_locked), an invalid value
 // (setting_invalid) and an unknown key (setting_unknown); each refusal is explained and points at its field. A
 // refresh never touches a field being edited: the draft holds only what was changed. A field edited again while a
-// save is on its way keeps its new text: a save takes out of the draft only what it sent.
+// save is on its way keeps its new text: a save takes out of the draft only what it sent. The intake mode has no
+// variable; the server refuses live without a default address (intake_no_default_address) and the refusal points
+// at its field.
 
-import { LOCALES, SETTINGS, type SettingKey, type SettingView } from "@maane/shared"
+import { INTAKE_MODES, LOCALES, SETTINGS, type SettingKey, type SettingView } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { type ReactNode, useEffect, useId, useRef, useState } from "react"
 import { ApiError } from "../api/client.ts"
@@ -26,7 +28,7 @@ import { FormError } from "./auth/parts.tsx"
 import { Group, Row } from "./parts.tsx"
 
 /** Every setting this page shows; guards.test.ts fails when the registry has one that is not here. */
-export const SETTING_ROWS: readonly SettingKey[] = ["general.defaultLocale", "security.sessionDays"]
+export const SETTING_ROWS: readonly SettingKey[] = ["general.defaultLocale", "security.sessionDays", "intake.mode"]
 
 const SESSION_DAYS_MIN = 1
 const SESSION_DAYS_MAX = 90
@@ -43,6 +45,7 @@ export function parseSetting(key: SettingKey, text: string): unknown {
     const days = Number(text.trim())
     return days >= SESSION_DAYS_MIN && days <= SESSION_DAYS_MAX ? days : null
   }
+  if (key === "intake.mode") return (INTAKE_MODES as readonly string[]).includes(text) ? text : null
   return (LOCALES as readonly string[]).includes(text) ? text : null
 }
 
@@ -134,7 +137,12 @@ function Settings() {
     const current = value(key).trim()
     const same = key === "security.sessionDays" ? Number(current) === Number(fallback) : current === fallback
     if (same) return null
-    const label = key === "general.defaultLocale" ? nativeName(fallback as (typeof LOCALES)[number]) : fallback
+    const label =
+      key === "general.defaultLocale"
+        ? nativeName(fallback as (typeof LOCALES)[number])
+        : key === "intake.mode"
+          ? t(`settings.intakeMode.mode.${fallback}`)
+          : fallback
     return { label, onReset: () => edit(key, fallback) }
   }
 
@@ -150,6 +158,7 @@ function Settings() {
   else {
     const locale = "general.defaultLocale" as const
     const days = "security.sessionDays" as const
+    const mode = "intake.mode" as const
     body = (
       <>
         <StaleNote failed={query.isError} />
@@ -201,6 +210,33 @@ function Settings() {
             />
           </Row>
         </Group>
+        <Group id="settings-intake" title={t("settings.intake")}>
+          <Row
+            label={t(labelKey(mode))}
+            hint={INTAKE_MODES.map((option) => (
+              <span key={option} className="ui-set-desc-line">
+                {t(`settings.intakeMode.explain.${option}`)}
+              </span>
+            ))}
+            lock={lockOf(mode)}
+            reset={resetOf(mode)}
+          >
+            <fieldset className="ui-seg" aria-label={t(labelKey(mode))}>
+              {INTAKE_MODES.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  data-mode={option}
+                  aria-pressed={value(mode) === option}
+                  disabled={Boolean(lockOf(mode))}
+                  onClick={() => edit(mode, option)}
+                >
+                  {t(`settings.intakeMode.mode.${option}`)}
+                </button>
+              ))}
+            </fieldset>
+          </Row>
+        </Group>
         {error ? <FormError>{error.text}</FormError> : null}
       </>
     )
@@ -225,5 +261,7 @@ function Settings() {
 
 /** The label of a setting. */
 export function labelKey(key: SettingKey): string {
-  return key === "general.defaultLocale" ? "settings.defaultLocale.label" : "settings.sessionDays.label"
+  if (key === "general.defaultLocale") return "settings.defaultLocale.label"
+  if (key === "intake.mode") return "settings.intakeMode.label"
+  return "settings.sessionDays.label"
 }

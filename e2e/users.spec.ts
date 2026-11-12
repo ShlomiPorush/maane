@@ -43,9 +43,10 @@ test("the agent sets up two-factor on first sign-in and cannot open admin pages"
   await page.getByRole("button", { name: he("enroll.continue"), exact: true }).click()
   await expect(page).toHaveURL(/\/$/)
 
-  for (const path of ["/users", "/settings", "/audit"]) {
+  for (const path of ["/organizations", "/users", "/settings", "/audit"]) {
     await page.goto(path)
     await expect(page.getByText(he("adminOnly.title"), { exact: true })).toBeVisible()
   }
   expect((await page.request.get("/api/v1/settings")).status()).toBe(403)
+  expect((await page.request.get("/api/v1/admin/organizations")).status()).toBe(403)
 })

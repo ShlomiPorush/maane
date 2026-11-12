@@ -1,4 +1,22 @@
 export {
+  ADDRESS_KINDS,
+  ADDRESS_MAX,
+  type AddressKind,
+  type AddressRefusal,
+  type AddressRule,
+  compareBytes,
+  literalCount,
+  matchSupportAddress,
+  ORGANIZATION_NAME_MAX,
+  type ParsedAddress,
+  parseExactAddress,
+  parsePattern,
+  parseSupportAddress,
+  patternMatches,
+  type Resolution,
+  resolveSupportAddress,
+} from "./addresses.ts"
+export {
   isValidUsername,
   PASSWORD_MAX,
   PASSWORD_MIN,
@@ -11,6 +29,8 @@ export {
 } from "./auth.ts"
 export { DEFAULT_LOCALE, direction, LOCALES, type Locale, MESSAGES, type Messages } from "./locales.ts"
 export {
+  INTAKE_MODES,
+  type IntakeMode,
   SETTING_KEYS,
   SETTINGS,
   type SettingDefinition,

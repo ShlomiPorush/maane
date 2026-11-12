@@ -9,18 +9,29 @@ export const ADMIN = "admin"
 
 type Messages = { [key: string]: string | Messages }
 
-// The UI's default language is Hebrew: the tests read its strings from the locale file, the only tracked place with
-// Hebrew text.
-const messages = JSON.parse(
-  readFileSync(fileURLToPath(new URL("../packages/shared/src/locales/he.json", import.meta.url)), "utf8"),
-) as Messages
+// The UI's default language is Hebrew: the tests read its strings from the locale files, the only tracked place with
+// Hebrew text, and English from its own file for the pages they check in both languages.
+const load = (locale: "he" | "en") =>
+  JSON.parse(
+    readFileSync(fileURLToPath(new URL(`../packages/shared/src/locales/${locale}.json`, import.meta.url)), "utf8"),
+  ) as Messages
+const messages = { he: load("he"), en: load("en") }
+
+function lookup(locale: "he" | "en", key: string, values: Record<string, string | number>): string {
+  let node: string | Messages | undefined = messages[locale]
+  for (const part of key.split(".")) node = typeof node === "object" ? node[part] : undefined
+  if (typeof node !== "string") throw new Error(`${locale}.json has no text for ${key}`)
+  return node.replace(/\{(\w+)\}/g, (_, name: string) => String(values[name] ?? `{${name}}`))
+}
 
 /** The Hebrew text of a locale key, with `{name}` placeholders filled. */
 export function he(key: string, values: Record<string, string | number> = {}): string {
-  let node: string | Messages | undefined = messages
-  for (const part of key.split(".")) node = typeof node === "object" ? node[part] : undefined
-  if (typeof node !== "string") throw new Error(`he.json has no text for ${key}`)
-  return node.replace(/\{(\w+)\}/g, (_, name: string) => String(values[name] ?? `{${name}}`))
+  return lookup("he", key, values)
+}
+
+/** The English text of a locale key, with `{name}` placeholders filled. */
+export function en(key: string, values: Record<string, string | number> = {}): string {
+  return lookup("en", key, values)
 }
 
 /**

@@ -14,7 +14,7 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
-import { MESSAGES, ROLES, SETTING_KEYS } from "@maane/shared"
+import { ADDRESS_KINDS, INTAKE_MODES, MESSAGES, ROLES, SETTING_KEYS } from "@maane/shared"
 import { describe, expect, it } from "vitest"
 import { ERROR_TEXT, STATUS_TEXT } from "./api/errors.ts"
 import { AUDIT_ACTIONS } from "./pages/AuditPage.tsx"
@@ -274,6 +274,11 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "audit.action.": AUDIT_ACTIONS,
   "audit.stage.": ["password", "second_factor"],
   "time.ago.": ["min.one", "min.other", "h.one", "h.other", "d.one", "d.other"],
+  "organization.kind.": ADDRESS_KINDS,
+  "organization.kindHint.": ADDRESS_KINDS,
+  "organizations.check.": ["exact", "pattern", "default"],
+  "settings.intakeMode.mode.": INTAKE_MODES,
+  "settings.intakeMode.explain.": INTAKE_MODES,
 }
 
 // --- Language policy: Hebrew only in he.json, bidirectional controls only as escapes ---

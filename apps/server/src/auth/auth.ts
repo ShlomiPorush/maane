@@ -11,6 +11,7 @@ import type { VersionedKey } from "../config.ts"
 import type { Db } from "../db/client.ts"
 import { authAccount, authRateLimit, authSession, authTwoFactor, authUser, authVerification } from "../db/schema.ts"
 import { errorFacts, log } from "../log.ts"
+import { clearMemberships } from "../organizations/service.ts"
 import type { SetupWindow } from "./setup-window.ts"
 
 // Better Auth as it documents itself: its routes, its plugins (username, twoFactor, admin), its options, and its
@@ -170,6 +171,8 @@ export function createAuth(options: AuthOptions) {
   const { db, auditDb, publicUrl, setup } = options
   /** The user behind each sign-out request, from the before hook to the after hook. */
   const signingOut = new WeakMap<Request, Actor>()
+  /** The admin behind each role change, from the before hook to the after hook that clears memberships. */
+  const changingRole = new WeakMap<Request, Actor>()
 
   const beforeRoute = createAuthMiddleware(async (c) => {
     // Server calls (auth.api.*) are not HTTP requests: the closed list limits browsers only.
@@ -276,6 +279,7 @@ export function createAuth(options: AuthOptions) {
     if ((path === "/admin/set-role" || path === "/admin/ban-user") && target && (await isSetupAdmin(db, target))) {
       throw refuse("FORBIDDEN", "SETUP_ADMIN_PROTECTED", "The first admin cannot be demoted or disabled.")
     }
+    if (path === "/admin/set-role") changingRole.set(c.request, actor)
     const action = ADMIN_AUDIT[path]
     if (action) {
       await writeAudit(auditDb, actor, {
@@ -290,14 +294,27 @@ export function createAuth(options: AuthOptions) {
 
   /**
    * After a role change or an admin's password reset, every session of that user ends, through the plugin's
-   * documented action. The change is already stored here: a failure leaves the old sessions alive (with the new
-   * role in force on their next request), an owner gap recorded in the foundation plan. Sign-out is recorded here
-   * too, because Better Auth swallows a throwing sign-out hook and leaves the session valid. This hook never throws.
+   * documented action. After a role change, in either direction, the user's organization memberships are removed
+   * first (owner's decision, 2026-11-12). The change is already stored here: a failure leaves the old sessions alive
+   * (with the new role in force on their next request) or the memberships in place (without effect while the user is
+   * an admin; the next role change removes them), owner gaps recorded in the foundation plan. Sign-out is recorded
+   * here too, because Better Auth swallows a throwing sign-out hook and leaves the session valid. This hook never
+   * throws.
    */
   const afterRoute = createAuthMiddleware(async (c) => {
     if (!c.request) return
     const returned = (c.context as { returned?: unknown }).returned
     if (returned instanceof APIError || returned instanceof Error) return
+    if (c.path === "/admin/set-role") {
+      const body = (c.body ?? {}) as { userId?: unknown; role?: unknown }
+      const actor = changingRole.get(c.request)
+      try {
+        if (typeof body.userId === "string" && actor)
+          await clearMemberships(db, body.userId, body.role, { actor, ipAddress: ipOf(c.request) })
+      } catch (error) {
+        log.error("removing the memberships of a user whose role changed failed", errorFacts(error))
+      }
+    }
     try {
       if (END_SESSIONS_AFTER.has(c.path)) {
         const target = (c.body as { userId?: unknown } | undefined)?.userId

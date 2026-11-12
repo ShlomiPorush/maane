@@ -4,13 +4,16 @@ import { serveStatic } from "@hono/node-server/serve-static"
 import { desc, lt, sql } from "drizzle-orm"
 import { Hono } from "hono"
 import { z } from "zod"
-import type { Actor } from "../audit.ts"
 import type { Auth } from "../auth/auth.ts"
 import type { SetupWindow } from "../auth/setup-window.ts"
 import type { Db } from "../db/client.ts"
 import { auditLog, authUser } from "../db/schema.ts"
 import { errorFacts, log } from "../log.ts"
+import { Refusal } from "../organizations/refusal.ts"
+import { Organizations } from "../organizations/service.ts"
 import { type Settings, SettingsError } from "../settings/service.ts"
+import { organizationRoutes } from "./organizations.ts"
+import { type ApiEnv, type AppUser, clientIp } from "./request.ts"
 
 export interface AppContext {
   db: Db
@@ -25,8 +28,8 @@ export interface AppContext {
   onSettingsChanged?: () => Promise<void>
 }
 
-type User = { id: string; username: string; role: string }
-type Env = { Variables: { user: User; actor: Actor } }
+type User = AppUser
+type Env = ApiEnv
 
 /** The header every state-changing browser request to /api/v1 carries; a cross-site form cannot set it. */
 export const REQUEST_HEADER = "x-maane-request"
@@ -137,6 +140,8 @@ export function createApp(ctx: AppContext) {
       if (error instanceof SettingsError) {
         return c.json({ error: error.code, key: error.key }, error.code === "setting_locked" ? 409 : 400)
       }
+      // The intake mode's rule (live needs a default address): its code and the key it refuses.
+      if (error instanceof Refusal) return c.json({ error: error.code, ...error.details }, error.status)
       throw error
     }
     await ctx.onSettingsChanged?.()
@@ -155,6 +160,8 @@ export function createApp(ctx: AppContext) {
     return c.json({ entries: rows, next: rows.length === limit ? rows.at(-1)?.id : null })
   })
 
+  api.route("/admin/organizations", organizationRoutes(new Organizations(ctx.db)))
+
   app.route("/api/v1", api)
   app.all("/api/*", (c) => c.json({ error: "not_found" }, 404))
 
@@ -172,9 +179,4 @@ export function createApp(ctx: AppContext) {
   })
 
   return app
-}
-
-/** The client address as the proxy reported it: the last X-Forwarded-For hop (Traefik replaces client headers). */
-function clientIp(request: Request): string | null {
-  return request.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() || null
 }

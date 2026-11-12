@@ -39,6 +39,15 @@ export const AUDIT_ACTIONS = [
   "user.revoke_sessions",
   "user.set_password",
   "setting.update",
+  "organization.create",
+  "organization.rename",
+  "organization.delete",
+  "organization.member_add",
+  "organization.member_remove",
+  "organization.address_add",
+  "organization.address_remove",
+  "organization.address_default",
+  "organization.memberships_clear",
 ] as const
 
 const KNOWN = new Set<string>(AUDIT_ACTIONS)
@@ -148,7 +157,10 @@ function AuditRow({ entry, names }: { entry: AuditEntry; names: Map<string, stri
 
 type Fact = { label: string; value: string; ltr?: boolean }
 
-/** The facts of an entry worth reading: the user, the role, the setting and its new value, the sign-in stage. */
+/**
+ * The facts of an entry worth reading: the user, the role, the setting and its new value, the sign-in stage, and for
+ * an organization its name, the address, and what came before.
+ */
 export function describe(
   entry: AuditEntry,
   names: Map<string, string>,
@@ -168,7 +180,18 @@ export function describe(
     const key = SETTING_ROWS.find((row) => row === entry.entityId)
     facts.push({ label: t("audit.fact.setting"), value: key ? t(labelKey(key)) : entry.entityId, ltr: !key })
     if (details.secret === true) facts.push({ label: t("audit.fact.value"), value: t("audit.secretChanged") })
+    else if (entry.entityId === "intake.mode" && (details.value === "listening" || details.value === "live"))
+      facts.push({ label: t("audit.fact.value"), value: t(`settings.intakeMode.mode.${details.value}`) })
     else if ("value" in details) facts.push({ label: t("audit.fact.value"), value: String(details.value), ltr: true })
+  }
+  if (entry.action.startsWith("organization.")) {
+    if (typeof details.name === "string") facts.push({ label: t("audit.fact.organization"), value: details.name })
+    if (entry.action === "organization.rename" && typeof details.previous === "string")
+      facts.push({ label: t("audit.fact.previousName"), value: details.previous })
+    if (typeof details.value === "string")
+      facts.push({ label: t("audit.fact.address"), value: details.value, ltr: true })
+    if (entry.action === "organization.address_default" && typeof details.previous === "string")
+      facts.push({ label: t("audit.fact.previousDefault"), value: details.previous, ltr: true })
   }
   if (entry.action === "session.sign_in" && (details.stage === "password" || details.stage === "second_factor"))
     facts.push({ label: t("audit.fact.stage"), value: t(`audit.stage.${details.stage}`) })
