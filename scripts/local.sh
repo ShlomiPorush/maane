@@ -71,7 +71,15 @@ main() {
       ensure_stack_env "$MAANE_DATA_DIR"
       ensure_stack_dirs "$MAANE_DATA_DIR"
       build
-      info "Starting $PROJECT"
+      # The server first: its setup screen is open for 5 minutes from its start while no user exists, and ClamAV's
+      # first signature download can take longer than that.
+      info "Starting the server of $PROJECT"
+      dev_compose up -d --remove-orphans --wait --wait-timeout 180 server || {
+        dev_compose ps
+        die "the server did not become healthy; see: scripts/local.sh logs"
+      }
+      info "Server ready: http://$(dev_compose port server 8080) (the setup screen is open for 5 minutes while no user exists)"
+      info "Starting the rest of $PROJECT"
       # ClamAV loads its signatures before it turns healthy, and downloads them first on the first start.
       dev_compose up -d --remove-orphans --wait --wait-timeout 600 || {
         dev_compose ps

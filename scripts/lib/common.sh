@@ -220,9 +220,12 @@ ensure_stack_dirs() {
     set -euo pipefail
     install -d -o "${0%:*}" -g "${0#*:}" -m 750 /stack/data
     install -d -o "${1%:*}" -g "${1#*:}" -m 755 /stack/clamav
-    if [ ! -e /stack/clamav/main.cvd ] && [ ! -e /stack/clamav/main.cld ] && [ -e /cache/main.cvd ]; then
-      cp -- /cache/*.cvd /cache/*.sign /stack/clamav/ 2>/dev/null || true
-      cp -- /cache/*.cld /stack/clamav/ 2>/dev/null || true
+    shopt -s nullglob
+    # freshclam keeps a database as .cvd, or as .cld once a differential update changed it: either one is a cache.
+    if [ ! -e /stack/clamav/main.cvd ] && [ ! -e /stack/clamav/main.cld ] &&
+      { [ -e /cache/main.cvd ] || [ -e /cache/main.cld ]; }; then
+      files=(/cache/*.cvd /cache/*.cld /cache/*.sign)
+      cp -- "${files[@]}" /stack/clamav/
       chown -R "$1" /stack/clamav
       echo "    signatures copied from the cache"
     fi' "$FILES_OWNER" "$CLAMAV_OWNER" || die "cannot prepare the data and signature directories in $dir"

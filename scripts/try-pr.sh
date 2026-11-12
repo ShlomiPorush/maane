@@ -145,16 +145,23 @@ try_pr() {
   ensure_stack_env "$DATA_DIR"
   ensure_stack_dirs "$DATA_DIR"
   write_compose
-  info "Starting $PR_PROJECT on http://127.0.0.1:$PORT"
+  # The setup screen closes 5 minutes after the server starts, and ClamAV's first signature download can take longer:
+  # the server and PostgreSQL come up first and the admin is seeded at once, then the rest of the stack.
+  info "Starting the server of $PR_PROJECT on http://127.0.0.1:$PORT"
+  pr_compose up -d --wait --wait-timeout 240 server || {
+    pr_compose ps -a || true
+    pr_compose logs --tail 50 || true
+    die "the pull request's server did not become healthy. Clean up with: scripts/try-pr.sh restore"
+  }
+  seed || die "seeding failed; the stack still runs. Inspect it, then: scripts/try-pr.sh restore"
+  info "Starting the rest of $PR_PROJECT"
   # ClamAV loads its signatures before it turns healthy, and downloads them first when the cache is empty.
   pr_compose up -d --wait --wait-timeout 600 || {
     pr_compose ps -a || true
     pr_compose logs --tail 50 || true
     die "the pull request stack did not become healthy. Clean up with: scripts/try-pr.sh restore"
   }
-  check_non_root "$PR_PROJECT" server worker postgres clamav
-  check_hardening "$PR_PROJECT" server worker clamav
-  seed || die "seeding failed; the stack still runs. Inspect it, then: scripts/try-pr.sh restore"
+  check_stack
 
   info "Pull request #$pr (${COMMIT:0:12}) runs on http://127.0.0.1:$PORT"
   echo "    sign in with: $ADMIN_FILE (username, password, TOTP secret, backup codes)"
@@ -175,22 +182,36 @@ status() {
     return 0
   }
   pr_compose ps
-  local service cid health
-  for service in server worker; do
+  local service cid health services
+  services="$(pr_services)" || die "cannot read the services of $COMPOSE_FILE"
+  for service in $services; do
     cid="$(pr_compose ps -q "$service")"
     [ -n "$cid" ] || die "service $service is not running"
     health="$(docker inspect -f '{{.State.Health.Status}}' "$cid")"
     echo "    $service health: $health"
-    [ "$(docker inspect -f '{{.Config.Image}}' "$cid")" = "$IMAGE" ] || die "$service does not run $IMAGE"
+    case "$service" in
+      server | worker) [ "$(docker inspect -f '{{.Config.Image}}' "$cid")" = "$IMAGE" ] || die "$service does not run $IMAGE" ;;
+    esac
     [ "$health" = healthy ] || die "$service is not healthy"
   done
-  cid="$(pr_compose ps -q clamav)"
-  [ -n "$cid" ] || die "service clamav is not running"
-  health="$(docker inspect -f '{{.State.Health.Status}}' "$cid")"
-  echo "    clamav health: $health"
-  [ "$health" = healthy ] || die "clamav is not healthy"
-  check_non_root "$PR_PROJECT" server worker postgres clamav
-  check_hardening "$PR_PROJECT" server worker clamav
+  check_stack
+}
+
+# The services of the pull request's own template: an older pull request has no clamav, a later one may add more.
+pr_services() {
+  pr_compose config --services
+}
+
+# Every process of every service runs as a user other than root, and every service but PostgreSQL (whose official
+# entrypoint starts as root and drops to its own user) has no capability, no new privileges, and a read-only root.
+check_stack() {
+  local services hardened
+  services="$(pr_services)" || die "cannot read the services of $COMPOSE_FILE"
+  hardened="$(grep -vx postgres <<<"$services")"
+  # shellcheck disable=SC2086 # one name per word
+  check_non_root "$PR_PROJECT" $services
+  # shellcheck disable=SC2086
+  check_hardening "$PR_PROJECT" $hardened
 }
 
 restore() {

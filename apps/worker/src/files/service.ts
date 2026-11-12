@@ -190,8 +190,9 @@ export class FileService {
 
   /**
    * The daily sweep: removes stored files that no row references and writers' temporary files, once older than
-   * `olderThanMs`. A stored file is removed only under its hash's lock, after checking again under that lock that no
-   * row references it, so a writer and the sweep never interleave on one hash.
+   * `olderThanMs`. Each is removed only under its hash's lock, after checking again under that lock that no row
+   * references a stored file, and that a temporary file is still there and still old, so a writer and the sweep never
+   * interleave on one hash.
    */
   async sweep(olderThanMs = SWEEP_AGE_MS): Promise<{ removed: number; temporary: number }> {
     const cutoff = this.#now().getTime() - olderThanMs
@@ -200,9 +201,16 @@ export class FileService {
     for await (const entry of this.#store.entries()) {
       if (entry.modified.getTime() > cutoff) continue
       if (entry.temp) {
-        // A writer holds its transaction open for seconds; a temporary file this old belongs to one that died.
-        await this.#store.remove(entry.shard, entry.name)
-        temporary++
+        // A live writer holds its hash's lock for as long as its temporary file exists, so under the lock a temporary
+        // file that is still there and still old belongs to a writer that died.
+        const gone = await this.#db.transaction(async (tx) => {
+          await lockStoredFile(tx, entry.sha256)
+          const modified = await this.#store.modified(entry.shard, entry.name)
+          if (!modified || modified.getTime() > cutoff) return false
+          await this.#store.remove(entry.shard, entry.name)
+          return true
+        })
+        if (gone) temporary++
         continue
       }
       const referenced = async (db: Pick<Db, "select">) =>

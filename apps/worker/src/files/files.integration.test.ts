@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -279,6 +279,60 @@ describe("the sweep", () => {
     await writer
     expect(await sweeping).toEqual({ removed: 0, temporary: 0 })
     expect(await namesOf(sha256)).toEqual([sha256])
+  })
+
+  it("leaves the temporary file of a writer that holds the hash's lock, however old it looks", async () => {
+    const bytes = unique("slow writer")
+    const sha256 = sha256Of(bytes)
+    const temp = join(dir, sha256.slice(0, 2), `.${sha256}.${randomBytes(8).toString("hex")}.tmp`)
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let locked = () => {}
+    const holding = new Promise<void>((resolve) => {
+      locked = resolve
+    })
+    // A writer in the middle of its write: the lock taken, its temporary file on disk (aged, as by a slow clock).
+    const writer = database.db.transaction(async (tx) => {
+      await lockStoredFile(tx, sha256)
+      await writeFile(temp, bytes)
+      await age(temp, 2)
+      locked()
+      await gate
+      await rename(temp, files.storedPath(sha256))
+      await tx
+        .insert(storedFile)
+        .values({ sha256, size: bytes.length, detectedType: "text/plain", scanStatus: "clean" })
+    })
+    await holding
+    const sweeping = files.sweep(0)
+    await expect
+      .poll(
+        async () =>
+          (
+            await database.db.execute(
+              sql`select count(*)::int as n from pg_locks where locktype = 'advisory' and not granted`,
+            )
+          ).rows[0]?.n,
+        { timeout: 10_000 },
+      )
+      .toBe(1)
+    expect(await namesOf(sha256)).toEqual([temp.slice(temp.lastIndexOf("/") + 1)])
+    release()
+    await writer
+    expect(await sweeping).toEqual({ removed: 0, temporary: 0 })
+    expect(await namesOf(sha256)).toEqual([sha256])
+  })
+
+  it("removes an old temporary file whose writer is gone", async () => {
+    const sha256 = sha256Of(unique("dead writer"))
+    const temp = join(dir, sha256.slice(0, 2), `.${sha256}.${randomBytes(8).toString("hex")}.tmp`)
+    await writeFile(temp, "partial")
+    expect((await files.sweep()).temporary).toBe(0)
+    await age(temp, 2)
+    expect(await files.sweep()).toEqual({ removed: 0, temporary: 1 })
+    expect(await namesOf(sha256)).toEqual([])
   })
 })
 

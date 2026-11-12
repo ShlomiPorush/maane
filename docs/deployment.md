@@ -263,7 +263,26 @@ A dump, while the stack runs. It writes an owner-only file under `~/maane/backup
 )
 ```
 
-Copy the dump, `postgres.env`, `app.env`, and `.env` off the host with your own backup tools. A copy of `./postgres-data` instead of a dump is consistent only when taken with the stack stopped (`cd "$HOME/maane" && docker compose stop`, then copy keeping owners and modes, then `docker compose start`).
+Then the attachments, after the dump, so every file the dump names is in the archive. The archive keeps the owners and modes the server and the worker need (`--numeric-owner`, read by root), is written owner-only under `~/maane/backups`, and never replaces one:
+
+```bash
+(
+  set -euo pipefail
+  umask 077
+  cd "$HOME/maane"
+  [ -d data ] || { echo "error: $HOME/maane/data is missing" >&2; exit 1; }
+  mkdir -p backups
+  file="backups/maane-data-$(date -u +%Y%m%dT%H%M%SZ).tar"
+  partial="$(mktemp backups/.partial-XXXXXX)"
+  trap 'rm -f -- "$partial"' EXIT
+  sudo tar --numeric-owner -cpf - data >"$partial"
+  # ln refuses an existing name: an archive is never replaced.
+  ln -- "$partial" "$file"
+  echo "Wrote $HOME/maane/$file"
+)
+```
+
+Copy the dump, the data archive, `postgres.env`, `app.env`, and `.env` off the host with your own backup tools. A copy of `./postgres-data` instead of a dump is consistent only when taken with the stack stopped (`cd "$HOME/maane" && docker compose stop`, then copy keeping owners and modes, then `docker compose start`).
 
 ## 6. Test a restore
 
@@ -286,14 +305,46 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
      )
      ```
 
-3. Start the server and PostgreSQL only, never the worker. From phase 2 the worker reads the shared mailbox and sends mail, and a restored worker would act on real mail:
+3. Put the attachments back, also before `server` starts: unpack the data archive of section 5 as `data`, with its owners (UID 1000) and modes. Set `archive` to the archive's path:
+
+   ```bash
+   (
+     set -euo pipefail
+     archive="$HOME/maane-restore/maane-data.tar"
+     cd "$HOME/maane-restore"
+     [ -f "$archive" ] || { echo "error: $archive is missing" >&2; exit 1; }
+     [ ! -e data ] || { echo "error: data exists; restore only into a folder without it" >&2; exit 1; }
+     [ -z "$(tar -tf "$archive" | grep -v '^data\(/\|$\)')" ] || { echo "error: $archive holds more than data/" >&2; exit 1; }
+     sudo tar --numeric-owner -xpf "$archive"
+     sudo stat -c '%n: owner %u:%g, mode %a' data
+   )
+   ```
+
+   It prints `data: owner 1000:1000, mode 750`.
+4. Start the server and PostgreSQL only, never the worker. From phase 2 the worker reads the shared mailbox and sends mail, and a restored worker would act on real mail:
 
    ```bash
    cd "$HOME/maane-restore" && docker compose up -d --wait server
    ```
 
-4. Open `https://maane-restore.example.com` and sign in with an existing user: the username, the password, and a current code from that user's authenticator app. This proves that the database and `MAANE_AUTH_SECRETS` restore together. Open the audit log and check that the latest entries match the time of the backup. From phase 2, also open Settings and check that the stored secrets read as set: that proves `MAANE_SETTINGS_KEYS`.
-5. Remove the test stack and its data. The folder holds real data:
+5. Check that the attachments came back with the database: the newest file the restored database references must be readable by the server, with the content its name says. With no stored file yet (a backup from before the first message with a file), it says so:
+
+   ```bash
+   (
+     set -euo pipefail
+     cd "$HOME/maane-restore"
+     sha="$(docker compose exec -T postgres psql -U maane -d maane -Atc 'select sha256 from stored_file order by created_at desc limit 1')"
+     if [ -z "$sha" ]; then echo "The restored database references no stored file yet; nothing to check"; exit 0; fi
+     [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "error: the database did not answer with a hash" >&2; exit 1; }
+     read_back="$(docker compose exec -T server sha256sum "/data/files/${sha:0:2}/$sha")" ||
+       { echo "error: the server cannot read the file $sha; restore data (step 3)" >&2; exit 1; }
+     [ "${read_back%% *}" = "$sha" ] || { echo "error: the file $sha does not match its hash" >&2; exit 1; }
+     echo "The server reads the newest stored file, $sha, and it matches its hash"
+   )
+   ```
+
+6. Open `https://maane-restore.example.com` and sign in with an existing user: the username, the password, and a current code from that user's authenticator app. This proves that the database and `MAANE_AUTH_SECRETS` restore together. Open the audit log and check that the latest entries match the time of the backup. From phase 2, also open Settings and check that the stored secrets read as set: that proves `MAANE_SETTINGS_KEYS`.
+7. Remove the test stack and its data. The folder holds real data:
 
    ```bash
    cd "$HOME/maane-restore" && docker compose down && cd "$HOME" && sudo rm -rf -- "$HOME/maane-restore"
@@ -338,6 +389,8 @@ To go back to an earlier version, restore the dump the block took (section 6, in
 ## What was verified
 
 Phase 2.2 (2026-11-12): the `clamav` service of the development template, which matches `docker-compose.yml` but for its paths, ran with `scripts/local.sh` and `scripts/verify.sh` (UID 100, healthy, the hardening checks, a signature reload on the read-only root, a restart that kept the signatures), and `docker compose config` accepted `docker-compose.yml`. The two blocks of section 2 ran as root in a throwaway container with a stand-in `curl` and `sudo`: the six files land, ClamAV's two under `docker/clamav/`, a second run refuses and keeps them, and the data folders get their owners and modes, a second run changing nothing. An outside clamd was not tried.
+
+The data archive of section 5 and steps 3 and 5 of section 6 ran the same way, as root with a stand-in `sudo` and a stand-in `docker` that answers the database query and reads the restored folder: the archive is written mode 600 and keeps UID 1000 and the modes, which the restore puts back (`data: owner 1000:1000, mode 750`, a file `1000:1000 600`); the restore refuses an existing `data` and an archive that holds more than `data/`; the check passes for a file the database names, says so when it names none, and fails for a missing file and for changed content. Not run against a real stack.
 
 Checked on 2026-11-11, before the first release, with stand-ins and throwaway containers. Nothing ran on a server.
 

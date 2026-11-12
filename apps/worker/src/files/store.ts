@@ -109,6 +109,12 @@ export class FileStore {
     }
   }
 
+  /** When a name in a shard was last modified, or null when it is gone or not a file. */
+  async modified(shard: string, name: string): Promise<Date | null> {
+    const info = await stat(join(this.dir, shard, name)).catch(() => null)
+    return info?.isFile() ? info.mtime : null
+  }
+
   /** Removes one name from a shard and syncs the shard. */
   async remove(shard: string, name: string): Promise<void> {
     await rm(join(this.dir, shard, name), { force: true })
