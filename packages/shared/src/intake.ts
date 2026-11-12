@@ -32,6 +32,8 @@ export type PartStatus = (typeof PART_STATUSES)[number]
  * - `reused_message_id`: another message has the same Message-ID with other content.
  * - `no_default_address`: no support address matched and no default exists, so it opened no ticket.
  * - `part_too_large`: a part was over files.maxBytes and was not scanned or kept.
+ * - `store_failed`: the database refused a value of the message (stage one kept its Graph metadata only), or of its
+ *   processing (stage two recorded it without a ticket).
  */
 export const MESSAGE_FLAGS = [
   "unavailable",
@@ -41,6 +43,7 @@ export const MESSAGE_FLAGS = [
   "reused_message_id",
   "no_default_address",
   "part_too_large",
+  "store_failed",
 ] as const
 export type MessageFlag = (typeof MESSAGE_FLAGS)[number]
 

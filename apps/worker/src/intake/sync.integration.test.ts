@@ -15,7 +15,7 @@ import { type IntakeHarness, startIntake } from "../testing/intake.ts"
 import { encodedWord, fromCodePoints, INVOICE, mime, SHALOM, SHALOM_OLAM } from "../testing/mime.ts"
 import { GraphGateway } from "./graph.ts"
 import { reconcileIntakeSource } from "./jobs.ts"
-import { IntakeSync } from "./sync.ts"
+import { IntakeSync, isRefusedValue } from "./sync.ts"
 
 let clamd: StandInClamd
 let intake: IntakeHarness | null = null
@@ -182,6 +182,35 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     expect(await h.messageOf(unparsable)).toMatchObject({ content: "unparsed", reviewFlags: ["parse_failed"] })
     expect(await h.messageOf(malformed)).toMatchObject({ content: "parsed", subject: "malformed" })
     expect(await h.messageOf(valid)).toMatchObject({ content: "parsed", subject: "valid" })
+  })
+
+  it("takes in a message with keys longer than mail allows, and goes on with the next one", async () => {
+    const h = await start()
+    await h.organization("Example Support", [{ value: "support@example.com", isDefault: true }])
+    const long = `${"x".repeat(3000)}@example.com`
+    const hostile = h.graph.add(
+      mime({
+        messageId: long,
+        inReplyTo: long,
+        references: [long, ...Array.from({ length: 300 }, (_, i) => `missing-${i}@example.com`)],
+        cc: `${"a".repeat(3000)}@example.com`,
+      }),
+    )
+    const valid = h.graph.add(mime({ subject: "after the long keys" }))
+    expect(await h.sync.run()).toMatchObject({ status: "done", stored: 2 })
+    expect(await h.messageOf(hostile)).toMatchObject({ content: "parsed", messageIdHeader: null, inReplyTo: [] })
+    expect((await h.messageOf(hostile)).references.length).toBeLessThanOrEqual(50)
+    expect((await h.messageOf(valid)).subject).toBe("after the long keys")
+    await h.mode("live")
+    expect(await h.processor.run()).toEqual({ processed: 2, failed: 0 })
+    expect((await h.ticketOf(hostile))?.id).toBeDefined()
+  })
+
+  it("tells a value the database refuses from a failure worth retrying", async () => {
+    expect(isRefusedValue(Object.assign(new Error("index row size"), { code: "54000" }))).toBe(true)
+    expect(isRefusedValue({ cause: { code: "22P05" } })).toBe(true)
+    expect(isRefusedValue(Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" }))).toBe(false)
+    expect(isRefusedValue(Object.assign(new Error("terminating"), { code: "57P01" }))).toBe(false)
   })
 
   it("stores U+0000 and an unpaired surrogate as U+FFFD, flags them, and goes on with the next message", async () => {
@@ -357,11 +386,16 @@ describe("the intake source", () => {
     const held = new Promise<void>((resolve) => {
       release = resolve
     })
+    let locked!: () => void
+    const holding = new Promise<void>((resolve) => {
+      locked = resolve
+    })
     const store = h.database.db.transaction(async (tx) => {
       await tx.execute(sql`select current from intake_source where id = ${source?.id} for share`)
+      locked()
       await held
     })
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await holding
     const change = h.settings.update({ "graph.mailbox": "third@example.com" }, SYSTEM).then(() => {
       changed = true
     })

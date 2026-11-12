@@ -22,6 +22,7 @@ import {
   ticketPendingReference,
 } from "@maane/server/db/schema"
 import { errorFacts, log } from "@maane/server/log"
+import { databaseError } from "@maane/server/organizations/refusal"
 import {
   type IntakeMode,
   type IntakeOutcome,
@@ -105,12 +106,43 @@ export class IntakeProcessor {
         await this.processOne(next.id, hooks)
         processed++
       } catch (error) {
+        if (/^(22|54)/.test(databaseError(error)?.code ?? "") && (await this.#refused(next.id))) {
+          log.warn(
+            "the database refused a value of a message's processing; it is recorded for review",
+            errorFacts(error),
+          )
+          processed++
+          continue
+        }
         failed.push(next.id)
         log.error("processing a stored message failed; it stays stored", errorFacts(error))
       }
     }
     if (processed > 0) log.info("intake processed messages", { processed })
     return { processed, failed: failed.length }
+  }
+
+  /** A message whose processing the database refused: processed without a ticket, flagged, and recorded. */
+  async #refused(id: string): Promise<boolean> {
+    return this.#db.transaction(async (tx) => {
+      const mode = await lockIntakeMode(tx)
+      const [row] = await tx
+        .select({ id: message.id, reviewFlags: message.reviewFlags })
+        .from(message)
+        .where(and(eq(message.id, id), eq(message.state, "stored")))
+        .for("update")
+      if (!row) return false
+      await tx
+        .update(message)
+        .set({
+          state: "processed",
+          processedAt: this.#now(),
+          reviewFlags: [...new Set([...row.reviewFlags, "store_failed"])],
+        })
+        .where(eq(message.id, id))
+      await tx.insert(intakeRecord).values({ messageId: id, mode, outcome: "unreadable", reason: "store_failed" })
+      return true
+    })
   }
 
   /** One message in its own transaction. Does nothing when it was processed already. */

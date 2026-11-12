@@ -50,6 +50,16 @@ export interface ParsedMessage {
 
 const ANGLE_ID = /<([^<>\s]+)>/g
 
+/**
+ * Bounds on what a sender controls that becomes a key (plan 2.3): a Message-ID longer than a header line may be
+ * (RFC 5322, 998 characters) and an address longer than SMTP allows (RFC 5321, 254) are dropped, and only the last
+ * MAX_REFERENCES of a References header are kept, so no message can overflow an index entry or flood the pending
+ * references of a ticket.
+ */
+export const MESSAGE_ID_MAX = 998
+export const ADDRESS_MAX_LENGTH = 254
+export const MAX_REFERENCES = 50
+
 /** The message IDs in a header value, without brackets: each `<...>`, or the whole trimmed value when it has none. */
 export function messageIds(value: string | string[] | undefined | null): string[] {
   const texts = Array.isArray(value) ? value : value ? [value] : []
@@ -59,14 +69,15 @@ export function messageIds(value: string | string[] | undefined | null): string[
     if (found.length > 0) ids.push(...found)
     else if (text.trim() && !/\s/.test(text.trim())) ids.push(text.trim())
   }
-  return [...new Set(ids.filter(Boolean))]
+  return [...new Set(ids.filter((id) => id && id.length <= MESSAGE_ID_MAX))]
 }
 
 function addresses(value: AddressObject | AddressObject[] | undefined): MailAddress[] {
   const objects = Array.isArray(value) ? value : value ? [value] : []
   const result: MailAddress[] = []
   const add = (entry: { address?: string; name?: string; group?: unknown[] }) => {
-    if (entry.address) result.push({ address: entry.address.trim().toLowerCase(), name: entry.name?.trim() || null })
+    const address = entry.address?.trim().toLowerCase()
+    if (address && address.length <= ADDRESS_MAX_LENGTH) result.push({ address, name: entry.name?.trim() || null })
     for (const member of (entry.group ?? []) as { address?: string; name?: string }[]) add(member)
   }
   for (const object of objects) for (const entry of object.value) add(entry)
@@ -136,11 +147,12 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
   return {
     messageId: messageIds(mail.messageId)[0] ?? null,
     inReplyTo: messageIds(mail.inReplyTo),
-    references: messageIds(mail.references),
+    references: messageIds(mail.references).slice(-MAX_REFERENCES),
     from,
     to: addresses(mail.to),
     cc: addresses(mail.cc),
-    date: mail.date && !Number.isNaN(mail.date.getTime()) ? mail.date : null,
+    // Only the message's own Date header: without one there is no date (never the time of parsing).
+    date: mail.headers.has("date") && mail.date && !Number.isNaN(mail.date.getTime()) ? mail.date : null,
     subject: typeof mail.subject === "string" ? mail.subject : null,
     headers: mail.headerLines.map((header) => ({ key: header.key, line: header.line })),
     contentType,

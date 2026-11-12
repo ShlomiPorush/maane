@@ -3,14 +3,7 @@ import { stat } from "node:fs/promises"
 import { SYSTEM } from "@maane/server/audit"
 import { loadConfig } from "@maane/server/config"
 import { openDatabase } from "@maane/server/db/client"
-import {
-  intakeRecord,
-  message,
-  messagePart,
-  organization,
-  supportAddress,
-  ticket,
-} from "@maane/server/db/schema"
+import { intakeRecord, message, messagePart, organization, supportAddress, ticket } from "@maane/server/db/schema"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
 import { REFERENCE_CODE } from "@maane/shared"
@@ -82,13 +75,24 @@ try {
 
   const clean = Buffer.from(`Maane stack intake ${run}\n`, "utf8")
   const liveId = graph.add(
-    mime({ to: address, subject: `Live ${run}`, attachments: [{ fileName: "notes.txt", contentType: "text/plain", content: clean }] }),
+    mime({
+      to: address,
+      subject: `Live ${run}`,
+      attachments: [{ fileName: "notes.txt", contentType: "text/plain", content: clean }],
+    }),
   )
   const infectedId = graph.add(
-    mime({ to: address, subject: `Infected ${run}`, attachments: [{ fileName: "readme.txt", contentType: "text/plain", content: eicar() }] }),
+    mime({
+      to: address,
+      subject: `Infected ${run}`,
+      attachments: [{ fileName: "readme.txt", contentType: "text/plain", content: eicar() }],
+    }),
   )
   const first = await round()
-  check(first.status === "done" && first.stored === 2, `stage one stored ${first.stored} of 2 messages (${first.status})`)
+  check(
+    first.status === "done" && first.stored === 2,
+    `stage one stored ${first.stored} of 2 messages (${first.status})`,
+  )
 
   const live = await stored(liveId)
   const [opened] = live?.ticketId ? await db.select().from(ticket).where(eq(ticket.id, live.ticketId)) : []
@@ -122,9 +126,7 @@ try {
   const listeningId = graph.add(mime({ to: address, subject: `Listening ${run}` }))
   await round()
   const listening = await stored(listeningId)
-  const [record] = listening
-    ? await db.select().from(intakeRecord).where(eq(intakeRecord.messageId, listening.id))
-    : []
+  const [record] = listening ? await db.select().from(intakeRecord).where(eq(intakeRecord.messageId, listening.id)) : []
   check(
     record?.mode === "listening" &&
       record.outcome === "new_ticket" &&

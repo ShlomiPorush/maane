@@ -8,7 +8,8 @@
 import type { Db } from "@maane/server/db/client"
 import { intakeCursor, intakeSource, message, messagePart } from "@maane/server/db/schema"
 import { holdSourceIfCurrent, type IntakeSource } from "@maane/server/intake/source"
-import { log } from "@maane/server/log"
+import { errorFacts, log } from "@maane/server/log"
+import { databaseError } from "@maane/server/organizations/refusal"
 import type { Settings } from "@maane/server/settings/service"
 import {
   GRAPH_FOLDERS,
@@ -37,6 +38,13 @@ import { wellFormed } from "./text.ts"
 export class SourceChangedError extends Error {
   override name = "SourceChangedError"
 }
+
+/**
+ * A value of the message the database refuses: a data exception (class 22, such as an invalid value) or a program
+ * limit (class 54, such as an index entry too large). Retrying cannot help, so the message becomes a record for review.
+ * Every other failure (the database or the disk unavailable) fails the round, and the message is fetched again.
+ */
+export const isRefusedValue = (error: unknown) => /^(22|54)/.test(databaseError(error)?.code ?? "")
 
 /** The pages one folder may take in one run; the cursor keeps the place for the next run. */
 export const MAX_PAGES_PER_RUN = 100
@@ -222,7 +230,13 @@ export class IntakeSync {
         parts.push({ part, tooLarge: { sha256: sha256Of(part.content), size: part.content.byteLength } })
       }
     }
-    return this.#storeParsed(source, folder, item, meta, fetched.bytes, parsed, raw, parts)
+    try {
+      return await this.#storeParsed(source, folder, item, meta, fetched.bytes, parsed, raw, parts)
+    } catch (error) {
+      if (!isRefusedValue(error)) throw error
+      log.warn("the database refused a value of a message; it is recorded for review", errorFacts(error))
+      return this.#storeRecord(source, folder, item, meta, "unparsed", fetched.bytes.byteLength, "store_failed")
+    }
   }
 
   /** A message stage one could not read in full: only Graph's metadata, flagged for review. */
@@ -233,8 +247,9 @@ export class IntakeSync {
     meta: ReturnType<typeof metadataOf>,
     content: Exclude<MessageContent, "parsed">,
     size: number | null,
+    reason?: MessageFlag,
   ): Promise<boolean> {
-    const flag: MessageFlag = content === "unparsed" ? "parse_failed" : content
+    const flag: MessageFlag = reason ?? (content === "unparsed" ? "parse_failed" : content)
     const fixed = wellFormed({
       graph: meta,
       subject: meta.subject,

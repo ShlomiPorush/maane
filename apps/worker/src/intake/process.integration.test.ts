@@ -143,11 +143,20 @@ describe("tickets in live mode", () => {
     expect(await h.recordOf(copy)).toMatchObject({ outcome: "copy", matchedTicketId: original.ticketId })
     expect(await h.messageOf(reused)).toMatchObject({ duplicateOf: null, reviewFlags: ["reused_message_id"] })
     expect((await h.messageOf(otherDate)).duplicateOf).toBeNull()
+    // Two copies without a Date header: equal dates, so the second is a copy.
+    const undated = mime({ messageId: "undated@example.com", date: null })
+    const undatedIds = [
+      h.graph.add(undated, { receivedAt: at(7) }),
+      h.graph.add(Buffer.from(undated), { receivedAt: at(8) }),
+    ]
     // A message without a Message-ID is never a copy.
     const bare = mime({ messageId: null })
     const noId = [h.graph.add(bare, { receivedAt: at(5) }), h.graph.add(Buffer.from(bare), { receivedAt: at(6) })]
     await h.round()
     for (const id of noId) expect((await h.messageOf(id)).duplicateOf).toBeNull()
+    const [firstUndated, secondUndated] = await Promise.all(undatedIds.map((id) => h.messageOf(id)))
+    expect(firstUndated?.sentAt).toBeNull()
+    expect(secondUndated?.duplicateOf).toBe(firstUndated?.id)
   })
 
   it("never opens, joins, or reopens a ticket for automated mail, and flags a bare MAILER-DAEMON for review", async () => {
@@ -207,6 +216,16 @@ describe("missing originals", () => {
     const original = h.graph.add(mime({ messageId: "late@example.com" }), { receivedAt: at(1) })
     await h.round()
     expect((await h.messageOf(original)).ticketId).toBe(opened?.id)
+    expect(await h.recordOf(original)).toMatchObject({ outcome: "joined", matchLayer: "original" })
+    expect(await h.tickets()).toHaveLength(1)
+  })
+
+  it("joins a reply's ticket when its original is stored in the same round but received later", async () => {
+    const h = await live()
+    const reply = h.graph.add(mime({ inReplyTo: "same-round@example.com" }), { receivedAt: at(1) })
+    const original = h.graph.add(mime({ messageId: "same-round@example.com" }), { receivedAt: at(2) })
+    await h.round()
+    expect((await h.ticketOf(original))?.id).toBe((await h.ticketOf(reply))?.id)
     expect(await h.recordOf(original)).toMatchObject({ outcome: "joined", matchLayer: "original" })
     expect(await h.tickets()).toHaveLength(1)
   })

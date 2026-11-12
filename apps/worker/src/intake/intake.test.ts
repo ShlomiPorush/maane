@@ -13,7 +13,7 @@ import {
 } from "../testing/mime.ts"
 import { classify, contentTypeOf } from "./classify.ts"
 import { describeGraphError, isExpiredDelta } from "./graph.ts"
-import { messageIds, parseMessage } from "./parse.ts"
+import { MAX_REFERENCES, MESSAGE_ID_MAX, messageIds, parseMessage } from "./parse.ts"
 import { sanitizeMailHtml, textFromHtml } from "./sanitize.ts"
 import { wellFormed, wellFormedText } from "./text.ts"
 import { newReferenceCode, referenceCodesIn, referencedIds, ticketNumbersIn } from "./threading.ts"
@@ -251,6 +251,24 @@ describe("parsing", () => {
       value: "multipart/report",
       params: { "report-type": "delivery-status" },
     })
+  })
+
+  it("drops Message-IDs and addresses longer than mail allows, keeps the last references, and no Date is no date", async () => {
+    const long = `${"x".repeat(MESSAGE_ID_MAX)}@example.com`
+    const parsed = await parseMessage(
+      mime({
+        messageId: long,
+        inReplyTo: long,
+        references: Array.from({ length: MAX_REFERENCES + 20 }, (_, i) => `r${i}@example.com`),
+        cc: `${"a".repeat(260)}@example.com, ok@example.com`,
+        date: null,
+      }),
+    )
+    expect(parsed).toMatchObject({ messageId: null, inReplyTo: [], date: null })
+    expect(parsed.references).toHaveLength(MAX_REFERENCES)
+    expect(parsed.references.at(-1)).toBe(`r${MAX_REFERENCES + 19}@example.com`)
+    expect(parsed.cc.map((entry) => entry.address)).toEqual(["ok@example.com"])
+    expect((await parseMessage(mime())).date?.toISOString()).toBe("2026-11-12T08:00:00.000Z")
   })
 
   it("gives the same content hash to the same message and another to other content", async () => {
