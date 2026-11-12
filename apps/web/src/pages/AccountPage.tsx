@@ -9,7 +9,7 @@
 import { PASSWORD_MAX, PASSWORD_MIN } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { UserRound } from "lucide-react"
-import { type FormEvent, useId, useRef, useState } from "react"
+import { type FormEvent, useEffect, useId, useRef, useState } from "react"
 import { useNavigate } from "react-router"
 import { AuthCallError, authClient, authData } from "../api/auth.ts"
 import { qk } from "../api/endpoints.ts"
@@ -403,6 +403,15 @@ function TwoFactorOffDialog({ onClose, onDisabled }: { onClose: () => void; onDi
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const guardedClose = useDiscardGuard(Boolean(password), onClose)
+  // False once the dialog is gone (closed, or the pages remounted for another identity): a late answer must not start
+  // the setup, which would carry this password to whoever is signed in by then.
+  const open = useRef(true)
+  useEffect(() => {
+    open.current = true
+    return () => {
+      open.current = false
+    }
+  }, [])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -410,6 +419,7 @@ function TwoFactorOffDialog({ onClose, onDisabled }: { onClose: () => void; onDi
     setError(null)
     try {
       await authData(authClient.twoFactor.disable({ password }))
+      if (!open.current) return
       guardedClose.dismiss()
       onDisabled(password)
     } catch (failure) {

@@ -61,6 +61,9 @@ export function SessionGate({ children }: { children: ReactNode }) {
   // The user and role the session showed last; kept here, so a user who changed while the page was elsewhere (sign-in)
   // is noticed when the keeper mounts again.
   const sessionUser = useRef<string | null>(null)
+  // The last disagreement between the session and the pages that started a reset: the keeper remounts after each
+  // reset, and a session answer that stays behind Maane's API (a role just changed) must not reset again and again.
+  const handledMismatch = useRef<string | null>(null)
 
   useEffect(() => {
     onUnauthorized((error) => {
@@ -92,7 +95,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
   if (me.data)
     return (
       <>
-        <SessionKeeper seen={sessionUser} shown={`${me.data.id}:${me.data.role}`} />
+        <SessionKeeper seen={sessionUser} handled={handledMismatch} shown={`${me.data.id}:${me.data.role}`} />
         <Fragment key={`${me.data.id}:${me.data.role}`}>{children}</Fragment>
       </>
     )
@@ -111,9 +114,17 @@ export function SessionGate({ children }: { children: ReactNode }) {
  * someone else in another tab, a changed role, two-factor turned off in another tab), unsaved changes are dropped and
  * every cached read starts again: Maane's API then answers for the new state (another user, or enrollment). The same
  * happens when the session's user and role differ from those the pages show (`shown`, from Maane's API), also on the
- * session's first answer.
+ * session's first answer, once for each disagreement (`handled`).
  */
-function SessionKeeper({ seen, shown }: { seen: RefObject<string | null>; shown: string }) {
+function SessionKeeper({
+  seen,
+  handled,
+  shown,
+}: {
+  seen: RefObject<string | null>
+  handled: RefObject<string | null>
+  shown: string
+}) {
   const queryClient = useQueryClient()
   const clearUnsaved = useClearUnsaved()
   const { data, isPending } = authClient.useSession()
@@ -124,13 +135,16 @@ function SessionKeeper({ seen, shown }: { seen: RefObject<string | null>; shown:
     if (identity) {
       const before = seen.current
       seen.current = identity
-      if ((before && before !== identity) || sessionUser !== shown) {
+      const mismatch = sessionUser !== shown ? `${sessionUser}|${shown}` : null
+      const newMismatch = mismatch !== null && mismatch !== handled.current
+      if (newMismatch) handled.current = mismatch
+      if ((before && before !== identity) || newMismatch) {
         clearUnsaved()
         // An open question (it lives outside the pages) must not run the previous identity's action.
         dismissQuestions()
         void queryClient.resetQueries()
       }
     } else if (!isPending && seen.current) void queryClient.invalidateQueries({ queryKey: qk.me })
-  }, [identity, sessionUser, shown, isPending, seen, clearUnsaved, queryClient])
+  }, [identity, sessionUser, shown, isPending, seen, handled, clearUnsaved, queryClient])
   return null
 }

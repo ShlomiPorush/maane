@@ -21,6 +21,8 @@ const auth = vi.hoisted(() => ({
   generateBackupCodes: vi.fn(),
   signUpEmail: vi.fn(),
   revokeOtherSessions: vi.fn(),
+  disable: vi.fn(),
+  enable: vi.fn(),
 }))
 
 /** Better Auth's client session as useSession reads it, changed by a test the way another tab or a refresh does. */
@@ -60,6 +62,8 @@ vi.mock("./api/auth.ts", async (importOriginal) => {
         verifyTotp: auth.verifyTotp,
         verifyBackupCode: auth.verifyBackupCode,
         generateBackupCodes: auth.generateBackupCodes,
+        disable: auth.disable,
+        enable: auth.enable,
       },
       admin: { listUsers: auth.listUsers },
     },
@@ -585,5 +589,64 @@ describe("a session that arrives after the page shows a user", () => {
     auth.revokeOtherSessions.mockResolvedValue({ data: { status: true }, error: null })
     await act(async () => document.querySelector<HTMLButtonElement>("[role=alertdialog] .ui-btn-danger-solid")?.click())
     expect(auth.revokeOtherSessions).not.toHaveBeenCalled()
+  })
+})
+
+describe("a session that answers behind Maane's API", () => {
+  it("resets once for a role the session has not caught up with, not again and again", async () => {
+    let meReads = 0
+    const changed = ok({ id: "u1", username: "first.admin", role: "agent" })
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": (() => {
+        meReads++
+        return new Promise((resolve) => setTimeout(() => resolve(changed), 20)) as unknown as TransportResponse
+      }) as never,
+    }
+    await renderAt("/", answers)
+    await vi.waitFor(() => expect(text()).toContain(he("home.emptyTitle")))
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(meReads).toBeLessThanOrEqual(2)
+  })
+})
+
+describe("turning two-factor off from a dialog that is gone", () => {
+  it("does not start the setup when the answer arrives after the dialog was left", async () => {
+    const password = crypto.randomUUID()
+    let release: (value: unknown) => void = () => {}
+    auth.disable.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    auth.enable.mockResolvedValue({ data: null, error: { status: 401 } })
+    const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": admin }
+    const button = (label: string) =>
+      Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+    await renderAt("/account", answers)
+    await vi.waitFor(() => expect(button(he("account.newAuthenticator"))).toBeDefined())
+    await act(async () => button(he("account.newAuthenticator"))?.click())
+    const field = await vi.waitFor(() => {
+      const input = document.querySelector<HTMLInputElement>("[role=dialog] input")
+      expect(input).not.toBeNull()
+      return input as HTMLInputElement
+    })
+    await act(async () => type(field, password))
+    await act(async () => button(he("account.newAuthenticatorSubmit"))?.click())
+    await vi.waitFor(() => expect(auth.disable).toHaveBeenCalledWith({ password }))
+    answers["/api/v1/me"] = signedOut
+    await act(async () => {
+      await router?.navigate("/login")
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("login.description")))
+    expect(document.querySelector("[role=dialog]")).toBeNull()
+    // Another user signs in elsewhere and needs the setup; the old dialog's answer arrives only now.
+    answers["/api/v1/me"] = totpRequired
+    await act(async () => session.set({ session: { id: "B" }, user: { id: "u2", role: "agent" } }))
+    await act(async () => release({ data: { status: true }, error: null }))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(auth.enable).not.toHaveBeenCalled()
+    expect(where()).toBe("/login")
   })
 })
