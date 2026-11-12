@@ -75,4 +75,36 @@ describe("worker jobs", () => {
       await queue.stop()
     }
   })
+
+  it("finishes the self-test job when the scanner stops answering, so a stuck scanner cannot hold the queue", async () => {
+    const stuck = await startStandInClamd({ peer: "silent" })
+    try {
+      const settings = new Settings(database.db, createSettingsCipher([{ version: 1, value: testKey() }]), {})
+      await settings.update({ "scanner.address": stuck.address }, SYSTEM)
+      const queue = await openJobQueue(database.url)
+      try {
+        const started = Date.now()
+        const id = await queue.send(SCANNER_SELF_TEST)
+        await expect
+          .poll(async () => (await queue.job(SCANNER_SELF_TEST, id))?.state, { timeout: 25_000 })
+          .toBe("completed")
+        // PING waits at most its 10-second deadline, then the job ends with the check that failed.
+        expect(Date.now() - started).toBeLessThan(25_000)
+        expect((await queue.job(SCANNER_SELF_TEST, id))?.output).toMatchObject({
+          address: stuck.address,
+          ok: false,
+          failedCheck: "connection",
+        })
+        // The queue goes on: the next test is picked up and finished too.
+        const next = await queue.send(SCANNER_SELF_TEST)
+        await expect
+          .poll(async () => (await queue.job(SCANNER_SELF_TEST, next))?.state, { timeout: 25_000 })
+          .toBe("completed")
+      } finally {
+        await queue.stop()
+      }
+    } finally {
+      await stuck.close()
+    }
+  }, 60_000)
 })

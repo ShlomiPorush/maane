@@ -19,6 +19,8 @@ import {
   MEGABYTE,
   normalizeBlockedTypes,
   parseScannerAddress,
+  SCAN_TIMEOUT_MAX_SECONDS,
+  SCAN_TIMEOUT_MIN_SECONDS,
   SCANNER_POLICIES,
   type ScannerStatusView,
   SETTINGS,
@@ -52,6 +54,7 @@ export const SETTING_ROWS: readonly SettingKey[] = [
   "intake.mode",
   "scanner.address",
   "scanner.unavailablePolicy",
+  "scanner.scanTimeoutSeconds",
   "files.maxBytes",
   "files.blockedTypes",
 ]
@@ -83,6 +86,11 @@ export function parseSetting(key: SettingKey, text: string): unknown {
     if (!/^\d{1,3}$/.test(text.trim())) return null
     const days = Number(text.trim())
     return days >= SESSION_DAYS_MIN && days <= SESSION_DAYS_MAX ? days : null
+  }
+  if (key === "scanner.scanTimeoutSeconds") {
+    if (!/^\d{1,3}$/.test(text.trim())) return null
+    const seconds = Number(text.trim())
+    return seconds >= SCAN_TIMEOUT_MIN_SECONDS && seconds <= SCAN_TIMEOUT_MAX_SECONDS ? seconds : null
   }
   if (key === "files.maxBytes") {
     if (!/^\d{1,3}$/.test(text.trim())) return null
@@ -125,11 +133,13 @@ function Settings() {
   const daysId = useId()
   const addressId = useId()
   const maxId = useId()
+  const scanTimeoutId = useId()
   const typesId = useId()
   const fieldRefs: Partial<Record<SettingKey, RefObject<HTMLInputElement | HTMLTextAreaElement | null>>> = {
     "security.sessionDays": useRef<HTMLInputElement>(null),
     "scanner.address": useRef<HTMLInputElement>(null),
     "files.maxBytes": useRef<HTMLInputElement>(null),
+    "scanner.scanTimeoutSeconds": useRef<HTMLInputElement>(null),
     "files.blockedTypes": useRef<HTMLTextAreaElement>(null),
   }
   const views = new Map((query.data?.settings ?? []).map((view) => [view.key, view]))
@@ -258,6 +268,7 @@ function Settings() {
     const mode = "intake.mode" as const
     const address = "scanner.address" as const
     const policy = "scanner.unavailablePolicy" as const
+    const scanTimeout = "scanner.scanTimeoutSeconds" as const
     const maxBytes = "files.maxBytes" as const
     const types = "files.blockedTypes" as const
     body = (
@@ -342,6 +353,18 @@ function Settings() {
             reset={resetOf(address)}
           >
             {field(address, addressId, { className: "ui-mono", ltr: true })}
+          </Row>
+          <Row
+            label={t(labelKey(scanTimeout))}
+            hint={t("settings.scanTimeout.hint", { min: SCAN_TIMEOUT_MIN_SECONDS, max: SCAN_TIMEOUT_MAX_SECONDS })}
+            htmlFor={scanTimeoutId}
+            lock={lockOf(scanTimeout)}
+            reset={resetOf(scanTimeout)}
+          >
+            {field(scanTimeout, scanTimeoutId, {
+              className: "ui-input-num",
+              numeric: { min: SCAN_TIMEOUT_MIN_SECONDS, max: SCAN_TIMEOUT_MAX_SECONDS },
+            })}
           </Row>
           <Row
             label={t(labelKey(policy))}
@@ -545,6 +568,7 @@ export function labelKey(key: SettingKey): string {
   if (key === "intake.mode") return "settings.intakeMode.label"
   if (key === "scanner.address") return "settings.scannerAddress.label"
   if (key === "scanner.unavailablePolicy") return "settings.scannerPolicy.label"
+  if (key === "scanner.scanTimeoutSeconds") return "settings.scanTimeout.label"
   if (key === "files.maxBytes") return "settings.maxBytes.label"
   if (key === "files.blockedTypes") return "settings.blockedTypes.label"
   return "settings.sessionDays.label"

@@ -174,6 +174,15 @@ describe("the scanner contract", () => {
     }
   })
 
+  it("gives up on a scan at its deadline, and the policy decides", async () => {
+    await settings.update({ "scanner.scanTimeoutSeconds": 10 }, SYSTEM)
+    const started = Date.now()
+    expect((await files.scan(unique(MARKERS.stall), "stuck.txt")).status).toBe("waiting")
+    const took = Date.now() - started
+    expect(took).toBeGreaterThanOrEqual(9_000)
+    expect(took).toBeLessThan(15_000)
+  }, 30_000)
+
   it("does not let not scanned replace a scanner's answer", async () => {
     const bytes = unique("kept")
     await files.store(bytes, await files.scan(bytes, "kept.txt"))

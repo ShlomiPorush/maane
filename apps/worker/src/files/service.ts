@@ -135,7 +135,8 @@ export class FileService {
 
     const address = await this.trustedScanner()
     if (address) {
-      const verdict = await this.#scanner.scan(address, bytes)
+      const deadline = (await this.#settings.get("scanner.scanTimeoutSeconds")) * 1000
+      const verdict = await this.#scanner.scan(address, bytes, deadline)
       const scannedAt = this.#now()
       if (verdict.kind === "clean") return { ...facts, status: "clean", signature: null, scannedAt }
       if (verdict.kind === "infected") return { ...facts, status: "infected", signature: verdict.signature, scannedAt }

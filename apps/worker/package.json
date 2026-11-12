@@ -13,13 +13,11 @@
   "dependencies": {
     "@maane/server": "workspace:*",
     "@maane/shared": "workspace:*",
-    "clamscan": "2.4.0",
     "drizzle-orm": "0.45.4",
     "file-type": "22.3.0",
     "pg-boss": "12.38.1"
   },
   "devDependencies": {
-    "@types/clamscan": "2.4.1",
     "esbuild": "0.28.2"
   }
 }

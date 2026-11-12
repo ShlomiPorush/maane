@@ -37,6 +37,10 @@ export const MEGABYTE = 1024 * 1024
 export const FILES_MAX_BYTES_MIN = 1 * MEGABYTE
 export const FILES_MAX_BYTES_MAX = 100 * MEGABYTE
 
+/** The bounds of scanner.scanTimeoutSeconds. */
+export const SCAN_TIMEOUT_MIN_SECONDS = 10
+export const SCAN_TIMEOUT_MAX_SECONDS = 600
+
 const HOST_LABEL = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
 const SCANNER_ADDRESS = new RegExp(`^(\\[[0-9A-Fa-f:.]{2,45}\\]|${HOST_LABEL}(?:\\.${HOST_LABEL})*):(\\d{1,5})$`)
 
@@ -167,6 +171,17 @@ export const SETTINGS = {
     secret: false,
     env: "MAANE_SCANNER_UNAVAILABLE_POLICY",
     fromEnv: (text) => text,
+  }),
+  /**
+   * How long one file scan may take, from connecting to clamd to its answer, before Maane gives up on it and the
+   * unavailable policy decides. Above clamd's MaxScanTime (120 s), so clamd's own limit answers first.
+   */
+  "scanner.scanTimeoutSeconds": define({
+    schema: z.number().int().min(SCAN_TIMEOUT_MIN_SECONDS).max(SCAN_TIMEOUT_MAX_SECONDS),
+    defaultValue: 150,
+    secret: false,
+    env: "MAANE_SCANNER_SCAN_TIMEOUT_SECONDS",
+    fromEnv: (text) => Number(text),
   }),
   /** The largest file Maane scans and stores, in bytes. */
   "files.maxBytes": define({

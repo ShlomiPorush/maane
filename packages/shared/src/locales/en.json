@@ -440,6 +440,10 @@
       "label": "Blocked file types",
       "hint": "File name extensions and types read from the content, separated by commas or lines. A blocked file is handled like an infected one. It applies to the file itself, not to the files inside an archive.",
       "defaultList": "the default list"
+    },
+    "scanTimeout": {
+      "label": "Scan time limit (seconds)",
+      "hint": "How long one file scan may take before Maane stops waiting and the setting below decides. {min} to {max} seconds."
     }
   },
   "audit": {

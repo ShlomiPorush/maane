@@ -285,9 +285,6 @@ importers:
       '@maane/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      clamscan:
-        specifier: 2.4.0
-        version: 2.4.0
       drizzle-orm:
         specifier: 0.45.4
         version: 0.45.4(@opentelemetry/api@1.10.0)(@types/pg@8.23.1)(kysely@0.29.8)(pg@8.23.1)
@@ -298,9 +295,6 @@ importers:
         specifier: 12.38.1
         version: 12.38.1(@opentelemetry/api@1.10.0)
     devDependencies:
-      '@types/clamscan':
-        specifier: 2.4.1
-        version: 2.4.1
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -978,9 +972,6 @@ packages:
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
-  '@types/clamscan@2.4.1':
-    resolution: {integrity: sha512-KhBHhXsMGDoEkk87VRtHtDsjoqXD3epu+a09c1sjW7xqpvoihScxhZNdNIPegVCLDvPOp4khiIpy02XabseztQ==}
-
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
 
@@ -1253,10 +1244,6 @@ packages:
   chai@6.3.0:
     resolution: {integrity: sha512-XWAtwJ6OHO+tj0EKCs0Y2UamnyOxseZWltU4x2U2wh8g4AigdjwvtUjvLP2tqkA/avxHEtzxNaqGq/YGNwckKg==}
     engines: {node: '>=18'}
-
-  clamscan@2.4.0:
-    resolution: {integrity: sha512-XBOxUiGOcQGuKmCn5qaM5rIK153fGCwsvJMbjVtcnNJ+j/YHrSj2gKNjyP65yr/E8JsKTTDtKYFG++p7Lzigyw==}
-    engines: {node: '>=16.0.0'}
 
   cliui@6.0.0:
     resolution: {integrity: sha512-t6wbgtoCXvAzst7QgXxJYqPt0usEfbgQdftEPbLL/cvv6HPE5VgvqCuAIDR0NgU52ds6rFwqrgakNLrHEjCbrQ==}
@@ -2333,10 +2320,6 @@ snapshots:
       '@types/deep-eql': 4.0.2
       assertion-error: 2.0.1
 
-  '@types/clamscan@2.4.1':
-    dependencies:
-      '@types/node': 26.6.6
-
   '@types/deep-eql@4.0.2': {}
 
   '@types/estree@1.0.10': {}
@@ -2500,8 +2483,6 @@ snapshots:
   camelcase@5.3.1: {}
 
   chai@6.3.0: {}
-
-  clamscan@2.4.0: {}
 
   cliui@6.0.0:
     dependencies:

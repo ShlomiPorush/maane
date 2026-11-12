@@ -49,6 +49,8 @@ export {
   MEGABYTE,
   normalizeBlockedTypes,
   parseScannerAddress,
+  SCAN_TIMEOUT_MAX_SECONDS,
+  SCAN_TIMEOUT_MIN_SECONDS,
   SCANNER_POLICIES,
   type ScannerPolicy,
   SETTING_KEYS,

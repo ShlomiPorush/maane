@@ -4,6 +4,8 @@ import { loadConfig } from "@maane/server/config"
 import { openDatabase } from "@maane/server/db/client"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
+import { parseScannerAddress } from "@maane/shared"
+import { ClamdError, scanStream } from "../files/clamd.ts"
 import { ENCRYPTED_PDF, ENCRYPTED_ZIP, eicar } from "../files/samples.ts"
 import { clamdScanner } from "../files/scanner.ts"
 import { FileService } from "../files/service.ts"
@@ -70,6 +72,16 @@ try {
       `${item.label}: ${outcome.status} ${outcome.signature ?? ""}`.trim(),
     )
   }
+
+  // A stream past StreamMaxLength (100M in docker/clamav/clamd.conf): clamd refuses it, and the client says so.
+  const target = parseScannerAddress(selfTest.address)
+  const overLimit = target
+    ? await scanStream(target, Buffer.alloc(101 * 1024 * 1024), { deadlineMs: 60_000 }).then(
+        () => "resolved",
+        (error) => (error instanceof ClamdError ? error.code : "other error"),
+      )
+    : "no address"
+  check(overLimit === "size_limit", `a stream over StreamMaxLength: ${overLimit}`)
 
   const infected = await files.scan(eicar(), "eicar.txt")
   const refused = await files.store(eicar(), infected).then(

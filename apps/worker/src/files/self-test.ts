@@ -2,7 +2,7 @@ import type { Db } from "@maane/server/db/client"
 import { scannerCheck } from "@maane/server/db/schema"
 import type { ScannerCheck } from "@maane/shared"
 import { CLEAN_SAMPLE, ENCRYPTED_PDF, ENCRYPTED_ZIP, eicar } from "./samples.ts"
-import { type Scanner, SELF_TEST_TIMEOUT_MS, type Verdict } from "./scanner.ts"
+import { PROBE_DEADLINE_MS, SAMPLE_DEADLINE_MS, type Scanner, type Verdict } from "./scanner.ts"
 
 // The scanner contract (plan 2.2, P15): "clean" is trusted only from a scanner that passed this self-test. It runs on
 // worker start, every hour, when the scanner address changes, and for a connection test from Settings. A scanner that
@@ -45,10 +45,10 @@ export async function runSelfTest(
     version,
     checkedAt: now(),
   })
-  if (!(await scanner.ping(address, SELF_TEST_TIMEOUT_MS))) return result("connection", null)
-  const version = await scanner.version(address, SELF_TEST_TIMEOUT_MS)
+  if (!(await scanner.ping(address, PROBE_DEADLINE_MS))) return result("connection", null)
+  const version = await scanner.version(address, PROBE_DEADLINE_MS)
   for (const { check, sample, passes } of SAMPLE_CHECKS) {
-    if (!passes(await scanner.scan(address, sample(), SELF_TEST_TIMEOUT_MS))) return result(check, version)
+    if (!passes(await scanner.scan(address, sample(), SAMPLE_DEADLINE_MS))) return result(check, version)
   }
   return result(null, version)
 }

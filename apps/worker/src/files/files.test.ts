@@ -32,33 +32,22 @@ describe("self-test samples", () => {
 })
 
 describe("verdicts", () => {
-  it("is clean only when clamscan says isInfected false", () => {
-    expect(verdictOf({ isInfected: false, viruses: [] })).toEqual({ kind: "clean" })
-    expect(verdictOf({ isInfected: null, viruses: [] })).toEqual({ kind: "error" })
-    expect(verdictOf({ isInfected: true, viruses: [] })).toEqual({ kind: "error" })
-    expect(verdictOf({ isInfected: true, viruses: [" "] })).toEqual({ kind: "error" })
-    expect(verdictOf({ isInfected: true })).toEqual({ kind: "error" })
+  it("is clean only for clamd's OK, and an alert counts only with a name", () => {
+    expect(verdictOf(null)).toEqual({ kind: "clean" })
+    expect(verdictOf(" ")).toEqual({ kind: "error" })
   })
 
   it("names an infection, and an encrypted or limits alert as not fully scanned", () => {
-    expect(verdictOf({ isInfected: true, viruses: ["Eicar-Test-Signature"] })).toEqual({
-      kind: "infected",
-      signature: "Eicar-Test-Signature",
-    })
+    expect(verdictOf("Eicar-Test-Signature")).toEqual({ kind: "infected", signature: "Eicar-Test-Signature" })
     for (const alert of [
       "Heuristics.Encrypted.Zip",
       "Heuristics.Encrypted.PDF",
       "Heuristics.Limits.Exceeded.MaxFileSize",
       "Heuristics.Limits.Exceeded.MaxRecursion",
     ])
-      expect(verdictOf({ isInfected: true, viruses: [alert] })).toEqual({ kind: "not_fully_scanned", signature: alert })
+      expect(verdictOf(alert)).toEqual({ kind: "not_fully_scanned", signature: alert })
     // Another heuristic is a detection, not a limit.
-    expect(verdictOf({ isInfected: true, viruses: ["Heuristics.Phishing.Email.SpoofedDomain"] }).kind).toBe("infected")
-    // A signature wins over an alert.
-    expect(verdictOf({ isInfected: true, viruses: ["Heuristics.Encrypted.Zip", "Win.Test.EICAR_HDB-1"] })).toEqual({
-      kind: "infected",
-      signature: "Win.Test.EICAR_HDB-1",
-    })
+    expect(verdictOf("Heuristics.Phishing.Email.SpoofedDomain").kind).toBe("infected")
   })
 })
 
