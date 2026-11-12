@@ -3,7 +3,7 @@
 // the page's own actions. Above 1100px a 240px sidebar on the grey canvas that folds into the 72px icon rail,
 // remembered in this browser; from 761 to 1100px always the rail. The sidebar foot holds the account menu, the
 // language and the theme buttons. Up to 760px a slim top bar with the account menu, and a bottom tab bar with every
-// page of the navigation (at most four, so no More sheet).
+// page of the navigation (at most five, so no More sheet).
 
 import { ChevronRight } from "lucide-react"
 import { useState } from "react"

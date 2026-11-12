@@ -10,6 +10,8 @@ import { LoginPage } from "./pages/auth/LoginPage.tsx"
 import { SetupPage } from "./pages/auth/SetupPage.tsx"
 import { HomePage } from "./pages/HomePage.tsx"
 import { NotFoundPage } from "./pages/NotFoundPage.tsx"
+import { OrganizationPage } from "./pages/OrganizationPage.tsx"
+import { OrganizationsPage } from "./pages/OrganizationsPage.tsx"
 import { SettingsPage } from "./pages/SettingsPage.tsx"
 import { UsersPage } from "./pages/UsersPage.tsx"
 import { Root } from "./shell/Root.tsx"
@@ -20,6 +22,8 @@ type PageRoute = { id: string; path: string; Component: ComponentType }
 /** The pages inside the shell: they need a full session (two-factor on). */
 export const PAGES: readonly PageRoute[] = [
   { id: "home", path: "/", Component: HomePage },
+  { id: "organizations", path: "/organizations", Component: OrganizationsPage },
+  { id: "organization", path: "/organizations/:id", Component: OrganizationPage },
   { id: "users", path: "/users", Component: UsersPage },
   { id: "settings", path: "/settings", Component: SettingsPage },
   { id: "audit", path: "/audit", Component: AuditPage },

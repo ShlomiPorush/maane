@@ -12,9 +12,34 @@ import { answered, challengeExpired, ERROR_TEXT, errorKey, errorText } from "./e
 const leaf = (tree: unknown, key: string) =>
   typeof key.split(".").reduce<unknown>((node, part) => (node as Record<string, unknown>)?.[part], tree) === "string"
 
-/** The codes the server answers today (apps/server/src/http/app.ts and auth/auth.ts) and Better Auth's common ones. */
+/**
+ * The codes the server answers today (apps/server/src/http/app.ts, http/organizations.ts, and auth/auth.ts) and
+ * Better Auth's common ones.
+ */
 const SERVER_CODES = {
-  api: ["unauthorized", "totp_required", "csrf_refused", "setting_locked", "setting_invalid", "setting_unknown"],
+  api: [
+    "unauthorized",
+    "totp_required",
+    "csrf_refused",
+    "setting_locked",
+    "setting_invalid",
+    "setting_unknown",
+    "request_invalid",
+    "organization_not_found",
+    "organization_name_invalid",
+    "organization_name_taken",
+    "organization_in_use",
+    "member_not_agent",
+    "member_exists",
+    "member_not_found",
+    "address_invalid",
+    "pattern_invalid",
+    "address_taken",
+    "address_not_found",
+    "address_default_not_exact",
+    "intake_no_default_address",
+    "intake_default_required",
+  ],
   auth: [
     "UNAUTHORIZED",
     "TOTP_REQUIRED",

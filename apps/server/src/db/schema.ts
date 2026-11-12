@@ -8,9 +8,11 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
+  uuid,
 } from "drizzle-orm/pg-core"
 
 const at = (name: string) => timestamp(name, { withTimezone: true })
@@ -149,4 +151,67 @@ export const auditLog = pgTable(
     ipAddress: text("ip_address"),
   },
   (t) => [index("audit_log_at_idx").on(t.at), index("audit_log_actor_idx").on(t.actorUserId)],
+)
+
+// --- Organizations, membership, support addresses (phase 2.1) ---
+// Maane's own tables, not Better Auth's organization plugin (owner's decision, 2026-11-12): an admin sees every
+// organization by role, and an agent sees the organizations of their membership rows.
+
+/** An organization Maane answers for. Deleted only while nothing refers to it (the foreign keys below restrict it). */
+export const organization = pgTable(
+  "organization",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Trimmed, 1 to 80 characters, unique without regard to case. */
+    name: text("name").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("organization_name_unique").on(sql`lower(${t.name})`),
+    check("organization_name_form", sql`${t.name} = btrim(${t.name}) and char_length(${t.name}) between 1 and 80`),
+  ],
+)
+
+/** An agent's membership. Admins are never rows here: they see every organization by their role. */
+export const organizationMember = pgTable(
+  "organization_member",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "restrict" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.organizationId, t.userId] }), index("organization_member_user_idx").on(t.userId)],
+)
+
+/**
+ * An exact address or a pattern (`@maane/shared` addresses.ts) and its organization. A row's value, kind, and
+ * organization are never changed: the admin adds a new row and removes the old one. Only the default mark moves.
+ * Tickets keep the concrete address and the organization, never this row, so removing a row changes no ticket.
+ */
+export const supportAddress = pgTable(
+  "support_address",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "restrict" }),
+    /** `exact` or `pattern`. */
+    kind: text("kind").notNull(),
+    /** In lower case; unique across every organization. */
+    value: text("value").notNull().unique(),
+    /** The address for mail whose support address cannot be identified: at most one, and always exact. */
+    isDefault: boolean("is_default").notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("support_address_organization_idx").on(t.organizationId),
+    uniqueIndex("support_address_one_default").on(sql`(true)`).where(sql`${t.isDefault}`),
+    check("support_address_kind", sql`${t.kind} in ('exact', 'pattern')`),
+    check("support_address_lower_case", sql`${t.value} = lower(${t.value})`),
+    check("support_address_default_exact", sql`not ${t.isDefault} or ${t.kind} = 'exact'`),
+  ],
 )

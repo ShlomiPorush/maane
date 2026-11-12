@@ -60,7 +60,8 @@ export function Banner({
   action,
 }: {
   tone: "info" | "ok" | "warn" | "fail"
-  title: string
+  /** A sentence, or an element such as an address isolated left to right. */
+  title: ReactNode
   children?: ReactNode
   action?: ReactNode
 }) {

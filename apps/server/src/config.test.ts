@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto"
+import { SETTINGS } from "@maane/shared"
 import { describe, expect, it } from "vitest"
 import { ConfigError, isGeneratedHex, isPlaceholder, loadConfig } from "./config.ts"
 
@@ -99,6 +100,12 @@ describe("loadConfig", () => {
   it("reads a setting override and refuses an invalid one", () => {
     expect(loadConfig(env({ MAANE_SESSION_DAYS: "7" })).overrides["security.sessionDays"]).toBe("7")
     expect(problems(env({ MAANE_SESSION_DAYS: "seven" }))).toContain("MAANE_SESSION_DAYS is not valid")
+  })
+
+  it("lets no variable set or lock the intake mode", () => {
+    expect(SETTINGS["intake.mode"].env).toBeNull()
+    const loaded = loadConfig(env({ MAANE_INTAKE_MODE: "live", INTAKE_MODE: "live" }))
+    expect(loaded.overrides).not.toHaveProperty("intake.mode")
   })
 })
 

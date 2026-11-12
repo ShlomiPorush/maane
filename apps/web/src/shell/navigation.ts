@@ -1,10 +1,10 @@
 // The pages in the navigation, in one list for the sidebar, the rail and the phone tab bar. Admin pages show only
 // to admins; an agent who opens one by its address sees a locked page that says why (pages/AdminOnly.tsx).
 
-import { History, Inbox, type LucideIcon, Settings, Users } from "lucide-react"
+import { Building2, History, Inbox, type LucideIcon, Settings, Users } from "lucide-react"
 
 export type NavPage = {
-  id: "home" | "users" | "settings" | "audit"
+  id: "home" | "organizations" | "users" | "settings" | "audit"
   to: string
   icon: LucideIcon
   /** Only for the admin role. */
@@ -13,6 +13,7 @@ export type NavPage = {
 
 export const NAV: readonly NavPage[] = [
   { id: "home", to: "/", icon: Inbox, admin: false },
+  { id: "organizations", to: "/organizations", icon: Building2, admin: true },
   { id: "users", to: "/users", icon: Users, admin: true },
   { id: "settings", to: "/settings", icon: Settings, admin: true },
   { id: "audit", to: "/audit", icon: History, admin: true },

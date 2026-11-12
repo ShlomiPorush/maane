@@ -3,7 +3,7 @@
 // map here, through one table, to a locale key: short, truthful, and saying what to do next. The server's own
 // English message is never shown. A code the table does not know falls back by its HTTP status.
 
-import { PASSWORD_MAX, PASSWORD_MIN, USERNAME_MAX, USERNAME_MIN } from "@maane/shared"
+import { ORGANIZATION_NAME_MAX, PASSWORD_MAX, PASSWORD_MIN, USERNAME_MAX, USERNAME_MIN } from "@maane/shared"
 import { AuthCallError, type AuthError } from "./auth.ts"
 import { ApiError } from "./client.ts"
 
@@ -18,6 +18,21 @@ export const ERROR_TEXT: Record<string, string> = {
   setting_locked: "errors.code.settingLocked",
   setting_invalid: "errors.code.settingInvalid",
   setting_unknown: "errors.code.settingUnknown",
+  request_invalid: "errors.code.requestInvalid",
+  organization_not_found: "errors.code.organizationNotFound",
+  organization_name_invalid: "errors.code.organizationNameInvalid",
+  organization_name_taken: "errors.code.organizationNameTaken",
+  organization_in_use: "errors.code.organizationInUse",
+  member_not_agent: "errors.code.memberNotAgent",
+  member_exists: "errors.code.memberExists",
+  member_not_found: "errors.code.memberNotFound",
+  address_invalid: "errors.code.addressInvalid",
+  pattern_invalid: "errors.code.patternInvalid",
+  address_taken: "errors.code.addressTaken",
+  address_not_found: "errors.code.addressNotFound",
+  address_default_not_exact: "errors.code.addressDefaultNotExact",
+  intake_no_default_address: "errors.code.intakeNoDefaultAddress",
+  intake_default_required: "errors.code.intakeDefaultRequired",
   internal: "errors.server",
   // Maane's refusals on Better Auth's routes (apps/server/src/auth/auth.ts)
   UNAUTHORIZED: "errors.code.unauthorized",
@@ -67,8 +82,9 @@ export const STATUS_TEXT = {
   unexpected: "errors.unexpected",
 } as const
 
-/** The numbers some sentences name (password and username lengths). */
+/** The numbers some sentences name (password, username, and organization name lengths). */
 export const ERROR_VARS = {
+  nameMax: ORGANIZATION_NAME_MAX,
   passwordMin: PASSWORD_MIN,
   passwordMax: PASSWORD_MAX,
   usernameMin: USERNAME_MIN,

@@ -30,7 +30,8 @@
     "home": "Tickets",
     "users": "Users",
     "settings": "Settings",
-    "audit": "Audit log"
+    "audit": "Audit log",
+    "organizations": "Organizations"
   },
   "shell": {
     "tagline": "Email helpdesk",
@@ -126,7 +127,22 @@
       "banSelf": "You cannot disable your own account.",
       "settingLocked": "This setting is set by the environment and cannot be changed here.",
       "settingInvalid": "That value is not valid.",
-      "settingUnknown": "Maane does not know this setting. Reload the page."
+      "settingUnknown": "Maane does not know this setting. Reload the page.",
+      "requestInvalid": "Maane refused the request. Reload the page and try again.",
+      "organizationNotFound": "This organization no longer exists. It may have been deleted; go back to the list.",
+      "organizationNameInvalid": "Give the organization a name of 1 to {nameMax} characters.",
+      "organizationNameTaken": "Another organization has this name. Choose another one.",
+      "organizationInUse": "This organization still has support addresses or agents. Remove them first.",
+      "memberNotAgent": "Only agents can be added. Admins see every organization already.",
+      "memberExists": "This agent is already in the organization.",
+      "memberNotFound": "This agent is no longer in the organization. Reload the page.",
+      "addressInvalid": "That is not a valid address. Write it like support@example.com.",
+      "patternInvalid": "That pattern is not valid. Write a whole address with * before the @, like support-*@example.com.",
+      "addressTaken": "This address or pattern already belongs to an organization.",
+      "addressNotFound": "This address no longer exists. Reload the page.",
+      "addressDefaultNotExact": "Only an exact address can be the default address.",
+      "intakeNoDefaultAddress": "Live intake needs a default address. Make an exact address the default under Organizations first.",
+      "intakeDefaultRequired": "Intake is live, so the default address cannot be removed. Make another address the default first, or switch intake to listening."
     }
   },
   "auth": {
@@ -361,7 +377,19 @@
     },
     "invalid": "{field}: the value is not valid.",
     "refusedField": "{field}: {reason}",
-    "saved": "The settings are saved."
+    "saved": "The settings are saved.",
+    "intake": "Intake",
+    "intakeMode": {
+      "label": "Intake mode",
+      "mode": {
+        "listening": "Listening",
+        "live": "Live"
+      },
+      "explain": {
+        "listening": "Listening: Maane records each message and what it would have done, and opens no ticket. Use it until cutover.",
+        "live": "Live: each message opens a ticket or joins one. It needs a default address."
+      }
+    }
   },
   "audit": {
     "title": "Audit log",
@@ -382,7 +410,11 @@
       "role": "Role",
       "setting": "Setting",
       "value": "Value",
-      "stage": "Step"
+      "stage": "Step",
+      "organization": "Organization",
+      "previousName": "Previous name",
+      "address": "Address",
+      "previousDefault": "Previous default"
     },
     "stage": {
       "password": "password",
@@ -413,7 +445,121 @@
       },
       "setting": {
         "update": "Setting changed"
+      },
+      "organization": {
+        "create": "Organization added",
+        "rename": "Organization renamed",
+        "delete": "Organization deleted",
+        "member_add": "Agent added to an organization",
+        "member_remove": "Agent removed from an organization",
+        "address_add": "Support address added",
+        "address_remove": "Support address removed",
+        "address_default": "Default address changed"
       }
+    }
+  },
+  "organizations": {
+    "title": "Organizations",
+    "description": "Who Maane answers for, on which addresses, and which agents see their mail.",
+    "listTitle": "All organizations",
+    "loading": "Loading the organizations",
+    "failed": "Could not load the organizations",
+    "empty": "No organizations yet",
+    "emptyHint": "Add one, then give it its support addresses and agents.",
+    "create": "Add organization",
+    "createTitle": "Add an organization",
+    "creating": "Adding",
+    "createDone": "{name} is added.",
+    "name": "Name",
+    "nameRule": "1 to {max} characters. Customers see it in the sender name.",
+    "holdsDefault": "Default address",
+    "addressCount": {
+      "one": "1 address",
+      "two": "2 addresses",
+      "other": "{count} addresses"
+    },
+    "memberCount": {
+      "one": "1 agent",
+      "two": "2 agents",
+      "other": "{count} agents"
+    },
+    "check": {
+      "title": "Which organization gets this address?",
+      "hint": "Type an address customers write to. Maane answers the way intake does: an exact address first, then the most specific pattern, then the default address.",
+      "label": "Address",
+      "submit": "Check",
+      "checking": "Checking",
+      "exact": "{organization} gets it: the exact address {rule}.",
+      "pattern": "{organization} gets it, through the pattern {rule}.",
+      "default": "No address or pattern matches, so the default address {rule} of {organization} applies.",
+      "none": "No address or pattern matches, and there is no default address. Intake flags such a message for review.",
+      "open": "Open {name}"
+    }
+  },
+  "organization": {
+    "loadingTitle": "Organization",
+    "description": "Its support addresses, and the agents who see its mail.",
+    "loading": "Loading the organization",
+    "failed": "Could not load the organization",
+    "back": "All organizations",
+    "rename": "Rename",
+    "renameTitle": "Rename {name}",
+    "renaming": "Renaming",
+    "renameDone": "Renamed to {name}.",
+    "delete": "Delete",
+    "deleteTitle": "Delete {name}?",
+    "deleteMessage": "The organization is removed for good.",
+    "deleteDone": "{name} is deleted.",
+    "deleteInUse": "{name} still has support addresses or agents. Remove them first.",
+    "actionFailed": "Could not change {name}. {reason}",
+    "kind": {
+      "exact": "Exact address",
+      "pattern": "Pattern"
+    },
+    "kindHint": {
+      "exact": "One address, for example support@example.com.",
+      "pattern": "A whole address with * for one or more characters before the @, for example support-*@example.com."
+    },
+    "addresses": {
+      "title": "Support addresses",
+      "empty": "No support addresses yet",
+      "emptyHint": "Add the exact addresses and patterns customers write to.",
+      "add": "Add address",
+      "addTitle": "Add a support address",
+      "adding": "Adding",
+      "addDone": "{value} is added.",
+      "kind": "Kind",
+      "value": "Address or pattern",
+      "default": "Default",
+      "defaultHint": "Mail whose support address cannot be identified comes here.",
+      "added": "Added",
+      "actions": "Actions for {value}",
+      "setDefault": "Make default",
+      "setDefaultDone": "{value} is now the default address.",
+      "remove": "Remove",
+      "removeTitle": "Remove {value}?",
+      "removeMessage": "New mail to it no longer reaches this organization. Tickets that already came in keep it.",
+      "removeDone": "{value} is removed."
+    },
+    "members": {
+      "title": "Agents",
+      "intro": "Agents see only the tickets of their organizations. Admins see every organization without being added.",
+      "empty": "No agents yet",
+      "emptyHint": "Add the agents who answer this organization's mail.",
+      "add": "Add agent",
+      "addTitle": "Add an agent to {name}",
+      "adding": "Adding",
+      "addDone": "{name} is added.",
+      "loadingAgents": "Loading the agents",
+      "noAgents": "Every agent is already in this organization, or there are no agents yet. Add agents on the Users page.",
+      "toUsers": "Open Users",
+      "choose": "Agent",
+      "remove": "Remove {name}",
+      "removeTitle": "Remove {name} from {organization}?",
+      "removeMessage": "They stop seeing this organization's tickets at once.",
+      "removeDone": "{name} is removed.",
+      "disabled": "Disabled",
+      "added": "Added"
     }
   }
 }

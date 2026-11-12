@@ -158,7 +158,7 @@ describe("the session gate", () => {
     await renderAt("/", { "/api/setup/status": status(), "/api/v1/me": admin })
     await vi.waitFor(() => expect(text()).toContain(he("home.emptyTitle")))
     const nav = document.querySelector(".ui-sidenav")?.textContent ?? ""
-    for (const id of ["home", "users", "settings", "audit"]) expect(nav).toContain(he(`nav.${id}`))
+    for (const id of ["home", "organizations", "users", "settings", "audit"]) expect(nav).toContain(he(`nav.${id}`))
   })
 
   it("hides admin pages from an agent and locks them on a direct address, without reading them", async () => {
@@ -168,7 +168,7 @@ describe("the session gate", () => {
     await vi.waitFor(() => expect(text()).toContain(he("adminOnly.title")))
     const nav = document.querySelector(".ui-sidenav")?.textContent ?? ""
     expect(nav).toContain(he("nav.home"))
-    for (const id of ["users", "settings", "audit"]) expect(nav).not.toContain(he(`nav.${id}`))
+    for (const id of ["organizations", "users", "settings", "audit"]) expect(nav).not.toContain(he(`nav.${id}`))
     expect(auth.listUsers).not.toHaveBeenCalled()
   })
 
@@ -426,6 +426,161 @@ describe("settings", () => {
     await vi.waitFor(() => expect(text()).toContain(he("settings.saved")))
     expect(days.value).toBe("21")
     expect(document.querySelector(".ui-savebar")).not.toBeNull()
+  })
+})
+
+describe("organizations", () => {
+  const ORG = "0d7c6f0e-6a55-4b8e-9c55-5f0b6a3e2a11"
+  const button = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+  const when = "2026-11-12T08:00:00.000Z"
+  const detail = ok({
+    organization: { id: ORG, name: "Example Support", createdAt: when },
+    addresses: [
+      { id: "a1", kind: "exact", value: "help@example.com", isDefault: true, createdAt: when },
+      { id: "a2", kind: "pattern", value: "*@example.org", isDefault: false, createdAt: when },
+    ],
+    members: [{ userId: "u2", username: "agent.one", role: "agent", banned: false, createdAt: when }],
+  })
+
+  it("lists each organization with its counts and the default mark, and opens it from its row", async () => {
+    await renderAt("/organizations", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/organizations": ok({
+        organizations: [
+          { id: ORG, name: "Example Support", createdAt: when, addresses: 2, members: 1, hasDefault: true },
+        ],
+      }),
+      [`/api/v1/admin/organizations/${ORG}`]: detail,
+    })
+    const row = await vi.waitFor(() => {
+      const link = document.querySelector<HTMLAnchorElement>('a[data-organization="Example Support"]')
+      expect(link).not.toBeNull()
+      return link as HTMLAnchorElement
+    })
+    expect(row.textContent).toContain(translate("he", "organizations.addressCount.two", { count: "2" }))
+    expect(row.textContent).toContain(he("organizations.holdsDefault"))
+    await act(async () => row.click())
+    await vi.waitFor(() => expect(where()).toBe(`/organizations/${ORG}`))
+    await vi.waitFor(() => expect(document.querySelector('[data-address="help@example.com"]')).not.toBeNull())
+  })
+
+  it("answers the address check from the server, and refuses a value that is not an address before asking", async () => {
+    await renderAt("/organizations", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/organizations": ok({ organizations: [] }),
+      "/api/v1/admin/organizations/address-check": ok({
+        address: "billing@example.org",
+        via: "pattern",
+        organization: { id: ORG, name: "Example Support" },
+        rule: { id: "a2", kind: "pattern", value: "*@example.org" },
+      }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("organizations.empty")))
+    const field = document.querySelector<HTMLInputElement>(".ui-check-form input") as HTMLInputElement
+    await act(async () => type(field, "not an address"))
+    await act(async () => button(he("organizations.check.submit"))?.click())
+    expect(text()).toContain(he("errors.code.addressInvalid"))
+    expect(requests.some((r) => r.url.includes("address-check"))).toBe(false)
+
+    await act(async () => type(field, "Billing@example.org"))
+    await act(async () => button(he("organizations.check.submit"))?.click())
+    await vi.waitFor(() => expect(text()).toContain("*@example.org"))
+    const asked = requests.find((r) => r.url.includes("address-check"))
+    expect(asked?.url).toBe("/api/v1/admin/organizations/address-check?address=Billing%40example.org")
+    // The address shows isolated left to right inside the right-to-left page.
+    expect(document.querySelector('.ui-banner bdi[dir="ltr"]')?.textContent).toBe("billing@example.org")
+  })
+
+  it("shows the addresses with their kind and the default mark, and the agents", async () => {
+    await renderAt(`/organizations/${ORG}`, {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      [`/api/v1/admin/organizations/${ORG}`]: detail,
+    })
+    const exact = await vi.waitFor(() => {
+      const row = document.querySelector('[data-address="help@example.com"]')
+      expect(row).not.toBeNull()
+      return row as HTMLElement
+    })
+    expect(exact.textContent).toContain(he("organization.kind.exact"))
+    expect(exact.textContent).toContain(he("organization.addresses.default"))
+    expect(exact.querySelector('bdi[dir="ltr"]')?.textContent).toBe("help@example.com")
+    const pattern = document.querySelector('[data-address="*@example.org"]')
+    expect(pattern?.textContent).toContain(he("organization.kind.pattern"))
+    expect(pattern?.textContent).not.toContain(he("organization.addresses.default"))
+    expect(document.querySelector('[data-member="agent.one"]')).not.toBeNull()
+  })
+
+  it("checks a new pattern's syntax before sending it, and sends a valid one in lower case", async () => {
+    await renderAt(`/organizations/${ORG}`, {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      [`/api/v1/admin/organizations/${ORG}`]: detail,
+      [`/api/v1/admin/organizations/${ORG}/addresses`]: { status: 201, body: { address: { id: "a3" } } },
+    })
+    await vi.waitFor(() => expect(button(he("organization.addresses.add"))).toBeDefined())
+    await act(async () => button(he("organization.addresses.add"))?.click())
+    const dialog = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[role=dialog]")
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    const pattern = dialog.querySelector<HTMLInputElement>('input[value="pattern"]') as HTMLInputElement
+    await act(async () => pattern.click())
+    const value = dialog.querySelector<HTMLInputElement>('input[type="text"]') as HTMLInputElement
+    await act(async () => type(value, "*@*.example.com"))
+    const submit = () => document.querySelector<HTMLButtonElement>("[role=dialog] .ui-dialog-foot button[type=submit]")
+    await act(async () => submit()?.click())
+    expect(dialog.textContent).toContain(he("errors.code.patternInvalid"))
+    expect(requests.some((r) => r.method === "POST")).toBe(false)
+
+    await act(async () => type(value, "Support-*@Example.com"))
+    await act(async () => submit()?.click())
+    await vi.waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true))
+    const sent = requests.find((r) => r.method === "POST")
+    expect(JSON.parse(sent?.body ?? "{}")).toEqual({ kind: "pattern", value: "support-*@example.com" })
+  })
+
+  it("explains both intake modes in Settings, and points a refused switch to live at its field", async () => {
+    const view = (key: string, value: unknown) => ({
+      key,
+      value,
+      secret: false,
+      set: true,
+      locked: false,
+      variable: null,
+    })
+    await renderAt("/settings", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": (request) =>
+        request.method === "PUT"
+          ? { status: 409, body: { error: "intake_no_default_address", key: "intake.mode" } }
+          : ok({
+              settings: [
+                view("general.defaultLocale", "he"),
+                view("security.sessionDays", 14),
+                view("intake.mode", "listening"),
+              ],
+            }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("settings.intakeMode.explain.listening")))
+    expect(text()).toContain(he("settings.intakeMode.explain.live"))
+    expect(document.querySelector('button[data-mode="listening"]')?.getAttribute("aria-pressed")).toBe("true")
+    await act(async () => document.querySelector<HTMLButtonElement>('button[data-mode="live"]')?.click())
+    await act(async () => document.querySelector<HTMLButtonElement>(".ui-savebar-save")?.click())
+    await vi.waitFor(() =>
+      expect(text()).toContain(
+        he("settings.refusedField", {
+          field: he("settings.intakeMode.label"),
+          reason: he("errors.code.intakeNoDefaultAddress"),
+        }),
+      ),
+    )
+    expect(JSON.parse(requests.find((r) => r.method === "PUT")?.body ?? "{}")).toEqual({ "intake.mode": "live" })
   })
 })
 
