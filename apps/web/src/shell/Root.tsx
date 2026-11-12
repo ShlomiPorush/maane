@@ -92,7 +92,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
   if (me.data)
     return (
       <>
-        <SessionKeeper seen={sessionUser} />
+        <SessionKeeper seen={sessionUser} shown={`${me.data.id}:${me.data.role}`} />
         <Fragment key={`${me.data.id}:${me.data.role}`}>{children}</Fragment>
       </>
     )
@@ -109,25 +109,28 @@ export function SessionGate({ children }: { children: ReactNode }) {
  * when the answer says so). When it learns that the session is gone (signed out in another tab), the gate checks
  * again and goes to sign-in. When it shows another user, another role, or two-factor turned on or off (signed in as
  * someone else in another tab, a changed role, two-factor turned off in another tab), unsaved changes are dropped and
- * every cached read starts again: Maane's API then answers for the new state (another user, or enrollment).
+ * every cached read starts again: Maane's API then answers for the new state (another user, or enrollment). The same
+ * happens when the session's user and role differ from those the pages show (`shown`, from Maane's API), also on the
+ * session's first answer.
  */
-function SessionKeeper({ seen }: { seen: RefObject<string | null> }) {
+function SessionKeeper({ seen, shown }: { seen: RefObject<string | null>; shown: string }) {
   const queryClient = useQueryClient()
   const clearUnsaved = useClearUnsaved()
   const { data, isPending } = authClient.useSession()
   const user = data?.user as { id?: string; role?: string | null; twoFactorEnabled?: boolean | null } | undefined
   const identity = user?.id ? `${user.id}:${user.role ?? ""}:${user.twoFactorEnabled ? "2fa" : ""}` : null
+  const sessionUser = user?.id ? `${user.id}:${user.role ?? ""}` : null
   useEffect(() => {
     if (identity) {
       const before = seen.current
       seen.current = identity
-      if (before && before !== identity) {
+      if ((before && before !== identity) || sessionUser !== shown) {
         clearUnsaved()
         // An open question (it lives outside the pages) must not run the previous identity's action.
         dismissQuestions()
         void queryClient.resetQueries()
       }
     } else if (!isPending && seen.current) void queryClient.invalidateQueries({ queryKey: qk.me })
-  }, [identity, isPending, seen, clearUnsaved, queryClient])
+  }, [identity, sessionUser, shown, isPending, seen, clearUnsaved, queryClient])
   return null
 }

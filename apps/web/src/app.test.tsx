@@ -47,7 +47,10 @@ vi.mock("./api/auth.ts", async (importOriginal) => {
   return {
     ...real,
     authClient: {
-      useSession: () => ({ data: useSyncExternalStore(session.subscribe, session.get), isPending: false }),
+      useSession: () => ({
+        data: useSyncExternalStore(session.subscribe, session.get),
+        isPending: session.get() === null,
+      }),
       listSessions: auth.listSessions,
       revokeOtherSessions: auth.revokeOtherSessions,
       signOut: () => Promise.resolve({ data: {}, error: null }),
@@ -155,6 +158,8 @@ describe("the session gate", () => {
   })
 
   it("hides admin pages from an agent and locks them on a direct address, without reading them", async () => {
+    // The session and Maane's API agree on who is signed in, as they do with one cookie.
+    session.set({ session: { id: "current" }, user: { id: "u2", role: "agent" } })
     await renderAt("/users", { "/api/setup/status": status(), "/api/v1/me": agent })
     await vi.waitFor(() => expect(text()).toContain(he("adminOnly.title")))
     const nav = document.querySelector(".ui-sidenav")?.textContent ?? ""
@@ -507,6 +512,78 @@ describe("identity changes while a page is open", () => {
     await act(async () => session.set({ session: { id: "other" }, user: { id: "u2", role: "agent" } }))
     await vi.waitFor(() => expect(text()).toContain("agent.one"))
     expect(document.querySelector("[role=alertdialog]")).toBeNull()
+    expect(auth.revokeOtherSessions).not.toHaveBeenCalled()
+  })
+})
+
+describe("questions open while the session changes", () => {
+  const button = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+
+  it("dismisses the pending destructive question before sign-in on 401", async () => {
+    const at = new Date().toISOString()
+    auth.listSessions.mockResolvedValue({
+      data: ["current", "other"].map((id) => ({ id, token: id, createdAt: at, expiresAt: at })),
+      error: null,
+    })
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/review-expiry": signedOut,
+    }
+    await renderAt("/account", answers)
+    await vi.waitFor(() => expect(button(he("account.endOthers"))).toBeDefined())
+    await act(async () => button(he("account.endOthers"))?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
+    answers["/api/v1/me"] = signedOut
+    const { request } = await import("./api/client.ts")
+    await act(async () => {
+      await request("GET", "/review-expiry").catch(() => {})
+    })
+    await vi.waitFor(() => expect(where()).toBe("/login?next=%2Faccount"))
+    expect(document.querySelector("[role=alertdialog]")).toBeNull()
+    expect(auth.revokeOtherSessions).not.toHaveBeenCalled()
+  })
+
+  it("cancels the discard question without closing anything belonging to the next identity", async () => {
+    const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": admin }
+    await renderAt("/account", answers)
+    await vi.waitFor(() => expect(button(he("account.change"))).toBeDefined())
+    await act(async () => button(he("account.change"))?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=dialog] input")).not.toBeNull())
+    await act(async () => type(document.querySelector("[role=dialog] input") as HTMLInputElement, crypto.randomUUID()))
+    await act(async () => document.querySelector<HTMLButtonElement>("[role=dialog] .ui-dialog-head button")?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
+    answers["/api/v1/me"] = agent
+    await act(async () => session.set({ session: { id: "other" }, user: { id: "u2", role: "agent" } }))
+    await vi.waitFor(() => expect(text()).toContain("agent.one"))
+    expect(document.querySelector("[role=alertdialog]")).toBeNull()
+    expect(document.querySelector("[role=dialog]")).toBeNull()
+    await act(async () => button(he("account.change"))?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=dialog] input")).not.toBeNull())
+    expect((document.querySelector("[role=dialog] input") as HTMLInputElement).value).toBe("")
+  })
+})
+
+describe("a session that arrives after the page shows a user", () => {
+  it("cancels an old question when the first Better Auth identity arrives after me", async () => {
+    session.set(null)
+    const at = new Date().toISOString()
+    auth.listSessions.mockResolvedValue({
+      data: ["current", "other"].map((id) => ({ id, token: id, createdAt: at, expiresAt: at })),
+      error: null,
+    })
+    const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": admin }
+    await renderAt("/account", answers)
+    const button = (label: string) =>
+      Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+    await vi.waitFor(() => expect(button(he("account.endOthers"))).toBeDefined())
+    await act(async () => button(he("account.endOthers"))?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
+    answers["/api/v1/me"] = agent
+    await act(async () => session.set({ session: { id: "other" }, user: { id: "u2", role: "agent" } }))
+    auth.revokeOtherSessions.mockResolvedValue({ data: { status: true }, error: null })
+    await act(async () => document.querySelector<HTMLButtonElement>("[role=alertdialog] .ui-btn-danger-solid")?.click())
     expect(auth.revokeOtherSessions).not.toHaveBeenCalled()
   })
 })

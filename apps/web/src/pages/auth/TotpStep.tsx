@@ -38,6 +38,15 @@ export function TotpStep({
   const [error, setError] = useState<string | null>(null)
   const [signOutOthersFailed, setSignOutOthersFailed] = useState(false)
   const started = useRef(false)
+  // False once the step is left: a late answer must not start another account-wide request, which would go out with
+  // whatever session the browser holds by then.
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   const start = async (typed: string) => {
     setBusy(true)
@@ -85,7 +94,9 @@ export function TotpStep({
     setBusy(true)
     try {
       for (let attempt = 0; attempt < SIGN_OUT_OTHERS_TRIES; attempt++) {
+        if (!mounted.current) return
         const answer = await authClient.revokeOtherSessions().catch(() => ({ error: { status: 0 } }))
+        if (!mounted.current) return
         if (!answer.error) {
           setSignOutOthersFailed(false)
           onEnrolled(codes)

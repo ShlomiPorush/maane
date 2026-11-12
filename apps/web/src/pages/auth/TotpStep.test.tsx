@@ -136,3 +136,29 @@ describe("two-factor enrollment", () => {
     await vi.waitFor(() => expect(enrolled).toHaveBeenCalledWith(codes))
   })
 })
+
+describe("enrollment after it is left", () => {
+  it("does not send another account-wide mutation after the old enrollment unmounts", async () => {
+    let release: (value: unknown) => void = () => {}
+    let identity = "A"
+    const sentBy: string[] = []
+    enroll.verifyTotp.mockResolvedValue({ data: {}, error: null })
+    enroll.revokeOtherSessions.mockImplementation(() => {
+      sentBy.push(identity)
+      if (sentBy.length === 1)
+        return new Promise((resolve) => {
+          release = resolve
+        })
+      return Promise.resolve({ data: { status: true }, error: null })
+    })
+    await start()
+    await typeCode("123456")
+    await vi.waitFor(() => expect(sentBy).toEqual(["A"]))
+    await act(async () => root.render(null))
+    identity = "B"
+    await act(async () => release({ data: null, error: { status: 500 } }))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(sentBy).toEqual(["A"])
+    expect(enrolled).not.toHaveBeenCalled()
+  })
+})
