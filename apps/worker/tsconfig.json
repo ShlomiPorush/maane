@@ -1,4 +1,6 @@
 {
   "extends": "../../config/tsconfig.base.json",
+  // The worker runs on Node 26: String.prototype.toWellFormed (ES2024) makes intake text storable (plan 2.3, P22).
+  "compilerOptions": { "lib": ["ES2024"] },
   "include": ["src", "vitest.config.ts"]
 }

@@ -56,7 +56,9 @@ function answer(content: Buffer, options: StandInOptions): string | null {
   if (options.alertsOnEverything) return "stream: Win.Test.StandIn FOUND"
   if (
     !options.noSignatures &&
-    (text.includes(MARKERS.infected) || (text.startsWith(EICAR_START) && text.includes(EICAR_END)))
+    // EICAR anywhere in the stream, as a signature without an offset finds it: intake scans text fields in which
+    // a sender may have put it after other text (plan 2.3, review G1).
+    (text.includes(MARKERS.infected) || (text.includes(EICAR_START) && text.includes(EICAR_END)))
   )
     return "stream: Eicar-Test-Signature FOUND"
   if (text.includes(MARKERS.limits)) return "stream: Heuristics.Limits.Exceeded.MaxFileSize FOUND"

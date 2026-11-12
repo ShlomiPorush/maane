@@ -49,6 +49,7 @@ export const AUDIT_ACTIONS = [
   "organization.address_default",
   "organization.memberships_clear",
   "file.blocked",
+  "message.content_blocked",
 ] as const
 
 const KNOWN = new Set<string>(AUDIT_ACTIONS)

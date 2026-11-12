@@ -133,6 +133,7 @@
       "organizationNameInvalid": "Give the organization a name of 1 to {nameMax} characters.",
       "organizationNameTaken": "Another organization has this name. Choose another one.",
       "organizationInUse": "This organization still has support addresses or agents. Remove them first.",
+      "organizationHasMail": "This organization has mail history (tickets or intake records), so Maane keeps it. It cannot be deleted; you can rename it.",
       "memberNotAgent": "Only agents can be added. Admins see every organization already.",
       "memberExists": "This agent is already in the organization.",
       "memberNotFound": "This agent is no longer in the organization. Reload the page.",
@@ -390,6 +391,56 @@
         "live": "Live: each message opens a ticket or joins one. It needs a default address."
       }
     },
+    "graphGroup": "Microsoft Graph",
+    "graphIntro": "Maane reads the intake mailbox through Microsoft Graph, read only. It never moves, marks, or deletes mail.",
+    "graphTenant": {
+      "label": "Tenant",
+      "hint": "The Entra tenant's ID, or one of its domain names, like {example}."
+    },
+    "graphClient": {
+      "label": "Application (client) ID",
+      "hint": "The ID of the Entra application that may read the intake mailbox."
+    },
+    "graphSecret": {
+      "label": "Client secret",
+      "hint": "Stored encrypted and never shown again. Type a new secret to replace it; leave the field empty to keep it.",
+      "set": "Set",
+      "notSet": "Not set",
+      "replace": "Type a new secret to replace it",
+      "enter": "Paste the client secret"
+    },
+    "graphMailbox": {
+      "label": "Intake mailbox",
+      "hint": "The shared mailbox the transport rules copy mail to, like {example}. Another mailbox starts a new intake source; what Maane already took in stays."
+    },
+    "graph": {
+      "test": {
+        "label": "Connection",
+        "hint": "Reads only the Inbox folder details of the saved mailbox. A pass does not show that the permission is limited to this mailbox: check that in Exchange as the deployment notes describe.",
+        "button": "Test Graph",
+        "testing": "Testing...",
+        "saveFirst": "Save the Graph settings first: the test uses the saved ones.",
+        "notTested": "Not tested yet",
+        "notTestedNote": "Save the settings, then test the connection.",
+        "passed": "Connected",
+        "failed": "Failed",
+        "checked": "Checked",
+        "code": "Code",
+        "mailbox": "Mailbox",
+        "okToast": "Maane can read the intake mailbox.",
+        "failedToast": "The connection test failed: {problem}",
+        "noAnswer": "The test did not finish. Check that the worker is running, then try again."
+      },
+      "problem": {
+        "not_configured": "A tenant, application, secret, or mailbox is missing.",
+        "credential": "Entra refused the tenant, the application, or the secret.",
+        "access_denied": "Graph refused access to this mailbox.",
+        "not_found": "Graph did not find this mailbox.",
+        "throttled": "Graph asked Maane to slow down. Try again in a minute.",
+        "network": "Graph did not answer. Check the server's network.",
+        "error": "Graph answered with an error."
+      }
+    },
     "files": "Files and scanning",
     "filesIntro": "Maane scans every file with ClamAV before it keeps it. An infected file or a blocked type is never stored.",
     "scanner": {
@@ -517,6 +568,9 @@
       },
       "file": {
         "blocked": "File blocked"
+      },
+      "message": {
+        "content_blocked": "Message content blocked"
       }
     }
   },

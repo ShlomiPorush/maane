@@ -7,14 +7,22 @@
 // save is on its way keeps its new text: a save takes out of the draft only what it sent. The intake mode has no
 // variable; the server refuses live without a default address (intake_no_default_address) and the refusal points
 // at its field. Files and scanning (phase 2.2) shows the scanner's latest self-test and a connection test the
-// worker runs: the page queues it and reads its state until it is done (the server never calls the scanner).
+// worker runs: the page queues it and reads its state until it is done (the server never calls the scanner). Microsoft
+// Graph (phase 2.3) holds the tenant, the application, its client secret (write only: the page shows whether one is
+// set, never the value, and an empty field keeps it), and the intake mailbox, and a connection test the worker runs the
+// same way: it reads only the mailbox's Inbox folder details and reports Graph's error code.
 
 import {
   BLOCKED_TYPE,
   BLOCKED_TYPES_MAX,
   FILES_MAX_BYTES_MAX,
   FILES_MAX_BYTES_MIN,
+  GRAPH_SECRET_MAX,
+  type GraphTestResult,
   INTAKE_MODES,
+  isClientId,
+  isMailbox,
+  isTenantId,
   LOCALES,
   MEGABYTE,
   normalizeBlockedTypes,
@@ -52,6 +60,10 @@ export const SETTING_ROWS: readonly SettingKey[] = [
   "general.defaultLocale",
   "security.sessionDays",
   "intake.mode",
+  "graph.tenantId",
+  "graph.clientId",
+  "graph.clientSecret",
+  "graph.mailbox",
   "scanner.address",
   "scanner.unavailablePolicy",
   "scanner.scanTimeoutSeconds",
@@ -69,6 +81,9 @@ const TEST_POLL_MS = 1_500
 const TEST_WAIT_MS = 90_000
 
 type Draft = Partial<Record<SettingKey, string>>
+
+/** The Graph fields: the connection test uses their saved values, so it waits while one of them is unsaved. */
+const GRAPH_KEYS: readonly SettingKey[] = ["graph.tenantId", "graph.clientId", "graph.clientSecret", "graph.mailbox"]
 
 /** A value as its field shows it: the size in MB, the blocked types one list. */
 export function settingText(key: SettingKey, value: unknown): string {
@@ -102,6 +117,11 @@ export function parseSetting(key: SettingKey, text: string): unknown {
     return list.length <= BLOCKED_TYPES_MAX && list.every((entry) => BLOCKED_TYPE.test(entry)) ? list : null
   }
   if (key === "scanner.address") return parseScannerAddress(text.trim()) ? text.trim() : null
+  if (key === "graph.tenantId") return text.trim() === "" || isTenantId(text.trim()) ? text.trim() : null
+  if (key === "graph.clientId") return text.trim() === "" || isClientId(text.trim()) ? text.trim() : null
+  if (key === "graph.mailbox") return text.trim() === "" || isMailbox(text.trim()) ? text.trim().toLowerCase() : null
+  if (key === "graph.clientSecret")
+    return text.length <= GRAPH_SECRET_MAX && /^\S(?:[^\r\n]*\S)?$/.test(text) ? text : null
   if (key === "scanner.unavailablePolicy") return (SCANNER_POLICIES as readonly string[]).includes(text) ? text : null
   if (key === "intake.mode") return (INTAKE_MODES as readonly string[]).includes(text) ? text : null
   return (LOCALES as readonly string[]).includes(text) ? text : null
@@ -135,12 +155,20 @@ function Settings() {
   const maxId = useId()
   const scanTimeoutId = useId()
   const typesId = useId()
+  const tenantId = useId()
+  const clientId = useId()
+  const secretId = useId()
+  const mailboxId = useId()
   const fieldRefs: Partial<Record<SettingKey, RefObject<HTMLInputElement | HTMLTextAreaElement | null>>> = {
     "security.sessionDays": useRef<HTMLInputElement>(null),
     "scanner.address": useRef<HTMLInputElement>(null),
     "files.maxBytes": useRef<HTMLInputElement>(null),
     "scanner.scanTimeoutSeconds": useRef<HTMLInputElement>(null),
     "files.blockedTypes": useRef<HTMLTextAreaElement>(null),
+    "graph.tenantId": useRef<HTMLInputElement>(null),
+    "graph.clientId": useRef<HTMLInputElement>(null),
+    "graph.clientSecret": useRef<HTMLInputElement>(null),
+    "graph.mailbox": useRef<HTMLInputElement>(null),
   }
   const views = new Map((query.data?.settings ?? []).map((view) => [view.key, view]))
 
@@ -216,7 +244,8 @@ function Settings() {
 
   /** A value that differs from its default: Changed, and Reset puts the default in the draft (FS-6). */
   const resetOf = (key: SettingKey) => {
-    if (lockOf(key) || !views.has(key)) return null
+    // A Graph field has no default to go back to: it is empty until the owner sets it.
+    if (lockOf(key) || !views.has(key) || GRAPH_KEYS.includes(key)) return null
     const fallback = SETTINGS[key].defaultValue
     if (sameValue(key, value(key), fallback)) return null
     const fallbackText = settingText(key, fallback)
@@ -237,20 +266,28 @@ function Settings() {
   const field = (
     key: SettingKey,
     id: string,
-    props: { className?: string; ltr?: boolean; numeric?: { min: number; max: number } },
+    props: {
+      className?: string
+      ltr?: boolean
+      numeric?: { min: number; max: number }
+      /** Write only: never filled from the server, and empty keeps the stored value. */
+      secret?: { placeholder: string }
+    },
   ) => (
     <input
       id={id}
       ref={fieldRefs[key] as RefObject<HTMLInputElement>}
       className={`ui-input ${props.className ?? ""}`.trim()}
-      type={props.numeric ? "number" : "text"}
+      data-setting={key}
+      type={props.numeric ? "number" : props.secret ? "password" : "text"}
+      placeholder={props.secret?.placeholder}
       inputMode={props.numeric ? "numeric" : undefined}
       min={props.numeric?.min}
       max={props.numeric?.max}
       step={props.numeric ? 1 : undefined}
       dir={props.ltr || props.numeric ? "ltr" : undefined}
       spellCheck={props.ltr ? false : undefined}
-      autoComplete="off"
+      autoComplete={props.secret ? "new-password" : "off"}
       disabled={Boolean(lockOf(key))}
       value={value(key)}
       aria-invalid={error?.key === key ? true : undefined}
@@ -271,6 +308,11 @@ function Settings() {
     const scanTimeout = "scanner.scanTimeoutSeconds" as const
     const maxBytes = "files.maxBytes" as const
     const types = "files.blockedTypes" as const
+    const tenant = "graph.tenantId" as const
+    const client = "graph.clientId" as const
+    const clientSecret = "graph.clientSecret" as const
+    const mailbox = "graph.mailbox" as const
+    const secret = views.get(clientSecret)
     body = (
       <>
         <StaleNote failed={query.isError} />
@@ -336,6 +378,52 @@ function Settings() {
                 </button>
               ))}
             </fieldset>
+          </Row>
+        </Group>
+        <Group id="settings-graph" title={t("settings.graphGroup")} intro={t("settings.graphIntro")}>
+          <GraphRow fieldsChanged={changed.some((key) => GRAPH_KEYS.includes(key))} />
+          <Row
+            label={t(labelKey(tenant))}
+            hint={t("settings.graphTenant.hint", { example: "example.onmicrosoft.com" })}
+            htmlFor={tenantId}
+            lock={lockOf(tenant)}
+          >
+            {field(tenant, tenantId, { className: "ui-mono", ltr: true })}
+          </Row>
+          <Row
+            label={t(labelKey(client))}
+            hint={t("settings.graphClient.hint")}
+            htmlFor={clientId}
+            lock={lockOf(client)}
+          >
+            {field(client, clientId, { className: "ui-mono", ltr: true })}
+          </Row>
+          <Row
+            label={t(labelKey(clientSecret))}
+            hint={t("settings.graphSecret.hint")}
+            htmlFor={secretId}
+            lock={lockOf(clientSecret)}
+          >
+            <span className="ui-scanner-line">
+              <Tag tone={secret?.set ? "ok" : "neutral"}>
+                {secret?.set ? t("settings.graphSecret.set") : t("settings.graphSecret.notSet")}
+              </Tag>
+            </span>
+            {field(clientSecret, secretId, {
+              className: "ui-mono",
+              ltr: true,
+              secret: {
+                placeholder: secret?.set ? t("settings.graphSecret.replace") : t("settings.graphSecret.enter"),
+              },
+            })}
+          </Row>
+          <Row
+            label={t(labelKey(mailbox))}
+            hint={t("settings.graphMailbox.hint", { example: "intake@example.com" })}
+            htmlFor={mailboxId}
+            lock={lockOf(mailbox)}
+          >
+            {field(mailbox, mailboxId, { ltr: true })}
           </Row>
         </Group>
         <Group id="settings-files" title={t("settings.files")} intro={t("settings.filesIntro")}>
@@ -441,6 +529,103 @@ function Settings() {
         }}
       />
     </div>
+  )
+}
+
+/**
+ * The Graph connection test: the worker reads the saved mailbox's Inbox folder details and nothing else, and the page
+ * reads the job's state until it is done. The result stays on the page until it is left; nothing stores it. The test
+ * waits while a Graph field is unsaved, because it uses the saved settings.
+ */
+function GraphRow({ fieldsChanged }: { fieldsChanged: boolean }) {
+  const { t } = useI18n()
+  const [testing, setTesting] = useState(false)
+  const [result, setResult] = useState<GraphTestResult | null>(null)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
+  const test = async () => {
+    setTesting(true)
+    try {
+      const { id } = await api.testGraph()
+      const until = Date.now() + TEST_WAIT_MS
+      while (mounted.current && Date.now() < until) {
+        await new Promise((resolve) => setTimeout(resolve, TEST_POLL_MS))
+        if (!mounted.current) return
+        const job = await api.graphTest(id)
+        if (job.state === "done" && job.result) {
+          const done = job.result
+          setResult(done)
+          if (done.ok) showToast(t("settings.graph.test.okToast"), "success")
+          else
+            showToast(
+              t("settings.graph.test.failedToast", { problem: t(`settings.graph.problem.${done.problem ?? "error"}`) }),
+              "error",
+            )
+          return
+        }
+        if (job.state === "failed") break
+      }
+      if (mounted.current) showToast(t("settings.graph.test.noAnswer"), "error")
+    } catch (failure) {
+      if (mounted.current) showToast(errorText(t, failure), "error")
+    } finally {
+      if (mounted.current) setTesting(false)
+    }
+  }
+
+  return (
+    <Row label={t("settings.graph.test.label")} hint={t("settings.graph.test.hint")}>
+      <div className="ui-scanner" aria-live="polite">
+        {result ? (
+          <>
+            <span className="ui-scanner-line">
+              <Tag tone={result.ok ? "ok" : "fail"}>
+                {result.ok ? t("settings.graph.test.passed") : t("settings.graph.test.failed")}
+              </Tag>
+              <span className="ui-scanner-note">
+                {t("settings.graph.test.checked")} <Time value={result.checkedAt} mode="ago" />
+              </span>
+            </span>
+            {result.problem ? (
+              <span className="ui-scanner-fail">{t(`settings.graph.problem.${result.problem}`)}</span>
+            ) : null}
+            {result.code ? (
+              <span className="ui-scanner-note">
+                {t("settings.graph.test.code")} <bdi className="ui-mono">{result.code}</bdi>
+              </span>
+            ) : null}
+            {result.mailbox ? (
+              <span className="ui-scanner-note">
+                {t("settings.graph.test.mailbox")} <bdi dir="ltr">{result.mailbox}</bdi>
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <span className="ui-scanner-line">
+              <Tag tone="neutral">{t("settings.graph.test.notTested")}</Tag>
+            </span>
+            <span className="ui-scanner-note">{t("settings.graph.test.notTestedNote")}</span>
+          </>
+        )}
+      </div>
+      <button
+        type="button"
+        className="ui-btn ui-btn-sm"
+        disabled={testing || fieldsChanged}
+        aria-busy={testing || undefined}
+        onClick={() => void test()}
+      >
+        {testing ? t("settings.graph.test.testing") : t("settings.graph.test.button")}
+      </button>
+      {fieldsChanged ? <span className="ui-hint">{t("settings.graph.test.saveFirst")}</span> : null}
+    </Row>
   )
 }
 
@@ -571,5 +756,9 @@ export function labelKey(key: SettingKey): string {
   if (key === "scanner.scanTimeoutSeconds") return "settings.scanTimeout.label"
   if (key === "files.maxBytes") return "settings.maxBytes.label"
   if (key === "files.blockedTypes") return "settings.blockedTypes.label"
+  if (key === "graph.tenantId") return "settings.graphTenant.label"
+  if (key === "graph.clientId") return "settings.graphClient.label"
+  if (key === "graph.clientSecret") return "settings.graphSecret.label"
+  if (key === "graph.mailbox") return "settings.graphMailbox.label"
   return "settings.sessionDays.label"
 }

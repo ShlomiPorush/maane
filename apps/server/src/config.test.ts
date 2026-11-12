@@ -102,6 +102,33 @@ describe("loadConfig", () => {
     expect(problems(env({ MAANE_SESSION_DAYS: "seven" }))).toContain("MAANE_SESSION_DAYS is not valid")
   })
 
+  it("reads the Graph variables, and refuses a client secret that reads as an example and invalid IDs", () => {
+    // A secret in the form Entra issues, assembled at run time and new for each run (hex, so no word in it reads as an
+    // example).
+    const secret = `${randomBytes(3).toString("hex")}8Q~${randomBytes(18).toString("hex")}`
+    const loaded = loadConfig(
+      env({
+        MAANE_GRAPH_TENANT_ID: crypto.randomUUID(),
+        MAANE_GRAPH_CLIENT_ID: crypto.randomUUID(),
+        MAANE_GRAPH_CLIENT_SECRET: secret,
+        MAANE_GRAPH_MAILBOX: "Intake@Example.com",
+      }),
+    )
+    expect(loaded.overrides["graph.clientSecret"]).toBe(secret)
+    expect(loaded.overrides["graph.mailbox"]).toBe("Intake@Example.com")
+    for (const placeholder of ["your-client-secret-here", "<client secret>", "changeme", "xxxxxxxxxxxxxxxx"])
+      expect(problems(env({ MAANE_GRAPH_CLIENT_SECRET: placeholder }))).toContain(
+        "MAANE_GRAPH_CLIENT_SECRET is a placeholder",
+      )
+    expect(problems(env({ MAANE_GRAPH_TENANT_ID: "not a tenant" }))).toContain("MAANE_GRAPH_TENANT_ID is not valid")
+    expect(problems(env({ MAANE_GRAPH_CLIENT_ID: "app" }))).toContain("MAANE_GRAPH_CLIENT_ID is not valid")
+    expect(problems(env({ MAANE_GRAPH_MAILBOX: "intake" }))).toContain("MAANE_GRAPH_MAILBOX is not valid")
+    // A domain name is a tenant too.
+    expect(loadConfig(env({ MAANE_GRAPH_TENANT_ID: "example.onmicrosoft.com" })).overrides["graph.tenantId"]).toBe(
+      "example.onmicrosoft.com",
+    )
+  })
+
   it("lets no variable set or lock the intake mode", () => {
     expect(SETTINGS["intake.mode"].env).toBeNull()
     const loaded = loadConfig(env({ MAANE_INTAKE_MODE: "live", INTAKE_MODE: "live" }))

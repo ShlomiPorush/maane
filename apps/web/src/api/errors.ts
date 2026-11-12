@@ -23,6 +23,7 @@ export const ERROR_TEXT: Record<string, string> = {
   organization_name_invalid: "errors.code.organizationNameInvalid",
   organization_name_taken: "errors.code.organizationNameTaken",
   organization_in_use: "errors.code.organizationInUse",
+  organization_has_mail: "errors.code.organizationHasMail",
   member_not_agent: "errors.code.memberNotAgent",
   member_exists: "errors.code.memberExists",
   member_not_found: "errors.code.memberNotFound",

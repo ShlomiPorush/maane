@@ -3,6 +3,7 @@ import { inArray } from "drizzle-orm"
 import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import { setting } from "../db/schema.ts"
+import { makeSourceCurrent } from "../intake/source.ts"
 import { checkIntakeModeChange } from "../organizations/intake.ts"
 import type { SettingsCipher } from "./crypto.ts"
 
@@ -55,7 +56,8 @@ export class Settings {
   /**
    * Stores changes in one transaction with one audit row each. Refuses a locked field, an unknown key, or a value
    * that does not validate, before anything is written. A new intake mode first takes the intake configuration lock
-   * and is refused as live while no default address exists (organizations/intake.ts).
+   * and is refused as live while no default address exists (organizations/intake.ts). A new Graph tenant or mailbox
+   * makes the matching intake source current in the same transaction, after it locked the current one (intake/source.ts).
    */
   async update(changes: Record<string, unknown>, actor: Actor, ipAddress: string | null = null): Promise<void> {
     const rows: { key: SettingKey; value: unknown; ciphertext: string | null }[] = []
@@ -91,11 +93,22 @@ export class Settings {
           ipAddress,
         })
       }
+      if (rows.some((row) => row.key === "graph.tenantId" || row.key === "graph.mailbox")) {
+        const values = await this.#effective(["graph.tenantId", "graph.mailbox"], tx)
+        await makeSourceCurrent(
+          tx,
+          String(values.get("graph.tenantId")?.value ?? ""),
+          String(values.get("graph.mailbox")?.value ?? ""),
+        )
+      }
     })
   }
 
-  async #effective(keys: SettingKey[]): Promise<Map<SettingKey, { value: unknown; source: string }>> {
-    const stored = await this.db.select().from(setting).where(inArray(setting.key, keys))
+  async #effective(
+    keys: SettingKey[],
+    db: Pick<Db, "select"> = this.db,
+  ): Promise<Map<SettingKey, { value: unknown; source: string }>> {
+    const stored = await db.select().from(setting).where(inArray(setting.key, keys))
     const byKey = new Map(stored.map((row) => [row.key, row]))
     const result = new Map<SettingKey, { value: unknown; source: string }>()
     for (const key of keys) {

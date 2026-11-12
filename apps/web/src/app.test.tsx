@@ -500,7 +500,9 @@ describe("settings", () => {
       "/api/v1/settings/scanner": ok({ status: null }),
     })
     await vi.waitFor(() => expect(text()).toContain(he("settings.scanner.notChecked")))
-    const address = document.querySelector<HTMLInputElement>('input[dir="ltr"].ui-mono') as HTMLInputElement
+    const address = document.querySelector<HTMLInputElement>(
+      'input[data-setting="scanner.address"]',
+    ) as HTMLInputElement
     await act(async () => type(address, "clamav"))
     // A new address is tested only once it is saved.
     expect(text()).toContain(he("settings.scanner.saveFirst"))
@@ -522,6 +524,74 @@ describe("settings", () => {
       "files.maxBytes": 20 * 1024 * 1024,
       "files.blockedTypes": ["exe", "js", "bat"],
     })
+  })
+
+  it("keeps the client secret write only, locks a field the environment sets, and runs the Graph connection test", async () => {
+    const id = "7a2d3f9e-1b2c-4d3e-9f0a-1b2c3d4e5f60"
+    const graphViews = (secretSet: boolean) =>
+      ok({
+        settings: [
+          view("graph.tenantId", "example.onmicrosoft.com", true),
+          view("graph.clientId", ""),
+          { key: "graph.clientSecret", value: null, secret: true, set: secretSet, locked: false, variable: null },
+          view("graph.mailbox", "intake@example.com"),
+        ],
+      })
+    let saved = false
+    await renderAt("/settings", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": (request) => {
+        if (request.method === "PUT") saved = true
+        return graphViews(saved)
+      },
+      "/api/v1/settings/scanner": ok({ status: null }),
+      "/api/v1/settings/graph/test": { status: 202, body: { id } },
+      [`/api/v1/settings/graph/test/${id}`]: ok({
+        state: "done",
+        result: {
+          ok: false,
+          problem: "access_denied",
+          code: "ErrorAccessDenied",
+          status: 403,
+          mailbox: "intake@example.com",
+          checkedAt,
+        },
+      }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("settings.graphSecret.notSet")))
+    const field = (key: string) => document.querySelector<HTMLInputElement>(`input[data-setting="${key}"]`)
+    // The environment sets the tenant: locked, with its variable named.
+    expect(field("graph.tenantId")?.disabled).toBe(true)
+    expect(text()).toContain("MAANE_SESSION_DAYS")
+    const secretField = field("graph.clientSecret") as HTMLInputElement
+    expect(secretField.type).toBe("password")
+    expect(secretField.value).toBe("")
+    expect(text()).toContain(he("settings.graph.test.notTested"))
+
+    // A new application ID and secret: the test waits until they are saved, and the secret goes out once.
+    const secret = crypto.randomUUID()
+    await act(async () => type(field("graph.clientId") as HTMLInputElement, "not an id"))
+    expect(text()).toContain(he("settings.graph.test.saveFirst"))
+    expect(button(he("settings.graph.test.button"))?.disabled).toBe(true)
+    await act(async () => document.querySelector<HTMLButtonElement>(".ui-savebar-save")?.click())
+    expect(text()).toContain(he("settings.invalid", { field: he("settings.graphClient.label") }))
+    const client = crypto.randomUUID()
+    await act(async () => type(field("graph.clientId") as HTMLInputElement, client))
+    await act(async () => type(secretField, secret))
+    await act(async () => document.querySelector<HTMLButtonElement>(".ui-savebar-save")?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("settings.graphSecret.set")))
+    expect(JSON.parse(requests.find((r) => r.method === "PUT")?.body ?? "{}")).toEqual({
+      "graph.clientId": client,
+      "graph.clientSecret": secret,
+    })
+    expect(field("graph.clientSecret")?.value).toBe("")
+
+    await act(async () => button(he("settings.graph.test.button"))?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("settings.graph.problem.access_denied")), { timeout: 5_000 })
+    expect(text()).toContain(he("settings.graph.test.failed"))
+    expect(text()).toContain("ErrorAccessDenied")
+    expect(requests.filter((r) => r.method === "POST" && r.url.endsWith("/settings/graph/test"))).toHaveLength(1)
   })
 
   it("counts no change for the same list written another way", async () => {
