@@ -1,7 +1,13 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { serveStatic } from "@hono/node-server/serve-static"
-import { SCANNER_CHECKS, type ScannerStatusView, type ScannerTestView } from "@maane/shared"
+import {
+  GRAPH_PROBLEMS,
+  type GraphTestView,
+  SCANNER_CHECKS,
+  type ScannerStatusView,
+  type ScannerTestView,
+} from "@maane/shared"
 import { desc, eq, lt, sql } from "drizzle-orm"
 import { Hono } from "hono"
 import { z } from "zod"
@@ -9,7 +15,7 @@ import type { Auth } from "../auth/auth.ts"
 import type { SetupWindow } from "../auth/setup-window.ts"
 import type { Db } from "../db/client.ts"
 import { auditLog, authUser, scannerCheck } from "../db/schema.ts"
-import { type JobQueue, SCANNER_SELF_TEST } from "../jobs/queue.ts"
+import { GRAPH_TEST, type JobQueue, SCANNER_SELF_TEST } from "../jobs/queue.ts"
 import { errorFacts, log } from "../log.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { Organizations } from "../organizations/service.ts"
@@ -41,6 +47,16 @@ const selfTestOutput = z.object({
   ok: z.boolean(),
   failedCheck: z.enum(SCANNER_CHECKS).nullable(),
   version: z.string().nullable(),
+  checkedAt: z.string(),
+})
+
+/** The output the worker's Graph connection test returns, read back with its shape checked. */
+const graphTestOutput = z.object({
+  ok: z.boolean(),
+  problem: z.enum(GRAPH_PROBLEMS).nullable(),
+  code: z.string().nullable(),
+  status: z.number().int().nullable(),
+  mailbox: z.string(),
   checkedAt: z.string(),
 })
 
@@ -206,6 +222,26 @@ export function createApp(ctx: AppContext) {
     const state = TEST_STATES[job.state] ?? "failed"
     const output = state === "done" ? selfTestOutput.safeParse(job.output) : null
     const view: ScannerTestView = {
+      state: output && !output.success ? "failed" : state,
+      result: output?.success ? output.data : null,
+    }
+    return c.json(view)
+  })
+
+  // The Graph connection test (plan 2.3, P12): the worker reads the intake mailbox's Inbox folder metadata with the
+  // saved settings and reports success or Graph's error code. It reads no message and writes nothing.
+  api.post("/settings/graph/test", adminOnly, async (c) => {
+    const id = await ctx.jobs.send(GRAPH_TEST)
+    return c.json({ id }, 202)
+  })
+
+  api.get("/settings/graph/test/:id", adminOnly, async (c) => {
+    const id = c.req.param("id")
+    const job = JOB_ID.test(id) ? await ctx.jobs.job(GRAPH_TEST, id) : null
+    if (!job) return c.json({ error: "not_found" }, 404)
+    const state = TEST_STATES[job.state] ?? "failed"
+    const output = state === "done" ? graphTestOutput.safeParse(job.output) : null
+    const view: GraphTestView = {
       state: output && !output.success ? "failed" : state,
       result: output?.success ? output.data : null,
     }

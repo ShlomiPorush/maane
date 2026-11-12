@@ -7,6 +7,11 @@ import { PgBoss } from "pg-boss"
 import { clamdScanner } from "./files/scanner.ts"
 import { FileService } from "./files/service.ts"
 import { FileStore } from "./files/store.ts"
+import { GraphGateway } from "./intake/graph.ts"
+import { reconcileIntakeSource } from "./intake/jobs.ts"
+import { IntakeProcessor } from "./intake/process.ts"
+import { WaitingFiles } from "./intake/retry.ts"
+import { IntakeSync } from "./intake/sync.ts"
 import { registerJobs } from "./jobs.ts"
 
 // The worker: the PostgreSQL job queue (pg-boss). It refuses to start on the same unsafe configuration as the
@@ -20,11 +25,22 @@ async function main(): Promise<void> {
   const database = openDatabase(config.databaseUrl, 5)
   const settings = new Settings(database.db, createSettingsCipher(config.settingsKeys), config.overrides)
   const files = new FileService({ db: database.db, settings, scanner: clamdScanner, store })
+  // The intake source of the tenant and mailbox in effect is current before any job runs (plan 2.3, P18).
+  await reconcileIntakeSource(database.db, settings)
+  const graph = new GraphGateway()
+  const intake = {
+    pool: database.pool,
+    settings,
+    graph,
+    sync: new IntakeSync({ db: database.db, settings, files, graph }),
+    process: new IntakeProcessor({ db: database.db }),
+    retry: new WaitingFiles({ db: database.db, settings, files, graph }),
+  }
 
   const boss = new PgBoss({ connectionString: config.databaseUrl, schema: "pgboss" })
   boss.on("error", (error) => log.error("the job queue reported an error", errorFacts(error)))
   await boss.start()
-  await registerJobs(boss, { files })
+  await registerJobs(boss, { files, intake })
   log.info("worker started", { version: config.version })
 
   const stop = async (signal: string) => {

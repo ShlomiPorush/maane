@@ -11,13 +11,22 @@
     "test:integration": "vitest run --project integration"
   },
   "dependencies": {
+    "@azure/identity": "4.14.1",
     "@maane/server": "workspace:*",
     "@maane/shared": "workspace:*",
+    "@microsoft/microsoft-graph-client": "3.0.7",
     "drizzle-orm": "0.45.4",
     "file-type": "22.3.0",
-    "pg-boss": "12.38.1"
+    "html-to-text": "10.0.1",
+    "mailparser": "3.14.1",
+    "pg-boss": "12.38.1",
+    "sanitize-html": "2.18.1"
   },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "@types/html-to-text": "9.0.4",
+    "@types/mailparser": "3.9.0",
+    "@types/sanitize-html": "2.16.2",
+    "esbuild": "0.28.2",
+    "selfsigned": "5.5.0"
   }
 }

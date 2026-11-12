@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { isClientId, isMailbox, isTenantId } from "./intake.ts"
 import { LOCALES } from "./locales.ts"
 
 /**
@@ -132,6 +133,12 @@ export const DEFAULT_BLOCKED_TYPES: readonly string[] = [
 
 const define = <T>(definition: SettingDefinition<T>) => definition
 
+/** A Graph setting's text: empty while it is not set, else what `valid` accepts. */
+const graphText = (valid: (text: string) => boolean) => z.string().refine((text) => text === "" || valid(text))
+
+/** The longest application secret Maane stores; Entra's are about 40 characters. */
+export const GRAPH_SECRET_MAX = 1024
+
 export const SETTINGS = {
   "general.defaultLocale": define({
     schema: z.enum(LOCALES),
@@ -197,6 +204,43 @@ export const SETTINGS = {
     secret: false,
     env: "MAANE_FILES_BLOCKED_TYPES",
     fromEnv: normalizeBlockedTypes,
+  }),
+  // Microsoft Graph (plan 2.3): the Entra application that reads the intake mailbox, and the mailbox. Each may come from
+  // a variable that locks its field. A tenant or mailbox change makes a new current intake source.
+  "graph.tenantId": define({
+    schema: graphText(isTenantId),
+    defaultValue: "",
+    secret: false,
+    env: "MAANE_GRAPH_TENANT_ID",
+    fromEnv: (text) => text.trim(),
+  }),
+  "graph.clientId": define({
+    schema: graphText(isClientId),
+    defaultValue: "",
+    secret: false,
+    env: "MAANE_GRAPH_CLIENT_ID",
+    fromEnv: (text) => text.trim(),
+  }),
+  /** The application's client secret: stored encrypted, never returned. A variable that reads as an example is refused. */
+  "graph.clientSecret": define({
+    schema: z
+      .string()
+      .min(1)
+      .max(GRAPH_SECRET_MAX)
+      // One line, without white space at either end.
+      .regex(/^\S(?:[^\r\n]*\S)?$/),
+    defaultValue: "",
+    secret: true,
+    env: "MAANE_GRAPH_CLIENT_SECRET",
+    fromEnv: (text) => text.trim(),
+  }),
+  /** The shared intake mailbox Maane reads (read only). */
+  "graph.mailbox": define({
+    schema: graphText(isMailbox),
+    defaultValue: "",
+    secret: false,
+    env: "MAANE_GRAPH_MAILBOX",
+    fromEnv: (text) => text.trim(),
   }),
 } as const
 

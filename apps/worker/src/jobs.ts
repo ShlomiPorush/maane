@@ -1,8 +1,23 @@
 import { writeFile } from "node:fs/promises"
-import { FILES_SWEEP, SCANNER_SELF_TEST } from "@maane/server/jobs/queue"
+import {
+  FILES_SWEEP,
+  GRAPH_TEST,
+  INTAKE_FILES_RETRY,
+  INTAKE_PROCESS,
+  INTAKE_SYNC,
+  SCANNER_SELF_TEST,
+} from "@maane/server/jobs/queue"
+import { errorFacts, log } from "@maane/server/log"
+import type { Settings } from "@maane/server/settings/service"
+import type { GraphTestResult } from "@maane/shared"
 import type { PgBoss } from "pg-boss"
 import { selfTestView } from "./files/self-test.ts"
 import type { FileService } from "./files/service.ts"
+import { type GraphGateway, graphConfig } from "./intake/graph.ts"
+import { type LockPool, runExclusive } from "./intake/jobs.ts"
+import type { IntakeProcessor } from "./intake/process.ts"
+import type { WaitingFiles } from "./intake/retry.ts"
+import type { IntakeSync } from "./intake/sync.ts"
 
 /** The file the worker's health check reads: the time of the last heartbeat job, in milliseconds. */
 export const HEARTBEAT_FILE = process.env.MAANE_HEARTBEAT_FILE || "/tmp/maane-worker-heartbeat"
@@ -15,13 +30,42 @@ export interface JobOptions {
   now?: () => number
   /** The file service; without it (tests of the heartbeat alone) the file jobs are not registered. */
   files?: FileService
+  /** Graph intake; without it (tests of other jobs) the intake jobs are not registered. */
+  intake?: IntakeJobs
+}
+
+export interface IntakeJobs {
+  /** The pool the run locks take a connection of their own from. */
+  pool: LockPool
+  settings: Settings
+  graph: GraphGateway
+  sync: IntakeSync
+  process: IntakeProcessor
+  retry: WaitingFiles
+}
+
+/** The Graph connection test (P12): the saved settings, the Inbox folder's metadata, nothing else. */
+export async function graphTest(settings: Settings, graph: GraphGateway): Promise<GraphTestResult> {
+  const config = await graphConfig(settings)
+  if (!config)
+    return {
+      ok: false,
+      problem: "not_configured",
+      code: null,
+      status: null,
+      mailbox: (await settings.get("graph.mailbox")).toLowerCase(),
+      checkedAt: new Date().toISOString(),
+    }
+  return graph.test(config)
 }
 
 /**
  * The jobs this worker runs: the heartbeat, a scheduled job that proves the queue picks up and finishes work; the
  * scanner self-test (queued once at start, every hour, when the address changes, and for a connection test; its output
- * is the result the Settings page polls for); and the daily sweep of unreferenced stored files. Later phases add
- * intake, sending, delivery polling, scheduled actions, and notifications here.
+ * is the result the Settings page polls for); the daily sweep of unreferenced stored files; and Graph intake (plan
+ * 2.3): the connection test, stage one every minute, stage two after each sync, every minute, and once at start, and the
+ * retry of waiting files every five minutes. Later phases add sending, delivery polling, scheduled actions, and
+ * notifications here.
  */
 export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Promise<void> {
   const heartbeatFile = options.heartbeatFile ?? HEARTBEAT_FILE
@@ -42,4 +86,37 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
   await boss.work(FILES_SWEEP, async () => files.sweep())
   // The self-test on start: scans trust no scanner until it passed.
   await boss.send(SCANNER_SELF_TEST, {})
+
+  const intake = options.intake
+  if (!intake) return
+  await boss.createQueue(GRAPH_TEST)
+  await boss.work(GRAPH_TEST, async () => graphTest(intake.settings, intake.graph))
+  // One sync and one processing run at a time: the queue holds one job queued or active, and a session lock guards
+  // against a run pg-boss expired while its handler still works.
+  await boss.createQueue(INTAKE_SYNC, {
+    policy: "exclusive",
+    expireInSeconds: 30 * 60,
+    retryLimit: 3,
+    retryDelay: 15,
+    retryBackoff: true,
+  })
+  await boss.createQueue(INTAKE_PROCESS, { policy: "exclusive", expireInSeconds: 30 * 60 })
+  await boss.createQueue(INTAKE_FILES_RETRY, { policy: "exclusive", expireInSeconds: 30 * 60 })
+  await boss.schedule(INTAKE_SYNC, "* * * * *")
+  await boss.schedule(INTAKE_PROCESS, "* * * * *")
+  await boss.schedule(INTAKE_FILES_RETRY, "*/5 * * * *")
+  await boss.work(INTAKE_SYNC, async () => {
+    try {
+      return await runExclusive(intake.pool, INTAKE_SYNC, () => intake.sync.run())
+    } finally {
+      // Stored messages are processed after each round, also when the round failed halfway.
+      await boss.send(INTAKE_PROCESS, {}).catch((error) => log.warn("could not queue processing", errorFacts(error)))
+    }
+  })
+  await boss.work(INTAKE_PROCESS, async () => runExclusive(intake.pool, INTAKE_PROCESS, () => intake.process.run()))
+  await boss.work(INTAKE_FILES_RETRY, async () =>
+    runExclusive(intake.pool, INTAKE_FILES_RETRY, () => intake.retry.run()),
+  )
+  // Processing at start (P19): what stage one stored is processed even while Graph cannot be reached.
+  await boss.send(INTAKE_PROCESS, {})
 }
