@@ -44,7 +44,7 @@ The agent UI, the setup screen, and later the tracked links, the download links,
 
 ## 2. Create the deployment folder
 
-This block creates `~/maane` and downloads `docker-compose.yml` and `.env.example` from the release's tag. Set `version` to the release you deploy. It refuses when either file is already there.
+This block creates `~/maane` and downloads, from the release's tag, `docker-compose.yml`, `.env.example`, and the two secret contracts `postgres.env.example` and `app.env.example` (from `docker/env/` in the repository). Set `version` to the release you deploy. It refuses when any of these files is already there.
 
 ```bash
 (
@@ -52,34 +52,45 @@ This block creates `~/maane` and downloads `docker-compose.yml` and `.env.exampl
   version=0.1.0
   dir="$HOME/maane"
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version must look like 1.2.3" >&2; exit 1; }
+  base="https://raw.githubusercontent.com/ShlomiPorush/maane/v$version"
   mkdir -p "$dir"
   cd "$dir"
-  for file in docker-compose.yml .env.example; do
+  files="docker-compose.yml .env.example postgres.env.example app.env.example"
+  for file in $files; do
     [ ! -e "$file" ] || { echo "error: $dir/$file exists; nothing was downloaded" >&2; exit 1; }
   done
   tmp="$(mktemp -d "$dir/.download.XXXXXX")"
   trap 'rm -rf -- "$tmp"' EXIT
-  for file in docker-compose.yml .env.example; do
-    curl -fsSL -o "$tmp/$file" "https://raw.githubusercontent.com/ShlomiPorush/maane/v$version/$file"
-  done
+  curl -fsSL -o "$tmp/docker-compose.yml" "$base/docker-compose.yml"
+  curl -fsSL -o "$tmp/.env.example" "$base/.env.example"
+  curl -fsSL -o "$tmp/postgres.env.example" "$base/docker/env/postgres.env.example"
+  curl -fsSL -o "$tmp/app.env.example" "$base/docker/env/app.env.example"
   # ln refuses an existing name, so nothing is overwritten even by a run that started at the same time.
-  for file in docker-compose.yml .env.example; do ln "$tmp/$file" "$file"; done
-  echo "Downloaded docker-compose.yml and .env.example of v$version into $dir"
+  for file in $files; do ln "$tmp/$file" "$file"; done
+  echo "Downloaded $files of v$version into $dir"
 )
 ```
 
-## 3. Generate `.env` once
+## 3. Generate the settings and secrets once
 
-`.env` holds the database password and the two key sets. Generate it once, on the server, and keep it with your backup: a restore without it cannot open the data (see [Back up](#5-back-up)).
+Three files sit beside `docker-compose.yml`:
 
-This block builds `.env` from `.env.example`:
+| File | Read by | Holds |
+|---|---|---|
+| `.env` | Compose only, to fill in `docker-compose.yml`; no container receives it | `VERSION` and `DOMAIN`. No secret. |
+| `postgres.env` | The `postgres` service only | The database user, name, and password |
+| `app.env` | `server` and `worker` | `DATABASE_URL` with the same password, `MAANE_AUTH_SECRETS`, `MAANE_SETTINGS_KEYS`, `MAANE_TRUSTED_PROXIES` |
 
-- `POSTGRES_PASSWORD`: 32 random bytes as hex. Hex keeps the database URL that Compose builds from it valid.
-- `MAANE_AUTH_SECRETS` and `MAANE_SETTINGS_KEYS`: `1:` and 32 random bytes as hex each, different from each other.
-- `VERSION` and `DOMAIN`.
+The secrets reach the containers only through these files, never through Compose's variable substitution, so `docker compose config` does not show them. Generate the files once, on the server, and keep `postgres.env` and `app.env` with your backup: a restore without them cannot open the data (see [Back up](#5-back-up)).
+
+The block fills in:
+
+- `POSTGRES_PASSWORD` in `postgres.env`, and the same value in `app.env`'s `DATABASE_URL`: 32 random bytes as hex. Hex keeps the URL valid, and the server refuses a password that is not random hex.
+- `MAANE_AUTH_SECRETS` and `MAANE_SETTINGS_KEYS`: `1:` and 32 random bytes as hex each, different from each other and from the password.
+- `VERSION` and `DOMAIN` in `.env`.
 - `MAANE_TRUSTED_PROXIES`: the subnets of the `traefik` network.
 
-It refuses, and writes nothing, when `.env` exists, when a value cannot be generated or read, or when `DOMAIN` is still the example. The file is readable by you only (mode 600). It prints no secret.
+It refuses, and leaves no file of its own, when any of the three files exists, when a contract is missing or not as expected, when a value cannot be generated or read, or when `DOMAIN` is still the example. The files are readable by you only (mode 600). It prints no secret. It publishes the three files only when none exists; if another run published one meanwhile, it removes the ones it published itself and stops.
 
 Set `version` and `domain` before you run it:
 
@@ -90,51 +101,81 @@ Set `version` and `domain` before you run it:
   version=0.1.0
   domain=maane.example.com
   cd "$HOME/maane"
-  [ ! -e .env ] && [ ! -L .env ] || { echo "error: .env exists; it was left as it is" >&2; exit 1; }
-  [ -f .env.example ] || { echo "error: .env.example is missing; download it first" >&2; exit 1; }
+  for file in .env postgres.env app.env; do
+    [ ! -e "$file" ] && [ ! -L "$file" ] || { echo "error: $file exists; nothing was written" >&2; exit 1; }
+  done
+  for file in .env.example postgres.env.example app.env.example; do
+    [ -f "$file" ] || { echo "error: $file is missing; download it first (section 2)" >&2; exit 1; }
+  done
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version must look like 1.2.3" >&2; exit 1; }
   [[ "$domain" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || { echo "error: domain is not a host name" >&2; exit 1; }
   case "$domain" in *example.com) echo "error: set domain to your own host name" >&2; exit 1 ;; esac
   proxies="$(docker network inspect traefik --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}')"
   proxies="$(echo $proxies | tr ' ' ',')"
   [[ "$proxies" =~ ^[0-9A-Fa-f:.,/]+$ ]] || { echo "error: cannot read the subnets of the traefik network" >&2; exit 1; }
-  pg="$(openssl rand -hex 32)"
-  auth="$(openssl rand -hex 32)"
-  settings="$(openssl rand -hex 32)"
+  pg="$(openssl rand -hex 32)" && auth="$(openssl rand -hex 32)" && settings="$(openssl rand -hex 32)" ||
+    { echo "error: openssl could not generate the values" >&2; exit 1; }
   for value in "$pg" "$auth" "$settings"; do
     [[ "$value" =~ ^[0-9a-f]{64}$ ]] || { echo "error: openssl did not return 32 random bytes" >&2; exit 1; }
   done
   [ "$pg" != "$auth" ] && [ "$pg" != "$settings" ] && [ "$auth" != "$settings" ] ||
     { echo "error: the generated values are not distinct" >&2; exit 1; }
-  tmp="$(mktemp .env.new.XXXXXX)"
-  trap 'rm -f -- "$tmp"' EXIT
+  tmp="$(mktemp -d .secrets.new.XXXXXX)"
+  published=()
+  done=0
+  # On any failure, remove only what this run published (the same file as its own copy), then the temporary folder.
+  cleanup() {
+    if [ "$done" = 0 ]; then
+      for file in "${published[@]}"; do [ "$file" -ef "$tmp/$file" ] && rm -f -- "$file"; done
+    fi
+    rm -rf -- "$tmp"
+  }
+  trap cleanup EXIT
   # The values reach awk through its environment, never its command line, so other users cannot see them.
-  V_VERSION="$version" V_DOMAIN="$domain" V_PROXIES="$proxies" V_PG="$pg" V_AUTH="1:$auth" V_SETTINGS="1:$settings" \
-    awk '
-      /^VERSION=$/ { print "VERSION=" ENVIRON["V_VERSION"]; next }
-      /^DOMAIN=/ { print "DOMAIN=" ENVIRON["V_DOMAIN"]; next }
-      /^POSTGRES_PASSWORD=$/ { print "POSTGRES_PASSWORD=" ENVIRON["V_PG"]; next }
-      /^MAANE_AUTH_SECRETS=$/ { print "MAANE_AUTH_SECRETS=" ENVIRON["V_AUTH"]; next }
-      /^MAANE_SETTINGS_KEYS=$/ { print "MAANE_SETTINGS_KEYS=" ENVIRON["V_SETTINGS"]; next }
-      /^MAANE_TRUSTED_PROXIES=$/ { print "MAANE_TRUSTED_PROXIES=" ENVIRON["V_PROXIES"]; next }
-      { print }
-    ' .env.example >"$tmp"
-  for pattern in '^VERSION=[0-9.]+$' '^DOMAIN=[A-Za-z0-9.-]+$' '^POSTGRES_PASSWORD=[0-9a-f]{64}$' \
-    '^MAANE_AUTH_SECRETS=1:[0-9a-f]{64}$' '^MAANE_SETTINGS_KEYS=1:[0-9a-f]{64}$' '^MAANE_TRUSTED_PROXIES=[0-9A-Fa-f:.,/]+$'; do
-    [ "$(grep -cE "$pattern" "$tmp")" = 1 ] ||
-      { echo "error: .env.example does not have the expected lines; .env was not written" >&2; exit 1; }
+  fill() {
+    V_VERSION="$version" V_DOMAIN="$domain" V_PROXIES="$proxies" V_PG="$pg" V_AUTH="1:$auth" V_SETTINGS="1:$settings" \
+      awk '
+        /^VERSION=$/ { print "VERSION=" ENVIRON["V_VERSION"]; next }
+        /^DOMAIN=/ { print "DOMAIN=" ENVIRON["V_DOMAIN"]; next }
+        /^POSTGRES_PASSWORD=$/ { print "POSTGRES_PASSWORD=" ENVIRON["V_PG"]; next }
+        /^DATABASE_URL=$/ { print "DATABASE_URL=postgres://maane:" ENVIRON["V_PG"] "@postgres:5432/maane"; next }
+        /^MAANE_AUTH_SECRETS=$/ { print "MAANE_AUTH_SECRETS=" ENVIRON["V_AUTH"]; next }
+        /^MAANE_SETTINGS_KEYS=$/ { print "MAANE_SETTINGS_KEYS=" ENVIRON["V_SETTINGS"]; next }
+        /^MAANE_TRUSTED_PROXIES=$/ { print "MAANE_TRUSTED_PROXIES=" ENVIRON["V_PROXIES"]; next }
+        { print }
+      ' "$1.example" >"$tmp/$1"
+  }
+  expect() {
+    local file="$1"
+    shift
+    for pattern in "$@"; do
+      [ "$(grep -cE "$pattern" "$tmp/$file")" = 1 ] ||
+        { echo "error: $file.example does not have the expected lines; nothing was written" >&2; exit 1; }
+    done
+  }
+  fill .env
+  fill postgres.env
+  fill app.env
+  expect .env '^VERSION=[0-9.]+$' '^DOMAIN=[A-Za-z0-9.-]+$'
+  expect postgres.env '^POSTGRES_USER=maane$' '^POSTGRES_DB=maane$' '^POSTGRES_PASSWORD=[0-9a-f]{64}$'
+  # The URL is checked in two parts: its scheme, user, and password, then its host and database.
+  expect app.env '^DATABASE_URL=postgres://maane:[0-9a-f]{64}' '^DATABASE_URL=[^ ]*[0-9a-f]@postgres:5432/maane$' \
+    '^MAANE_AUTH_SECRETS=1:[0-9a-f]{64}$' '^MAANE_SETTINGS_KEYS=1:[0-9a-f]{64}$' '^MAANE_TRUSTED_PROXIES=[0-9A-Fa-f:.,/]+$'
+  # ln refuses an existing name, also one that appeared while this block ran.
+  for file in postgres.env app.env .env; do
+    ln "$tmp/$file" "$file"
+    published+=("$file")
   done
-  # ln refuses an existing .env, also one that appeared while this block ran.
-  ln "$tmp" .env
-  echo "Wrote $HOME/maane/.env (mode $(stat -c %a .env)). Keep a copy with your backup."
+  done=1
+  echo "Wrote .env, postgres.env, and app.env in $HOME/maane (mode $(stat -c %a app.env)). Keep postgres.env and app.env with your backup."
 )
 ```
 
-Check the result without printing a value: `cd "$HOME/maane" && docker compose config --quiet && echo "Compose reads .env"`. Never run `docker compose config` without `--quiet`, and never `cat .env` where others can see the screen: both print the secrets.
+Check the result without printing a value: `cd "$HOME/maane" && docker compose config --quiet && echo "Compose reads its files"`. Never `cat` `postgres.env` or `app.env` where others can see the screen.
 
-Everything else is set in Maane itself, in Settings. A variable in the lower part of `.env.example` may override a setting instead; Settings then shows that field locked. Never set a `BETTER_AUTH_*` or `AUTH_SECRET` variable: the server refuses to start with one.
+Everything else is set in Maane itself, in Settings. A variable in the lower part of `app.env` may override a setting instead; Settings then shows that field locked. Never set a `BETTER_AUTH_*` or `AUTH_SECRET` variable: the server refuses to start with one.
 
-**Rotating a key.** Both key sets are versioned: `MAANE_AUTH_SECRETS=2:<new>,1:<old>`. The first entry signs and encrypts new data; the others only decrypt. Keep an old version listed until nothing needs it, and keep every version you ever used with the backup of `.env`. A settings value whose key version is gone reads as not set, and Settings asks for it again. Rotation has not been tried on a deployment yet.
+**Rotating a key.** Both key sets are versioned: `MAANE_AUTH_SECRETS=2:<new>,1:<old>`. The first entry signs and encrypts new data; the others only decrypt. Keep an old version listed until nothing needs it, and keep every version you ever used with the backup of `app.env`. A settings value whose key version is gone reads as not set, and Settings asks for it again. Rotation has not been tried on a deployment yet.
 
 ## 4. Start and complete setup
 
@@ -163,13 +204,14 @@ Your backup must hold:
 | What | Where | Why |
 |---|---|---|
 | The database | `./postgres-data`, copied while the stack is stopped, or a dump (below) | All of Maane's data: users, settings, the audit log, and the job queue |
-| `.env` | `~/maane/.env` | `MAANE_AUTH_SECRETS` decrypts every user's two-factor secret and backup codes: without it nobody can sign in after a restore. `MAANE_SETTINGS_KEYS` decrypts the secrets stored in Settings. `POSTGRES_PASSWORD` opens the database. Keep every key version you ever used. |
+| `app.env` and `postgres.env` | `~/maane/app.env`, `~/maane/postgres.env` | `MAANE_AUTH_SECRETS` decrypts every user's two-factor secret and backup codes: without it nobody can sign in after a restore. `MAANE_SETTINGS_KEYS` decrypts the secrets stored in Settings. The database password opens the database. Keep every key version you ever used. |
+| `.env` | `~/maane/.env` | `VERSION` and `DOMAIN`; no secret |
 | `docker-compose.yml` | `~/maane/docker-compose.yml` | Your copy, with any label you changed |
 | Attachments (from phase 2) | `./data`, once the release that adds it is deployed | Attachments and inline images are stored as files, not in the database |
-| The VAPID key pair (from phase 4) | `.env` | Push notifications stop for every device when it changes |
+| The VAPID key pair (from phase 4) | `app.env` | Push notifications stop for every device when it changes |
 | The Zendesk archive (phase 0) | Wherever you keep it, outside every repository | The only full copy of the Zendesk history |
 
-Treat the backup as secret: `.env` opens the data it sits next to.
+Treat the backup as secret: `app.env` and `postgres.env` open the data they sit next to.
 
 A dump, while the stack runs. It writes an owner-only file under `~/maane/backups` and never replaces one:
 
@@ -190,13 +232,13 @@ A dump, while the stack runs. It writes an owner-only file under `~/maane/backup
 )
 ```
 
-Copy the dump and `.env` off the host with your own backup tools. A copy of `./postgres-data` instead of a dump is consistent only when taken with the stack stopped (`cd "$HOME/maane" && docker compose stop`, then copy keeping owners and modes, then `docker compose start`).
+Copy the dump, `postgres.env`, `app.env`, and `.env` off the host with your own backup tools. A copy of `./postgres-data` instead of a dump is consistent only when taken with the stack stopped (`cd "$HOME/maane" && docker compose stop`, then copy keeping owners and modes, then `docker compose start`).
 
 ## 6. Test a restore
 
 Test a restore before the cutover from Zendesk, and again from time to time. Run it on another Docker host or virtual machine with its own Traefik, never beside production: `docker-compose.yml` names its project `maane` and its Traefik router `maane`, so a second copy on the production host would take them over.
 
-1. On the test host, create the folder `~/maane-restore` with the block of section 2, with `dir="$HOME/maane-restore"` and `version` set to the release the backup came from. Copy the backup's `.env` into it (mode 600). Edit two lines of that copy: `DOMAIN` to the test host name, for example `maane-restore.example.com`, and `MAANE_TRUSTED_PROXIES` to the subnets of the test host's `traefik` network. Leave every key as it is: the test checks that they open the data.
+1. On the test host, create the folder `~/maane-restore` with the block of section 2, with `dir="$HOME/maane-restore"` and `version` set to the release the backup came from. Copy the backup's `.env`, `postgres.env`, and `app.env` into it (mode 600). Edit two lines of the copies: `DOMAIN` in `.env` to the test host name, for example `maane-restore.example.com`, and `MAANE_TRUSTED_PROXIES` in `app.env` to the subnets of the test host's `traefik` network. Leave every key and the password as they are: the test checks that they open the data.
 2. Put the database back, before `server` ever starts on this host:
    - From a copy of `./postgres-data`: restore it as `postgres-data` in the folder with owners and modes kept.
    - From a dump: start PostgreSQL alone on the empty folder, then restore into it. Set `dump` to the dump's path:
@@ -226,7 +268,7 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
    cd "$HOME/maane-restore" && docker compose down && cd "$HOME" && sudo rm -rf -- "$HOME/maane-restore"
    ```
 
-**After a real restore** in production, a restored database can hold sessions that ended after the backup was taken. Sign in, end the other sessions, and check the users and their roles. If `.env` or the backup may have leaked, put a new version first in `MAANE_AUTH_SECRETS` (keep the old one listed so two-factor secrets stay readable), run `cd "$HOME/maane" && docker compose up -d`, and end every user's sessions.
+**After a real restore** in production, a restored database can hold sessions that ended after the backup was taken. Sign in, end the other sessions, and check the users and their roles. If `app.env` or the backup may have leaked, put a new version first in `MAANE_AUTH_SECRETS` (keep the old one listed so two-factor secrets stay readable), run `cd "$HOME/maane" && docker compose up -d`, and end every user's sessions.
 
 ## 7. Upgrade to a release
 
@@ -266,13 +308,12 @@ To go back to an earlier version, restore the dump the block took (section 6, in
 
 Checked on 2026-11-11, before the first release, with stand-ins and throwaway containers. Nothing ran on a server.
 
-- Section 2 (the folder), with a stand-in `curl`: both files land, a second run refuses and keeps them, and a failed download leaves nothing.
-- Section 3 (`.env`), with a stand-in `docker network inspect`:
-  - `.env` gets mode 600, also under a umask of 022.
-  - The three values are 64 hex characters and differ from each other. Every other line stays as in `.env.example`, and no value is printed.
-  - The example domain is refused. A second run refuses and leaves `.env` byte for byte.
-  - A missing `.env.example`, a failing `docker` or `openssl`, `openssl` output that is not hex, or an edited example each leave no `.env` and no temporary file.
-- Sections 5 and 6, against PostgreSQL 18.6 in two throwaway Compose projects run from this `docker-compose.yml`, with PostgreSQL's data on tmpfs through an override file instead of `./postgres-data`: the dump block writes one custom-format dump and no partial file. The restore block brings every row back into an empty database, and refuses a missing dump and an existing `postgres-data`.
+- Section 2 (the folder), with a stand-in `curl`: the four files land, a second run refuses and keeps them, and a failed download leaves nothing.
+- Section 3 (the three files), with a stand-in `docker network inspect`, against the examples of this release:
+  - `.env`, `postgres.env`, and `app.env` get mode 600. `.env` holds only `VERSION` and `DOMAIN`; the password in `postgres.env` and in `app.env`'s `DATABASE_URL` is the same; the three values are 64 hex characters and differ; no value is printed; no temporary folder is left.
+  - A second run, an existing `app.env`, the example domain, a missing `app.env.example`, or a failing `openssl` each stop the block and leave no file of its own.
+  - Two runs at once: one publishes a matching set, the other stops and leaves nothing of its own.
+- Sections 5 and 6, against PostgreSQL 18.6 in two throwaway Compose projects run from the `docker-compose.yml` of the time, before its secrets moved to `postgres.env` and `app.env`, with PostgreSQL's data on tmpfs through an override file instead of `./postgres-data`: the dump block writes one custom-format dump and no partial file. The restore block brings every row back into an empty database, and refuses a missing dump and an existing `postgres-data`.
 - Section 7 (upgrade), with a stand-in `docker`: only `VERSION` changes, `.env` keeps mode 600, and the dump is written first. A failed pull or a failed dump stops the block with `.env` byte for byte as it was, and without `.env` the block stops before `docker`.
 - Not verified:
   - The `./postgres-data` bind mount, and `server` or `worker` started on a restored database.
