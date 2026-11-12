@@ -385,7 +385,14 @@ check "notes: 1.0.0 does not match 1.0.01" grep -q "found 0" <(notes 1.0.0 "## [
 # is refused instead of finding its own commit already there.
 sandbox
 REPO_ROOT="$(checkout)"
-lock_once() { (take_lock >/dev/null 2>&1 && echo "$LOCK_COMMIT"); }
+# The clock is fixed, as two machines in the same second would see it, so only the nonce can tell the runs apart.
+lock_once() {
+  (
+    date() { echo 2026-01-01T00:00:00Z; }
+    export GIT_AUTHOR_DATE="2026-01-01T00:00:00Z" GIT_COMMITTER_DATE="2026-01-01T00:00:00Z"
+    take_lock >/dev/null 2>&1 && echo "$LOCK_COMMIT"
+  )
+}
 first="$(lock_once)"
 second="$(lock_once)"
 check "lock: the first run takes it" [ -n "$first" ]
