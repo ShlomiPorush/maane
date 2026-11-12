@@ -13,7 +13,7 @@ import { type FormEvent, useId, useRef, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router"
 import { ApiError } from "../api/client.ts"
 import { api, type OrganizationDetail, type OrganizationMember, qk, type SupportAddress } from "../api/endpoints.ts"
-import { errorText } from "../api/errors.ts"
+import { ADDRESS_EXAMPLES, errorText } from "../api/errors.ts"
 import { formatNumber } from "../format/number.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { PageHead } from "../shell/chrome.tsx"
@@ -486,7 +486,7 @@ function AddAddressDialog({ id, onClose }: { id: string; onClose: () => void }) 
               />
               <span>
                 <b>{t(`organization.kind.${option}`)}</b>{" "}
-                <span className="ui-hint">{t(`organization.kindHint.${option}`)}</span>
+                <span className="ui-hint">{t(`organization.kindHint.${option}`, ADDRESS_EXAMPLES)}</span>
               </span>
             </label>
           ))}
@@ -505,7 +505,7 @@ function AddAddressDialog({ id, onClose }: { id: string; onClose: () => void }) 
             autoComplete="off"
             autoCapitalize="off"
             spellCheck={false}
-            placeholder={kind === "exact" ? "support@example.com" : "support-*@example.com"}
+            placeholder={kind === "exact" ? ADDRESS_EXAMPLES.addressExample : ADDRESS_EXAMPLES.patternExample}
             value={value}
             aria-invalid={error ? true : undefined}
             aria-describedby={hintId}
@@ -515,7 +515,7 @@ function AddAddressDialog({ id, onClose }: { id: string; onClose: () => void }) 
             }}
           />
           <p id={hintId} className="ui-hint">
-            {t(`organization.kindHint.${kind}`)}
+            {t(`organization.kindHint.${kind}`, ADDRESS_EXAMPLES)}
           </p>
         </div>
         {error ? <FormError>{error}</FormError> : null}

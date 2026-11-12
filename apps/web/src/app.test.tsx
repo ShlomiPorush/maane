@@ -9,6 +9,7 @@ import { createMemoryRouter, RouterProvider } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { noteAuthStatus } from "./api/auth.ts"
 import { setTransport, type TransportRequest, type TransportResponse } from "./api/client.ts"
+import { ERROR_VARS } from "./api/errors.ts"
 import { I18nProvider, translate } from "./i18n/i18n.tsx"
 import { ROUTES } from "./routes.tsx"
 
@@ -482,7 +483,7 @@ describe("organizations", () => {
     const field = document.querySelector<HTMLInputElement>(".ui-check-form input") as HTMLInputElement
     await act(async () => type(field, "not an address"))
     await act(async () => button(he("organizations.check.submit"))?.click())
-    expect(text()).toContain(he("errors.code.addressInvalid"))
+    expect(text()).toContain(he("errors.code.addressInvalid", ERROR_VARS))
     expect(requests.some((r) => r.url.includes("address-check"))).toBe(false)
 
     await act(async () => type(field, "Billing@example.org"))
@@ -534,7 +535,7 @@ describe("organizations", () => {
     await act(async () => type(value, "*@*.example.com"))
     const submit = () => document.querySelector<HTMLButtonElement>("[role=dialog] .ui-dialog-foot button[type=submit]")
     await act(async () => submit()?.click())
-    expect(dialog.textContent).toContain(he("errors.code.patternInvalid"))
+    expect(dialog.textContent).toContain(he("errors.code.patternInvalid", ERROR_VARS))
     expect(requests.some((r) => r.method === "POST")).toBe(false)
 
     await act(async () => type(value, "Support-*@Example.com"))

@@ -136,8 +136,8 @@
       "memberNotAgent": "אפשר להוסיף רק נציגים. מנהלים רואים כבר את כל הארגונים.",
       "memberExists": "הנציג הזה כבר שייך לארגון.",
       "memberNotFound": "הנציג הזה כבר לא שייך לארגון. כדאי לטעון מחדש את הדף.",
-      "addressInvalid": "זו לא כתובת תקינה. כותבים אותה כך: support@example.com.",
-      "patternInvalid": "התבנית לא תקינה. כותבים כתובת מלאה עם * לפני ה־@, למשל support-*@example.com.",
+      "addressInvalid": "זו לא כתובת תקינה. כותבים אותה כך: {addressExample}.",
+      "patternInvalid": "התבנית לא תקינה. כותבים כתובת מלאה עם * לפני ה־@, למשל {patternExample}.",
       "addressTaken": "הכתובת או התבנית האלה כבר שייכות לארגון.",
       "addressNotFound": "הכתובת הזו כבר לא קיימת. כדאי לטעון מחדש את הדף.",
       "addressDefaultNotExact": "רק כתובת מדויקת יכולה להיות כתובת ברירת המחדל.",
@@ -517,8 +517,8 @@
       "pattern": "תבנית"
     },
     "kindHint": {
-      "exact": "כתובת אחת, למשל support@example.com.",
-      "pattern": "כתובת מלאה עם * במקום תו אחד או יותר לפני ה־@, למשל support-*@example.com."
+      "exact": "כתובת אחת, למשל {addressExample}.",
+      "pattern": "כתובת מלאה עם * במקום תו אחד או יותר לפני ה־@, למשל {patternExample}."
     },
     "addresses": {
       "title": "כתובות תמיכה",

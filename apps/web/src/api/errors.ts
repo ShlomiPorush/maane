@@ -82,8 +82,18 @@ export const STATUS_TEXT = {
   unexpected: "errors.unexpected",
 } as const
 
-/** The numbers some sentences name (password, username, and organization name lengths). */
+/**
+ * The example addresses some sentences show. Filled in as values, so they sit in first-strong isolates and keep their
+ * order inside right-to-left text.
+ */
+export const ADDRESS_EXAMPLES = {
+  addressExample: "support@example.com",
+  patternExample: "support-*@example.com",
+}
+
+/** The numbers and examples some sentences name (password, username, and organization name lengths). */
 export const ERROR_VARS = {
+  ...ADDRESS_EXAMPLES,
   nameMax: ORGANIZATION_NAME_MAX,
   passwordMin: PASSWORD_MIN,
   passwordMax: PASSWORD_MAX,

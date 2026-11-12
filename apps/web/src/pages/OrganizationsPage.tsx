@@ -9,6 +9,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { ChevronRight, Plus } from "lucide-react"
 import { type FormEvent, useId, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router"
+import { ApiError } from "../api/client.ts"
 import { type AddressCheck, api, type OrganizationSummary, qk } from "../api/endpoints.ts"
 import { errorText } from "../api/errors.ts"
 import { formatNumber } from "../format/number.ts"
@@ -189,7 +190,7 @@ function AddressCheckPanel() {
     event.preventDefault()
     if (!parseExactAddress(address).ok) {
       setResult(null)
-      setError(t("errors.code.addressInvalid"))
+      setError(errorText(t, new ApiError(400, "address_invalid")))
       input.current?.focus()
       return
     }

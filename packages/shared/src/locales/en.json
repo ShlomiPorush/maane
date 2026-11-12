@@ -136,8 +136,8 @@
       "memberNotAgent": "Only agents can be added. Admins see every organization already.",
       "memberExists": "This agent is already in the organization.",
       "memberNotFound": "This agent is no longer in the organization. Reload the page.",
-      "addressInvalid": "That is not a valid address. Write it like support@example.com.",
-      "patternInvalid": "That pattern is not valid. Write a whole address with * before the @, like support-*@example.com.",
+      "addressInvalid": "That is not a valid address. Write it like {addressExample}.",
+      "patternInvalid": "That pattern is not valid. Write a whole address with * before the @, like {patternExample}.",
       "addressTaken": "This address or pattern already belongs to an organization.",
       "addressNotFound": "This address no longer exists. Reload the page.",
       "addressDefaultNotExact": "Only an exact address can be the default address.",
@@ -517,8 +517,8 @@
       "pattern": "Pattern"
     },
     "kindHint": {
-      "exact": "One address, for example support@example.com.",
-      "pattern": "A whole address with * for one or more characters before the @, for example support-*@example.com."
+      "exact": "One address, for example {addressExample}.",
+      "pattern": "A whole address with * for one or more characters before the @, for example {patternExample}."
     },
     "addresses": {
       "title": "Support addresses",

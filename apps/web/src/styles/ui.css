@@ -1635,7 +1635,8 @@ html.ui-layer-on .ui-page {
 }
 /* A long key or command wraps instead of being cut: it is read and typed, not only copied. */
 .ui-auth-note .ui-copy bdi,
-.ui-secret .ui-copy bdi {
+.ui-secret .ui-copy bdi,
+.ui-item-tags .ui-copy bdi {
   overflow: visible;
   white-space: normal;
   overflow-wrap: anywhere;
