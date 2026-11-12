@@ -48,6 +48,7 @@ export const AUDIT_ACTIONS = [
   "organization.address_remove",
   "organization.address_default",
   "organization.memberships_clear",
+  "file.blocked",
 ] as const
 
 const KNOWN = new Set<string>(AUDIT_ACTIONS)
@@ -192,6 +193,13 @@ export function describe(
       facts.push({ label: t("audit.fact.address"), value: details.value, ltr: true })
     if (entry.action === "organization.address_default" && typeof details.previous === "string")
       facts.push({ label: t("audit.fact.previousDefault"), value: details.previous, ltr: true })
+  }
+  if (entry.action === "file.blocked") {
+    if (typeof details.fileName === "string") facts.push({ label: t("audit.fact.fileName"), value: details.fileName })
+    if (typeof details.signature === "string")
+      facts.push({ label: t("audit.fact.signature"), value: details.signature, ltr: true })
+    if (typeof details.type === "string")
+      facts.push({ label: t("audit.fact.blockedType"), value: details.type, ltr: true })
   }
   if (entry.action === "session.sign_in" && (details.stage === "password" || details.stage === "second_factor"))
     facts.push({ label: t("audit.fact.stage"), value: t(`audit.stage.${details.stage}`) })

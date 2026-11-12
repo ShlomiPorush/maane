@@ -19,6 +19,8 @@ export type ServerConfig = {
   /** Where the server finds its migrations and the built UI. */
   migrationsDir: string
   webDir: string
+  /** MAANE_FILES_DIR: the content-addressed store the server and the worker share (default /data/files). */
+  filesDir: string
   version: string
   /** Settings the environment sets: each overrides the stored value, and the UI shows the field locked. */
   overrides: Partial<Record<SettingKey, string>>
@@ -197,6 +199,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     publicUrl,
     migrationsDir: env.MAANE_MIGRATIONS_DIR || "drizzle",
     webDir: env.MAANE_WEB_DIR || "dist/web",
+    filesDir: env.MAANE_FILES_DIR || "/data/files",
     version: env.MAANE_VERSION || "dev",
     overrides,
   }

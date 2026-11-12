@@ -4,6 +4,7 @@ import { SetupWindow } from "./auth/setup-window.ts"
 import { loadConfig } from "./config.ts"
 import { migrateDatabase, openDatabase } from "./db/client.ts"
 import { createApp } from "./http/app.ts"
+import { openJobQueue } from "./jobs/queue.ts"
 import { errorFacts, log } from "./log.ts"
 import { createSettingsCipher } from "./settings/crypto.ts"
 import { Settings } from "./settings/service.ts"
@@ -17,6 +18,7 @@ async function main(): Promise<void> {
   const auditDatabase = openDatabase(config.databaseUrl, 2)
   await migrateDatabase(database.db, config.migrationsDir)
   const settings = new Settings(database.db, createSettingsCipher(config.settingsKeys), config.overrides)
+  const jobs = await openJobQueue(config.databaseUrl)
 
   const build = async () =>
     createAuth({
@@ -42,6 +44,7 @@ async function main(): Promise<void> {
     onSettingsChanged: async () => {
       auth = await build()
     },
+    jobs,
   })
 
   const server = serve({ fetch: app.fetch, port: config.port, hostname: "0.0.0.0" })
@@ -50,7 +53,7 @@ async function main(): Promise<void> {
   const stop = (signal: string) => {
     log.info("server stopping", { signal })
     server.close(() => {
-      void Promise.all([database.close(), auditDatabase.close()]).then(() => process.exit(0))
+      void Promise.all([jobs.stop(), database.close(), auditDatabase.close()]).then(() => process.exit(0))
     })
   }
   process.once("SIGTERM", () => stop("SIGTERM"))

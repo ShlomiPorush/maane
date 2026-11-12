@@ -215,3 +215,53 @@ export const supportAddress = pgTable(
     check("support_address_default_exact", sql`not ${t.isDefault} or ${t.kind} = 'exact'`),
   ],
 )
+
+// --- Files and scanning (phase 2.2) ---
+
+/**
+ * One file in the content-addressed store, under <files dir>/<first two hex>/<sha256>. Only content that scanned
+ * clean, not fully scanned, or not scanned (the scanner was unavailable and the policy allows) is ever stored;
+ * infected, blocked, and waiting content never reaches the disk. The file is written, synced, and renamed into place
+ * in the transaction that inserts this row, under a transaction-scoped advisory lock on the hash, so the daily sweep
+ * of files no row references never interleaves with a writer of the same hash. A file is reached only through its
+ * attachment, message, and ticket (from phase 2.3), never by its hash.
+ */
+export const storedFile = pgTable(
+  "stored_file",
+  {
+    sha256: text("sha256").primaryKey(),
+    size: bigint("size", { mode: "number" }).notNull(),
+    /** The type read from the content (file-type), `text/plain` by the text rule, or `application/octet-stream`. */
+    detectedType: text("detected_type").notNull(),
+    /** `clean`, `not_fully_scanned`, or `not_scanned`. */
+    scanStatus: text("scan_status").notNull(),
+    /** The scanner's alert for a file not fully scanned (for example `Heuristics.Encrypted.Zip`). */
+    signature: text("signature"),
+    /** When a scanner decided; null for a file stored not scanned. */
+    scannedAt: at("scanned_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    check("stored_file_sha256", sql`${t.sha256} ~ '^[0-9a-f]{64}$'`),
+    check("stored_file_size", sql`${t.size} >= 0`),
+    check("stored_file_status", sql`${t.scanStatus} in ('clean', 'not_fully_scanned', 'not_scanned')`),
+  ],
+)
+
+/**
+ * The latest self-test of the scanner, one row. `clean` is trusted only from the address this row names, while it
+ * passed. The worker writes it on start, every hour, when the address changes, and for a connection test.
+ */
+export const scannerCheck = pgTable(
+  "scanner_check",
+  {
+    id: integer("id").primaryKey(),
+    address: text("address").notNull(),
+    ok: boolean("ok").notNull(),
+    /** The first check that failed (`@maane/shared` SCANNER_CHECKS). */
+    failedCheck: text("failed_check"),
+    version: text("version"),
+    checkedAt: at("checked_at").notNull(),
+  },
+  (t) => [check("scanner_check_one_row", sql`${t.id} = 1`)],
+)

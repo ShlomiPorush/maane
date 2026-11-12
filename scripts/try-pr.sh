@@ -67,10 +67,11 @@ save_state() {
   } >"$STATE_FILE"
 }
 
-# The development template of the pull request itself, with this stack's image, port, and data directory: the stack
-# runs as the pull request defines it.
+# The development template of the pull request itself, with this stack's image, port, and data directory, and the
+# configuration files it mounts from the pull request's worktree: the stack runs as the pull request defines it.
 write_compose() {
   sed -e "s|maane:\${MAANE_IMAGE_TAG:-dev}|$IMAGE|g" \
+    -e "s|\./docker/|$WORKTREE/docker/|g" \
     -e "s|\${MAANE_DATA_DIR:?MAANE_DATA_DIR is set by the scripts}|$DATA_DIR|g" \
     -e "s|\${MAANE_PUBLIC_URL:-http://127.0.0.1:\${MAANE_PORT:-8095}}|http://127.0.0.1:$PORT|g" \
     -e "s|\${MAANE_PORT:-8095}|$PORT|g" \
@@ -142,15 +143,17 @@ try_pr() {
   build_toolchain
 
   ensure_stack_env "$DATA_DIR"
+  ensure_stack_dirs "$DATA_DIR"
   write_compose
   info "Starting $PR_PROJECT on http://127.0.0.1:$PORT"
-  pr_compose up -d --wait --wait-timeout 240 || {
+  # ClamAV loads its signatures before it turns healthy, and downloads them first when the cache is empty.
+  pr_compose up -d --wait --wait-timeout 600 || {
     pr_compose ps -a || true
     pr_compose logs --tail 50 || true
     die "the pull request stack did not become healthy. Clean up with: scripts/try-pr.sh restore"
   }
-  check_non_root "$PR_PROJECT" server worker postgres
-  check_hardening "$PR_PROJECT" server worker
+  check_non_root "$PR_PROJECT" server worker postgres clamav
+  check_hardening "$PR_PROJECT" server worker clamav
   seed || die "seeding failed; the stack still runs. Inspect it, then: scripts/try-pr.sh restore"
 
   info "Pull request #$pr (${COMMIT:0:12}) runs on http://127.0.0.1:$PORT"
@@ -181,8 +184,13 @@ status() {
     [ "$(docker inspect -f '{{.Config.Image}}' "$cid")" = "$IMAGE" ] || die "$service does not run $IMAGE"
     [ "$health" = healthy ] || die "$service is not healthy"
   done
-  check_non_root "$PR_PROJECT" server worker postgres
-  check_hardening "$PR_PROJECT" server worker
+  cid="$(pr_compose ps -q clamav)"
+  [ -n "$cid" ] || die "service clamav is not running"
+  health="$(docker inspect -f '{{.State.Health.Status}}' "$cid")"
+  echo "    clamav health: $health"
+  [ "$health" = healthy ] || die "clamav is not healthy"
+  check_non_root "$PR_PROJECT" server worker postgres clamav
+  check_hardening "$PR_PROJECT" server worker clamav
 }
 
 restore() {

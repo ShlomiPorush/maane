@@ -389,6 +389,57 @@
         "listening": "Listening: Maane records each message and what it would have done, and opens no ticket. Use it until cutover.",
         "live": "Live: each message opens a ticket or joins one. It needs a default address."
       }
+    },
+    "files": "Files and scanning",
+    "filesIntro": "Maane scans every file with ClamAV before it keeps it. An infected file or a blocked type is never stored.",
+    "scanner": {
+      "label": "Scanner",
+      "hint": "Maane trusts a clean result only from a scanner that passed its self-test: the scanner must find the EICAR test file and alert on an encrypted ZIP and an encrypted PDF. The worker runs it at start, every hour, and when the address changes.",
+      "passed": "Passed",
+      "failed": "Failed",
+      "notChecked": "Not checked yet",
+      "notCheckedNote": "The worker has not tested a scanner yet. Check that the worker is running.",
+      "loadFailed": "Could not read the scanner's status.",
+      "check": {
+        "connection": "No answer from the scanner",
+        "eicar": "The scanner did not find the EICAR test file",
+        "encrypted_zip": "No alert on an encrypted ZIP",
+        "encrypted_pdf": "No alert on an encrypted PDF",
+        "clean": "The scanner flagged harmless text"
+      },
+      "tested": "Tested {address}",
+      "version": "Version {version}",
+      "checked": "Checked",
+      "test": "Test connection",
+      "testing": "Testing...",
+      "saveFirst": "Save the new address first: the test checks the saved one.",
+      "testPassed": "The scanner passed the self-test.",
+      "testFailed": "The scanner failed the self-test: {check}.",
+      "testNoAnswer": "The test did not finish. Check that the worker is running, then try again."
+    },
+    "scannerAddress": {
+      "label": "Scanner address",
+      "hint": "The clamd Maane scans with, as host:port. The bundled scanner is clamav:3310. An outside clamd needs AlertExceedsMax, AlertEncrypted, AlertEncryptedArchive, and AlertEncryptedDoc set to yes, and a StreamMaxLength of at least the largest file."
+    },
+    "scannerPolicy": {
+      "label": "When the scanner is unavailable",
+      "mode": {
+        "block": "Block",
+        "allow": "Allow"
+      },
+      "explain": {
+        "block": "Block: incoming files wait and are scanned when the scanner answers again.",
+        "allow": "Allow: incoming files are stored marked not scanned, and never shown as clean."
+      }
+    },
+    "maxBytes": {
+      "label": "Largest file (MB)",
+      "hint": "Maane does not scan or keep a larger file. {min} to {max} MB."
+    },
+    "blockedTypes": {
+      "label": "Blocked file types",
+      "hint": "File name extensions and types read from the content, separated by commas or lines. A blocked file is handled like an infected one. It applies to the file itself, not to the files inside an archive.",
+      "defaultList": "the default list"
     }
   },
   "audit": {
@@ -414,7 +465,10 @@
       "organization": "Organization",
       "previousName": "Previous name",
       "address": "Address",
-      "previousDefault": "Previous default"
+      "previousDefault": "Previous default",
+      "fileName": "File",
+      "signature": "Signature",
+      "blockedType": "Blocked type"
     },
     "stage": {
       "password": "password",
@@ -456,6 +510,9 @@
         "address_remove": "Support address removed",
         "address_default": "Default address changed",
         "memberships_clear": "Organization memberships removed after a role change"
+      },
+      "file": {
+        "blocked": "File blocked"
       }
     }
   },

@@ -3,6 +3,7 @@ import { type Auth, createAuth } from "../auth/auth.ts"
 import { SetupWindow } from "../auth/setup-window.ts"
 import { openDatabase } from "../db/client.ts"
 import { createApp } from "../http/app.ts"
+import type { JobQueue } from "../jobs/queue.ts"
 import { createSettingsCipher } from "../settings/crypto.ts"
 import { Settings } from "../settings/service.ts"
 import { TEST_ORIGIN } from "./browser.ts"
@@ -19,11 +20,24 @@ export class TestClock {
   }
 }
 
+/** A queue for tests that never queue a job: any attempt fails the test. */
+const NO_JOBS: JobQueue = {
+  send: async () => {
+    throw new Error("this test has no job queue")
+  },
+  job: async () => null,
+  stop: async () => {},
+}
+
 /**
  * The app as the server builds it, on a test database, with keys new for this run and a movable clock. Requests go
  * straight to `app.fetch`, so no port is opened.
  */
-export function createTestApp(database: TestDatabase, overrides: Record<string, string> = {}) {
+export function createTestApp(
+  database: TestDatabase,
+  overrides: Record<string, string> = {},
+  jobs: JobQueue = NO_JOBS,
+) {
   const audit = openDatabase(database.url, 2)
   const clock = new TestClock()
   const setup = new SetupWindow(clock.now)
@@ -56,6 +70,7 @@ export function createTestApp(database: TestDatabase, overrides: Record<string, 
     webDir: "/nonexistent",
     version: "test",
     onSettingsChanged: build,
+    jobs,
   })
   return {
     ready,
