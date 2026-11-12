@@ -15,7 +15,7 @@ import { authClient, onAuthUnauthorized } from "../api/auth.ts"
 import { ApiError, onUnauthorized } from "../api/client.ts"
 import { qk } from "../api/endpoints.ts"
 import { useI18n } from "../i18n/i18n.tsx"
-import { ConfirmHost } from "../ui/confirm.tsx"
+import { ConfirmHost, dismissQuestions } from "../ui/confirm.tsx"
 import { ErrorState, Loading } from "../ui/states.tsx"
 import { ToastHost } from "../ui/Toast.tsx"
 import { UnsavedProvider, useClearUnsaved } from "../ui/unsaved.tsx"
@@ -67,6 +67,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
       // The router's own location: the sign-in pages decide for themselves.
       if (AUTH_PAGES.includes(pathRef.current)) return
       clearUnsaved()
+      dismissQuestions()
       queryClient.removeQueries({ queryKey: qk.me })
       navigate(authPath(error, hereRef.current), { replace: true })
     })
@@ -122,6 +123,8 @@ function SessionKeeper({ seen }: { seen: RefObject<string | null> }) {
       seen.current = identity
       if (before && before !== identity) {
         clearUnsaved()
+        // An open question (it lives outside the pages) must not run the previous identity's action.
+        dismissQuestions()
         void queryClient.resetQueries()
       }
     } else if (!isPending && seen.current) void queryClient.invalidateQueries({ queryKey: qk.me })

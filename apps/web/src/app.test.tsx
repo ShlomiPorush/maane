@@ -20,6 +20,7 @@ const auth = vi.hoisted(() => ({
   verifyBackupCode: vi.fn(),
   generateBackupCodes: vi.fn(),
   signUpEmail: vi.fn(),
+  revokeOtherSessions: vi.fn(),
 }))
 
 /** Better Auth's client session as useSession reads it, changed by a test the way another tab or a refresh does. */
@@ -48,6 +49,7 @@ vi.mock("./api/auth.ts", async (importOriginal) => {
     authClient: {
       useSession: () => ({ data: useSyncExternalStore(session.subscribe, session.get), isPending: false }),
       listSessions: auth.listSessions,
+      revokeOtherSessions: auth.revokeOtherSessions,
       signOut: () => Promise.resolve({ data: {}, error: null }),
       signIn: { username: auth.signInUsername },
       signUp: { email: auth.signUpEmail },
@@ -486,5 +488,25 @@ describe("identity changes while a page is open", () => {
     await act(async () => session.set({ session: { id: "other" }, user: { id: "u2", role: "agent" } }))
     await vi.waitFor(() => expect(text()).toContain("agent.one"))
     expect(text()).not.toContain(codes[0] as string)
+  })
+
+  it("cancels a question the previous identity opened, so its action never runs", async () => {
+    const at = new Date().toISOString()
+    const signedIn = (id: string) => ({ id, token: `t-${id}`, createdAt: at, expiresAt: at, userAgent: null })
+    auth.listSessions.mockResolvedValue({ data: [signedIn("current"), signedIn("elsewhere")], error: null })
+    auth.revokeOtherSessions.mockResolvedValue({ data: { status: true }, error: null })
+    session.set({ session: { id: "current" }, user: { id: "u1", role: "admin" } })
+    const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": admin }
+    await renderAt("/account", answers)
+    const button = (label: string) =>
+      Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+    await vi.waitFor(() => expect(button(he("account.endOthers"))).toBeDefined())
+    await act(async () => button(he("account.endOthers"))?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
+    answers["/api/v1/me"] = agent
+    await act(async () => session.set({ session: { id: "other" }, user: { id: "u2", role: "agent" } }))
+    await vi.waitFor(() => expect(text()).toContain("agent.one"))
+    expect(document.querySelector("[role=alertdialog]")).toBeNull()
+    expect(auth.revokeOtherSessions).not.toHaveBeenCalled()
   })
 })

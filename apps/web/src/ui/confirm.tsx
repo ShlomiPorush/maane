@@ -24,7 +24,16 @@ type Pending = ConfirmOptions & { id: number; resolve: (answer: boolean) => void
 
 let ask: ((pending: Pending) => void) | null = null
 let drop: ((id: number) => void) | null = null
+let dropAll: (() => void) | null = null
 let nextId = 1
+
+/**
+ * Cancels the open question, whoever asked it: the signed-in identity changed, so an answer must not reach an action
+ * the previous identity started.
+ */
+export function dismissQuestions(): void {
+  dropAll?.()
+}
 
 /** A question asked, and what takes it away unanswered (as Cancel) when it no longer applies. */
 export type Question = { answer: Promise<boolean>; dismiss: () => void }
@@ -65,9 +74,16 @@ export function ConfirmHost() {
         return null
       })
     }
+    dropAll = () => {
+      setPending((current) => {
+        current?.resolve(false)
+        return null
+      })
+    }
     return () => {
       ask = null
       drop = null
+      dropAll = null
     }
   }, [])
 
