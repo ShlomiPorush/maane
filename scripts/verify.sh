@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The single verification entry point, used locally and in CI.
-# Usage: scripts/verify.sh [--changed [BASE]] [--guards-only]
+# Usage: scripts/verify.sh [--changed [BASE]] [--guards-only] [--skip-integration]
 set -euo pipefail
 
 # shellcheck source=scripts/lib/common.sh
@@ -10,6 +10,7 @@ CHANGED_BASE=""
 MERGE_BASE=""
 CHANGED=""
 CHECKS=1
+INTEGRATION=1
 
 usage() {
   cat <<'EOF'
@@ -21,6 +22,7 @@ Usage: scripts/verify.sh [options]
                     only the changed packages and their dependents when every change is inside apps/ or
                     packages/; otherwise the full sweep.
   --guards-only     Only the repository guards and their tests.
+  --skip-integration  Skip the integration tests against a disposable PostgreSQL.
 EOF
 }
 
@@ -34,6 +36,7 @@ while [ $# -gt 0 ]; do
       fi
       ;;
     --guards-only) CHECKS=0 ;;
+    --skip-integration) INTEGRATION=0 ;;
     -h | --help)
       usage
       exit 0
@@ -75,6 +78,62 @@ run_checks() {
   in_toolchain "pnpm lint"
   info "Types, unit tests and builds${filter:+ ($filter)}"
   in_toolchain "pnpm -r $selector run typecheck && pnpm -r $selector run test && pnpm -r $selector --if-present run build"
+  info "Database schema matches its migrations"
+  # A schema change without its migration would otherwise show only when the next migration is generated. The
+  # generator runs on a copy of the migrations, so a missing migration fails here without writing into the checkout.
+  # shellcheck disable=SC2016 # expands inside the container
+  # drizzle-kit prefixes "./" to --out, so the copy is named relative to apps/server.
+  in_toolchain 'copy="$(mktemp -d)" && cp -r apps/server/drizzle "$copy/drizzle" && cd apps/server &&
+    out="$(pnpm exec drizzle-kit generate --dialect postgresql --schema ./src/db/schema.ts \
+      --out "$(realpath --relative-to=. "$copy/drizzle")" --name schema-check 2>&1)"; rm -r -f -- "$copy";
+    echo "$out" | tail -1; grep -q "No schema changes" <<<"$out"' ||
+    die "apps/server/src/db/schema.ts has changes without a migration; run: pnpm --filter @maane/server db:generate --name <change>"
+}
+
+# Integration tests against a disposable PostgreSQL on a private Docker network. Its password is new for every run,
+# kept in an owner-only file in a temporary directory, and passed to containers only through --env-file.
+VERIFY_DIR=""
+VERIFY_NETWORK=""
+cleanup_integration() {
+  if [ -n "$VERIFY_NETWORK" ]; then
+    docker rm -f "$VERIFY_NETWORK-postgres" >/dev/null 2>&1 || true
+    docker network rm "$VERIFY_NETWORK" >/dev/null 2>&1 || true
+  fi
+  [ -n "$VERIFY_DIR" ] && rm -rf "$VERIFY_DIR"
+  VERIFY_DIR=""
+  VERIFY_NETWORK=""
+}
+
+run_integration() {
+  local filter="$1" selector="" password
+  [ -n "$filter" ] && selector="--filter '$filter'"
+  VERIFY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify.XXXXXX")"
+  VERIFY_NETWORK="maane-verify-$$"
+  trap cleanup_integration EXIT
+  chmod 700 "$VERIFY_DIR"
+  password="$(random_hex)"
+  (
+    umask 077
+    printf 'POSTGRES_USER=maane\nPOSTGRES_DB=maane\nPOSTGRES_PASSWORD=%s\n' "$password" >"$VERIFY_DIR/postgres.env"
+    printf 'MAANE_TEST_DATABASE_URL=postgres://maane:%s@postgres:5432/maane\n' "$password" >"$VERIFY_DIR/test.env"
+  )
+
+  info "Integration: disposable PostgreSQL ($POSTGRES_IMAGE)"
+  docker network create "$VERIFY_NETWORK" >/dev/null || die "could not create the verification network"
+  docker run -d --name "$VERIFY_NETWORK-postgres" --network "$VERIFY_NETWORK" --network-alias postgres \
+    --env-file "$VERIFY_DIR/postgres.env" --tmpfs /var/lib/postgresql "$POSTGRES_IMAGE" >/dev/null ||
+    die "could not start PostgreSQL"
+  local tries=0
+  until docker exec "$VERIFY_NETWORK-postgres" pg_isready -U maane -d maane -h 127.0.0.1 >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 60 ] || die "PostgreSQL did not become ready"
+    sleep 1
+  done
+  TOOLCHAIN_EXTRA_ARGS=(--network "$VERIFY_NETWORK" --env-file "$VERIFY_DIR/test.env")
+  in_toolchain "pnpm -r $selector --if-present run test:integration" || die "integration tests failed"
+  TOOLCHAIN_EXTRA_ARGS=()
+  cleanup_integration
+  trap - EXIT
 }
 
 main() {
@@ -104,6 +163,7 @@ main() {
   run_guards
   if [ $CHECKS -eq 1 ]; then
     run_checks "$filter"
+    if [ $INTEGRATION -eq 1 ]; then run_integration "$filter"; fi
   fi
   info "Verify passed"
 }

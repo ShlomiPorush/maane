@@ -1,0 +1,19 @@
+{
+  "name": "@maane/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.ts src/healthcheck.ts --bundle --platform=node --target=node26 --format=esm --outdir=dist/worker --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --project unit --passWithNoTests",
+    "test:integration": "vitest run --project integration"
+  },
+  "dependencies": {
+    "@maane/server": "workspace:*",
+    "pg-boss": "12.38.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
