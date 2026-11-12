@@ -47,7 +47,7 @@ All scripts are Bash for WSL or Linux with Docker. Node, pnpm, shellcheck, and s
 - Ad-hoc commands in the toolchain: `source scripts/lib/common.sh && build_toolchain && in_toolchain "pnpm ..."`.
 - The web UI alone: `in_toolchain "pnpm --filter @maane/web run typecheck"`, `... run test` (Vitest with happy-dom), `... run build`. `pnpm --filter @maane/web run dev` serves it on port 5173 and sends `/api` to a server on port 8090.
 - `scripts/local.sh <build|up|start|down|status|logs|nuke>`: the development stack on `http://127.0.0.1:8095` (`MAANE_PORT`). Its data directory (default on the Linux file system) holds the database and the generated `postgres.env` and `app.env`, created once and never rewritten. `down` keeps the data; `nuke` asks, then deletes it.
-- `scripts/try-pr.sh <number|status|restore>`: builds a pull request's head in a disposable worktree and runs it as the Compose project `maane-pr` on `http://127.0.0.1:8096` (`MAANE_PR_PORT`), with its own database, secrets, and a first admin whose sign-in `status` points to. `restore` removes all of it.
+- `scripts/try-pr.sh <number|status|restore>`: builds a pull request's head in a disposable worktree and runs it as the Compose project `maane-pr` on `http://127.0.0.1:8096` (`MAANE_PR_PORT`), with its own database, secrets, and a first admin whose sign-in `status` points to. `restore` removes all of it. One start or restore at a time: a second one refuses while the first holds the lock (`flock` on `~/.cache/maane/try-pr.lock`).
 - The planned contract for `scripts/release.sh` is in `docs/project-foundation.md`.
 
 Verify in proportion to the risk, and report what ran and its result:
@@ -77,6 +77,7 @@ CI (`.github/workflows/ci.yml`) runs `Detect changes`, `Guards` always, `Checks`
 - Vitest runs the web tests in happy-dom; a test that reads files with `import.meta.url` (`src/guards.test.ts`) declares `// @vitest-environment node`.
 - A test that needs a URL with a password builds it at run time; the guards refuse credentials in a URL literal unless the password is a placeholder (`$NAME`, `${...}`, `%s`, `<name>`, or asterisks).
 - In the end-to-end tests, type a password or a code with `fillSecret` (`e2e/helpers.ts`), never `fill`: a failing `fill` prints its value in the call log, and so in the CI log. Failure details (`error-context.md`) hold a snapshot of the page with its secrets, so the output directory stays inside the container.
+- `mkdir` is not a lock: the uutils coreutils of newer Ubuntu (0.8) let two processes that race both succeed. Use `flock`, `ln` of a prepared file (one winner), or Bash's `set -o noclobber`.
 
 ## Repository policies
 

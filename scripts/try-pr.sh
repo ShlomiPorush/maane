@@ -15,6 +15,9 @@ ADMIN_FILE="$STATE_DIR/admin.env"
 COMPOSE_FILE="$STATE_DIR/compose.yml"
 DATA_DIR="$STATE_DIR/data"
 WORKTREE="$STATE_DIR/worktree"
+# Locked while a start or a restore runs, so a second one refuses. flock, not mkdir: the kernel releases the lock when
+# the process ends, however it ends, and mkdir is not atomic in every coreutils (uutils 0.8 lets two racers win).
+LOCK_FILE="$CACHE_DIR/try-pr.lock"
 DEFAULT_PORT=8096
 # Filled from STATE_FILE by load_state.
 PR="" COMMIT="" REF="" PORT="" IMAGE=""
@@ -37,6 +40,15 @@ EOF
 
 pr_compose() {
   docker compose -p "$PR_PROJECT" --project-directory "$STATE_DIR" -f "$COMPOSE_FILE" "$@"
+}
+
+# Takes the lock on file descriptor 9 for the rest of this process, or refuses. The file itself stays: removing it
+# while another process waits on it would let a third lock a new file of the same name.
+take_lock() {
+  command -v flock >/dev/null 2>&1 || die "flock (util-linux) is missing; install util-linux"
+  mkdir -p "$CACHE_DIR"
+  exec 9>"$LOCK_FILE"
+  flock -n 9 || die "another scripts/try-pr.sh start or restore is running; wait for it to finish"
 }
 
 load_state() {
@@ -76,7 +88,6 @@ gh_head() {
 
 seed() {
   info "Creating the first admin through the setup screen's sign-up, with two-factor on"
-  build_toolchain
   # The seed writes the admin's sign-in to /state/admin.env (0600) and prints none of it.
   TOOLCHAIN_EXTRA_ARGS=(--network "${PR_PROJECT}_default" -v "$STATE_DIR:/state"
     -e MAANE_URL=http://server:8080 -e "MAANE_ORIGIN=http://127.0.0.1:$PORT" -e MAANE_ADMIN_FILE=/state/admin.env)
@@ -89,6 +100,7 @@ seed() {
 try_pr() {
   local pr="$1" dev_port="${MAANE_PORT:-8095}" expected
   [[ "$pr" =~ ^[1-9][0-9]*$ ]] || die "pull request number expected, got: $pr"
+  take_lock
   if [ -f "$STATE_FILE" ]; then
     load_state
     die "pull request #$PR is running. Remove it first: scripts/try-pr.sh restore"
@@ -112,7 +124,8 @@ try_pr() {
   save_state
 
   info "Fetching pull request #$pr"
-  git -C "$REPO_ROOT" fetch --quiet origin "+pull/$pr/head:$REF" ||
+  # 9>&-: a background maintenance task git may start after a fetch must not keep the lock.
+  git -C "$REPO_ROOT" fetch --quiet origin "+pull/$pr/head:$REF" 9>&- ||
     die "cannot fetch pull request #$pr from origin. Clean up with: scripts/try-pr.sh restore"
   COMMIT="$(git -C "$REPO_ROOT" rev-parse "$REF")"
   expected="$(gh_head "$pr")"
@@ -125,6 +138,8 @@ try_pr() {
   info "Building $IMAGE from #$pr (${COMMIT:0:12})"
   docker build -f "$WORKTREE/docker/maane.Dockerfile" --build-arg "VERSION=pr$pr-${COMMIT:0:12}" -t "$IMAGE" "$WORKTREE" ||
     die "building $IMAGE failed. Clean up with: scripts/try-pr.sh restore"
+  # The seed runs in the toolchain within the 5-minute setup window, so its image is ready before the server starts.
+  build_toolchain
 
   ensure_stack_env "$DATA_DIR"
   write_compose
@@ -171,6 +186,7 @@ status() {
 }
 
 restore() {
+  take_lock
   if [ -f "$STATE_FILE" ]; then
     load_state
     info "Removing pull request #$PR"
