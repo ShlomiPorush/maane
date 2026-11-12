@@ -8,7 +8,7 @@
 
 import { LOCALES, SETTINGS, type SettingKey, type SettingView } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
-import { type ReactNode, useId, useRef, useState } from "react"
+import { type ReactNode, useEffect, useId, useRef, useState } from "react"
 import { ApiError } from "../api/client.ts"
 import { api, qk } from "../api/endpoints.ts"
 import { errorText } from "../api/errors.ts"
@@ -77,6 +77,16 @@ function Settings() {
     if (error?.key === key) setError(null)
   }
 
+  // False once the page is gone (left, or remounted for another identity): a late answer must not write the previous
+  // identity's settings over the cached ones the next page reads.
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
   const save = async () => {
     const body: Partial<Record<SettingKey, unknown>> = {}
     for (const key of changed) {
@@ -94,6 +104,7 @@ function Settings() {
     setError(null)
     try {
       const saved = await api.saveSettings(body)
+      if (!mounted.current) return
       queryClient.setQueryData(qk.settings, saved)
       setDraft((current) => {
         const next = { ...current }

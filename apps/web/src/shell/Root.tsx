@@ -137,7 +137,8 @@ function SessionKeeper({
       seen.current = identity
       const mismatch = sessionUser !== shown ? `${sessionUser}|${shown}` : null
       const newMismatch = mismatch !== null && mismatch !== handled.current
-      if (newMismatch) handled.current = mismatch
+      // Remembered only while the disagreement lasts: once the two agree, the same pair counts as new again.
+      handled.current = mismatch
       if ((before && before !== identity) || newMismatch) {
         clearUnsaved()
         // An open question (it lives outside the pages) must not run the previous identity's action.

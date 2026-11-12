@@ -650,3 +650,105 @@ describe("turning two-factor off from a dialog that is gone", () => {
     expect(where()).toBe("/login")
   })
 })
+
+describe("an identity that comes back, and a late settings answer", () => {
+  const button = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+
+  it("cancels a question when a previously handled pair returns after alignment", async () => {
+    const at = new Date().toISOString()
+    auth.listSessions.mockResolvedValue({
+      data: ["current", "other"].map((id) => ({ id, token: id, createdAt: at, expiresAt: at })),
+      error: null,
+    })
+    auth.revokeOtherSessions.mockResolvedValue({ data: { status: true }, error: null })
+    const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": agent }
+    // The session remains A while /me first reads B; handle this disagreement once.
+    await renderAt("/account", answers)
+    await vi.waitFor(() => expect(text()).toContain("agent.one"))
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    // /me catches up to A, while the session stays unchanged.
+    answers["/api/v1/me"] = admin
+    await act(async () => noteAuthStatus(401))
+    await vi.waitFor(() => expect(text()).toContain("first.admin"))
+    await vi.waitFor(() => expect(button(he("account.endOthers"))).toBeDefined())
+    await act(async () => button(he("account.endOthers"))?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
+    // Another tab has signed in as B again; /me notices before useSession refreshes.
+    answers["/api/v1/me"] = agent
+    await act(async () => noteAuthStatus(401))
+    await vi.waitFor(() => expect(text()).toContain("agent.one"))
+    await act(async () => document.querySelector<HTMLButtonElement>("[role=alertdialog] .ui-btn-danger-solid")?.click())
+    expect(auth.revokeOtherSessions).not.toHaveBeenCalled()
+  })
+
+  it("does not overwrite B's settings read with A's late mutation answer", async () => {
+    let release: (answer: TransportResponse) => void = () => {}
+    const loaded = (days: number) =>
+      ok({
+        settings: [
+          { key: "general.defaultLocale", value: "he", locked: false, variable: null },
+          { key: "security.sessionDays", value: days, locked: false, variable: null },
+        ],
+      })
+    let liveDays = 30
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": (request) =>
+        request.method === "PUT"
+          ? (new Promise<TransportResponse>((resolve) => {
+              release = resolve
+            }) as unknown as TransportResponse)
+          : loaded(liveDays),
+    }
+    await renderAt("/settings", answers)
+    const days = await vi.waitFor(() => {
+      const input = document.querySelector<HTMLInputElement>("input[type=number]")
+      expect(input).not.toBeNull()
+      return input as HTMLInputElement
+    })
+    await act(async () => type(days, "14"))
+    await act(async () => document.querySelector<HTMLButtonElement>(".ui-savebar-save")?.click())
+    await vi.waitFor(() => expect(requests.some((r) => r.method === "PUT")).toBe(true))
+    liveDays = 21
+    answers["/api/v1/me"] = ok({ id: "u2", username: "second.admin", role: "admin" })
+    await act(async () => session.set({ session: { id: "B" }, user: { id: "u2", role: "admin" } }))
+    await vi.waitFor(() => expect(document.querySelector<HTMLInputElement>("input[type=number]")?.value).toBe("21"))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    })
+    await act(async () => {
+      release(loaded(14))
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    })
+    expect(document.querySelector<HTMLInputElement>("input[type=number]")?.value).toBe("21")
+  })
+})
+describe("identity switches that still reset", () => {
+  it("still resets for session A, then B, then A after B caught up", async () => {
+    let reads = 0
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": () => {
+        reads++
+        return agent
+      },
+    }
+    await renderAt("/account", answers)
+    await vi.waitFor(() => expect(text()).toContain("agent.one"))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    const first = reads
+    await act(async () => session.set({ session: { id: "B" }, user: { id: "u2", role: "agent" } }))
+    await vi.waitFor(() => expect(reads).toBeGreaterThan(first))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    const caughtUp = reads
+    await act(async () => session.set({ session: { id: "A" }, user: { id: "u1", role: "admin" } }))
+    await vi.waitFor(() => expect(reads).toBeGreaterThan(caughtUp))
+    await vi.waitFor(() => expect(text()).toContain("agent.one"))
+  })
+})
