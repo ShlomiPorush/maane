@@ -101,12 +101,8 @@
           "name": "audit_log_actor_user_id_auth_user_id_fk",
           "tableFrom": "audit_log",
           "tableTo": "auth_user",
-          "columnsFrom": [
-            "actor_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -224,12 +220,8 @@
           "name": "auth_account_user_id_auth_user_id_fk",
           "tableFrom": "auth_account",
           "tableTo": "auth_user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -276,9 +268,7 @@
         "auth_rate_limit_key_unique": {
           "name": "auth_rate_limit_key_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "key"
-          ]
+          "columns": ["key"]
         }
       },
       "policies": {},
@@ -368,12 +358,8 @@
           "name": "auth_session_user_id_auth_user_id_fk",
           "tableFrom": "auth_session",
           "tableTo": "auth_user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -383,9 +369,7 @@
         "auth_session_token_unique": {
           "name": "auth_session_token_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "token"
-          ]
+          "columns": ["token"]
         }
       },
       "policies": {},
@@ -478,12 +462,8 @@
           "name": "auth_two_factor_user_id_auth_user_id_fk",
           "tableFrom": "auth_two_factor",
           "tableTo": "auth_user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -619,16 +599,12 @@
         "auth_user_email_unique": {
           "name": "auth_user_email_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "email"
-          ]
+          "columns": ["email"]
         },
         "auth_user_username_unique": {
           "name": "auth_user_username_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "username"
-          ]
+          "columns": ["username"]
         }
       },
       "policies": {},
@@ -728,12 +704,8 @@
           "name": "intake_cursor_source_id_intake_source_id_fk",
           "tableFrom": "intake_cursor",
           "tableTo": "intake_source",
-          "columnsFrom": [
-            "source_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["source_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -741,10 +713,7 @@
       "compositePrimaryKeys": {
         "intake_cursor_source_id_folder_pk": {
           "name": "intake_cursor_source_id_folder_pk",
-          "columns": [
-            "source_id",
-            "folder"
-          ]
+          "columns": ["source_id", "folder"]
         }
       },
       "uniqueConstraints": {},
@@ -861,12 +830,8 @@
           "name": "intake_record_message_id_message_id_fk",
           "tableFrom": "intake_record",
           "tableTo": "message",
-          "columnsFrom": [
-            "message_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["message_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -874,12 +839,8 @@
           "name": "intake_record_organization_id_organization_id_fk",
           "tableFrom": "intake_record",
           "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -887,12 +848,8 @@
           "name": "intake_record_ticket_id_ticket_id_fk",
           "tableFrom": "intake_record",
           "tableTo": "ticket",
-          "columnsFrom": [
-            "ticket_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["ticket_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -900,12 +857,8 @@
           "name": "intake_record_matched_ticket_id_ticket_id_fk",
           "tableFrom": "intake_record",
           "tableTo": "ticket",
-          "columnsFrom": [
-            "matched_ticket_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["matched_ticket_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -913,12 +866,8 @@
           "name": "intake_record_matched_message_id_message_id_fk",
           "tableFrom": "intake_record",
           "tableTo": "message",
-          "columnsFrom": [
-            "matched_message_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["matched_message_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1313,12 +1262,8 @@
           "name": "message_source_id_intake_source_id_fk",
           "tableFrom": "message",
           "tableTo": "intake_source",
-          "columnsFrom": [
-            "source_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["source_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -1326,12 +1271,8 @@
           "name": "message_raw_sha256_stored_file_sha256_fk",
           "tableFrom": "message",
           "tableTo": "stored_file",
-          "columnsFrom": [
-            "raw_sha256"
-          ],
-          "columnsTo": [
-            "sha256"
-          ],
+          "columnsFrom": ["raw_sha256"],
+          "columnsTo": ["sha256"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -1339,12 +1280,8 @@
           "name": "message_ticket_id_ticket_id_fk",
           "tableFrom": "message",
           "tableTo": "ticket",
-          "columnsFrom": [
-            "ticket_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["ticket_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1508,12 +1445,8 @@
           "name": "message_part_message_id_message_id_fk",
           "tableFrom": "message_part",
           "tableTo": "message",
-          "columnsFrom": [
-            "message_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["message_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -1521,12 +1454,8 @@
           "name": "message_part_stored_sha256_stored_file_sha256_fk",
           "tableFrom": "message_part",
           "tableTo": "stored_file",
-          "columnsFrom": [
-            "stored_sha256"
-          ],
-          "columnsTo": [
-            "sha256"
-          ],
+          "columnsFrom": ["stored_sha256"],
+          "columnsTo": ["sha256"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1650,12 +1579,8 @@
           "name": "organization_member_organization_id_organization_id_fk",
           "tableFrom": "organization_member",
           "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -1663,12 +1588,8 @@
           "name": "organization_member_user_id_auth_user_id_fk",
           "tableFrom": "organization_member",
           "tableTo": "auth_user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1676,10 +1597,7 @@
       "compositePrimaryKeys": {
         "organization_member_organization_id_user_id_pk": {
           "name": "organization_member_organization_id_user_id_pk",
-          "columns": [
-            "organization_id",
-            "user_id"
-          ]
+          "columns": ["organization_id", "user_id"]
         }
       },
       "uniqueConstraints": {},
@@ -1941,12 +1859,8 @@
           "name": "support_address_organization_id_organization_id_fk",
           "tableFrom": "support_address",
           "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1956,9 +1870,7 @@
         "support_address_value_unique": {
           "name": "support_address_value_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "value"
-          ]
+          "columns": ["value"]
         }
       },
       "policies": {},
@@ -2071,12 +1983,8 @@
           "name": "ticket_organization_id_organization_id_fk",
           "tableFrom": "ticket",
           "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -2086,16 +1994,12 @@
         "ticket_number_unique": {
           "name": "ticket_number_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "number"
-          ]
+          "columns": ["number"]
         },
         "ticket_reference_code_unique": {
           "name": "ticket_reference_code_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "reference_code"
-          ]
+          "columns": ["reference_code"]
         }
       },
       "policies": {},
@@ -2163,12 +2067,8 @@
           "name": "ticket_link_ticket_id_ticket_id_fk",
           "tableFrom": "ticket_link",
           "tableTo": "ticket",
-          "columnsFrom": [
-            "ticket_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["ticket_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -2176,12 +2076,8 @@
           "name": "ticket_link_linked_ticket_id_ticket_id_fk",
           "tableFrom": "ticket_link",
           "tableTo": "ticket",
-          "columnsFrom": [
-            "linked_ticket_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["linked_ticket_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -2189,10 +2085,7 @@
       "compositePrimaryKeys": {
         "ticket_link_ticket_id_linked_ticket_id_pk": {
           "name": "ticket_link_ticket_id_linked_ticket_id_pk",
-          "columns": [
-            "ticket_id",
-            "linked_ticket_id"
-          ]
+          "columns": ["ticket_id", "linked_ticket_id"]
         }
       },
       "uniqueConstraints": {},
@@ -2236,12 +2129,8 @@
           "name": "ticket_participant_ticket_id_ticket_id_fk",
           "tableFrom": "ticket_participant",
           "tableTo": "ticket",
-          "columnsFrom": [
-            "ticket_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["ticket_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -2249,10 +2138,7 @@
       "compositePrimaryKeys": {
         "ticket_participant_ticket_id_address_pk": {
           "name": "ticket_participant_ticket_id_address_pk",
-          "columns": [
-            "ticket_id",
-            "address"
-          ]
+          "columns": ["ticket_id", "address"]
         }
       },
       "uniqueConstraints": {},
@@ -2312,12 +2198,8 @@
           "name": "ticket_pending_reference_ticket_id_ticket_id_fk",
           "tableFrom": "ticket_pending_reference",
           "tableTo": "ticket",
-          "columnsFrom": [
-            "ticket_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["ticket_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -2325,12 +2207,8 @@
           "name": "ticket_pending_reference_resolved_by_message_id_fk",
           "tableFrom": "ticket_pending_reference",
           "tableTo": "message",
-          "columnsFrom": [
-            "resolved_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["resolved_by"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -2338,10 +2216,7 @@
       "compositePrimaryKeys": {
         "ticket_pending_reference_ticket_id_message_id_header_pk": {
           "name": "ticket_pending_reference_ticket_id_message_id_header_pk",
-          "columns": [
-            "ticket_id",
-            "message_id_header"
-          ]
+          "columns": ["ticket_id", "message_id_header"]
         }
       },
       "uniqueConstraints": {},

@@ -2,6 +2,7 @@
 
 import type {
   AddressKind,
+  GraphTestView,
   Locale,
   Role,
   ScannerStatusView,
@@ -93,6 +94,9 @@ export const api = {
   /** Queues a connection test the worker runs; scannerTest reads where it is. */
   testScanner: () => request<{ id: string }>("POST", "/settings/scanner/test"),
   scannerTest: (id: string) => request<ScannerTestView>("GET", `/settings/scanner/test/${encodeURIComponent(id)}`),
+  /** Queues a Graph connection test the worker runs; graphTest reads where it is. */
+  testGraph: () => request<{ id: string }>("POST", "/settings/graph/test"),
+  graphTest: (id: string) => request<GraphTestView>("GET", `/settings/graph/test/${encodeURIComponent(id)}`),
   audit: (before: number | null) =>
     request<AuditPage>("GET", `/audit${query({ before: before ?? undefined, limit: AUDIT_PAGE_SIZE })}`),
   organizations: () => request<{ organizations: OrganizationSummary[] }>("GET", ORGANIZATIONS),

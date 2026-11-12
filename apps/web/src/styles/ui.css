@@ -2168,8 +2168,8 @@ textarea.ui-input.ui-textarea {
   line-height: 1.5;
   resize: vertical;
 }
-/* The scanner's latest self-test on the Settings page: its status tag and when, then what failed and what was tested,
-   at the end of its row like the other controls. */
+/* The scanner's latest self-test and the Graph connection test on the Settings page: the status tag and when, then
+   what failed and what was tested, at the end of the row like the other controls. */
 .ui-scanner {
   display: grid;
   gap: 4px;

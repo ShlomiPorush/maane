@@ -16,6 +16,7 @@ import { join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   ADDRESS_KINDS,
+  GRAPH_PROBLEMS,
   INTAKE_MODES,
   MESSAGES,
   ROLES,
@@ -290,6 +291,7 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "settings.scannerPolicy.mode.": SCANNER_POLICIES,
   "settings.scannerPolicy.explain.": SCANNER_POLICIES,
   "settings.scanner.check.": SCANNER_CHECKS,
+  "settings.graph.problem.": GRAPH_PROBLEMS,
 }
 
 // --- Language policy: Hebrew only in he.json, bidirectional controls only as escapes ---
