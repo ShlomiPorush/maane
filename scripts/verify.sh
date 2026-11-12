@@ -249,8 +249,9 @@ run_file_checks() {
 
 # Intake end to end, as the worker runs it: apps/worker/src/testing/stack-intake.ts (bundled by run_file_checks) in a
 # container of the worker service, against the stack's database and the real ClamAV, with a stand-in Graph inside
-# that container. Runs after the end-to-end tests, which expect an empty organization list. A message becomes a ticket
-# in live mode and an intake record in listening mode; the check leaves the intake mode listening and no source current.
+# that container. Runs before the end-to-end tests, which read the tickets it makes (e2e/tickets.spec.ts): messages
+# become tickets of two organizations in live mode and intake records in listening mode; the check leaves the intake
+# mode listening, no source current, and no default address.
 run_intake_checks() {
   local out
   info "Intake: stand-in Graph to tickets and listening records, with the real ClamAV ($STACK_PROJECT)"
@@ -303,9 +304,10 @@ run_stack() {
   save_clamav_cache "$STACK_DIR"
   run_file_checks
 
+  run_intake_checks
+
   info "End-to-end: the web UI against the stack (Playwright, $PLAYWRIGHT_IMAGE)"
   run_e2e || fail_stack "end-to-end tests failed"
-  run_intake_checks
 
   info "Stopping $STACK_PROJECT"
   trap - EXIT
