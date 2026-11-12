@@ -193,7 +193,7 @@ check_production_compose() {
 
 # The container stack: the image built from this checkout, started from the tracked development template with a data
 # directory and secrets new for this run, then health, readiness, runtime users, and hardening are checked, and the
-# worker's file service runs against the real ClamAV. The project and the image tag belong to this run alone, so a
+# worker's file service and intake run against the real ClamAV. The project and the image tag belong to this run alone, so a
 # verify running in another checkout cannot replace the image under it. ClamAV's signatures come from the cache
 # (ensure_stack_dirs) and go back to it once the stack ran, so freshclam downloads only what changed.
 RUN_ID="$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
@@ -247,6 +247,21 @@ run_file_checks() {
   echo "    /data/files/${sha:0:2}/$sha: the same content in the recreated server"
 }
 
+# Intake end to end, as the worker runs it: apps/worker/src/testing/stack-intake.ts (bundled by run_file_checks) in a
+# container of the worker service, against the stack's database and the real ClamAV, with a stand-in Graph inside
+# that container. Runs after the end-to-end tests, which expect an empty organization list. A message becomes a ticket
+# in live mode and an intake record in listening mode; the check leaves the intake mode listening and no source current.
+run_intake_checks() {
+  local out
+  info "Intake: stand-in Graph to tickets and listening records, with the real ClamAV ($STACK_PROJECT)"
+  local check=(stack run --rm --no-deps -T -v "$REPO_ROOT/apps/worker/dist/stack-check:/check:ro" worker)
+  out="$("${check[@]}" node /check/stack-intake.js 2>&1)" || {
+    echo "$out"
+    fail_stack "the intake checks failed"
+  }
+  echo "$out"
+}
+
 fail_stack() {
   stack ps -a || true
   stack logs --tail 60 || true
@@ -290,6 +305,7 @@ run_stack() {
 
   info "End-to-end: the web UI against the stack (Playwright, $PLAYWRIGHT_IMAGE)"
   run_e2e || fail_stack "end-to-end tests failed"
+  run_intake_checks
 
   info "Stopping $STACK_PROJECT"
   trap - EXIT

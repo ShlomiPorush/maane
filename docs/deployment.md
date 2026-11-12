@@ -226,6 +226,49 @@ To scan with a clamd you already run instead of the bundled one, set Settings, F
 - `StreamMaxLength` at least the largest file in Settings (50 MB by default, at most 100 MB). A longer stream is refused, not scanned, and the file waits.
 - A `TCPSocket` the worker can reach, and nothing else listening on it: clamd has no authentication, so keep it off any network but the one it shares with Maane.
 
+### Connect Microsoft Graph
+
+Maane reads one shared intake mailbox (for example `maane@example.com`) through Microsoft Graph, read only: delta queries of its Inbox and Junk Email folders, and each new message's content. It never sends, moves, marks, or deletes mail. The worker reaches `login.microsoftonline.com` and `graph.microsoft.com` over HTTPS through the `scanner` network, the only one with outbound access.
+
+In Entra and Exchange Online (you do this; Maane changes nothing in Microsoft 365):
+
+1. Register an application for Maane, add a client secret, and note the tenant ID, the application (client) ID, and the secret. Give the application **no** Microsoft Graph mail permission in Entra: permissions add up, and an Entra permission would bypass the limit of the next step.
+2. Limit the application to the intake mailbox with Exchange Online RBAC for Applications: a service principal for the application, a management scope that holds only the intake mailbox, and the role `Application Mail.Read` assigned to the application in that scope. Microsoft documents the cmdlets in "Role Based Access Control for Applications in Exchange Online".
+3. In Maane, open Settings, Microsoft Graph, and fill in the tenant (its ID or a domain such as `example.onmicrosoft.com`), the application ID, the client secret, and the intake mailbox; then Save changes. The secret is stored encrypted and never shown again; to replace it, type a new one. Each field can instead come from `app.env` (`MAANE_GRAPH_TENANT_ID`, `MAANE_GRAPH_CLIENT_ID`, `MAANE_GRAPH_CLIENT_SECRET`, `MAANE_GRAPH_MAILBOX`), which locks it in Settings; Maane refuses to start when the secret there reads as an example value. Keep the intake mode on Listening.
+4. Press Test Graph. It reads only the Inbox folder's details of the saved mailbox and shows Connected, or what failed with the code Entra or Graph gave (for example `AADSTS7000215` for a wrong secret, `ErrorAccessDenied` when the application may not read the mailbox).
+
+Within a minute the worker starts reading the mailbox. Changing the tenant or the mailbox later starts a new intake source: what Maane already took in from the old one stays, and its files that still wait for the scanner become unavailable once Graph refuses the old mailbox.
+
+#### Your checks against the real tenant
+
+A passing Test Graph shows that Maane can read the intake mailbox; it does not show that it can read nothing else. Do these checks once, before cutover, and again after any change to the application or its scope. They only read.
+
+1. **Access to the intake mailbox.** Settings, Microsoft Graph, Test Graph shows Connected for the intake mailbox.
+2. **Refusal on any other mailbox.** In Exchange Online PowerShell (`Connect-ExchangeOnline` first), set the three values in the first lines, then run the block. It stops before testing anything while a value is still the example, and it only reads:
+
+   ```powershell
+   & {
+     $ErrorActionPreference = 'Stop'
+     $appId   = '00000000-0000-0000-0000-000000000000'   # the application (client) ID
+     $intake  = 'maane@example.com'                       # the intake mailbox
+     $other   = 'someone@example.com'                     # any other mailbox of the tenant
+     if ($appId -eq '00000000-0000-0000-0000-000000000000' -or $intake -like '*@example.com' -or $other -like '*@example.com') {
+       throw 'Set $appId, $intake, and $other to your values first.'
+     }
+     Test-ServicePrincipalAuthorization -Identity $appId -Resource $intake | Format-Table RoleName, InScope
+     Test-ServicePrincipalAuthorization -Identity $appId -Resource $other | Format-Table RoleName, InScope
+   }
+   ```
+
+   The first table shows `Application Mail.Read` with `InScope` `True`; the second shows `InScope` `False` for every role. Also check in Entra, the application's API permissions, that it holds no Microsoft Graph `Mail.*` permission.
+3. **The routing cases of listening mode** (requirements 6.2). While the intake mode is Listening, send deliberate mail from an outside address to: an alias, an address that exists only in a transport rule, an address the wildcard rule catches, a support address as a blind copy, two support addresses in one message, an address that bounces, and a mailbox with an automatic reply. Maane opens no ticket in listening mode; for each message it records the support address and organization it chose, the ticket or conversation it would have matched, and its classification. Until the intake log page arrives (phase 2.4), read those records on the server; this query only reads:
+
+   ```bash
+   cd "$HOME/maane" && docker compose exec -T postgres psql -U maane -d maane -c "select m.received_at, m.from_address, m.subject, r.outcome, r.classification, r.support_address, r.reason, m.review_flags from intake_record r join message m on m.id = r.message_id order by m.received_at desc limit 50"
+   ```
+
+   Each case passes when the address is the one the rule meant (or the default address where the original recipient is not kept), a message to two support addresses that arrives twice shows one record and one `copy`, and the bounce and the automatic reply show `automated`. Compare the records with what Zendesk did with the same messages.
+
 ## 5. Back up
 
 Your backup must hold:
@@ -387,6 +430,8 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
 To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported.
 
 ## What was verified
+
+Phase 2.3 (2026-11-12): Graph intake ran only against a stand-in Entra and Graph, in the integration tests and in the stack stage of `scripts/verify.sh` (a message became a ticket in live mode and an intake record in listening mode, scanned by the real ClamAV). Nothing reached Microsoft. The steps of [Connect Microsoft Graph](#connect-microsoft-graph) and the checks against the real tenant have not run.
 
 Phase 2.2 (2026-11-12): the `clamav` service of the development template, which matches `docker-compose.yml` but for its paths, ran with `scripts/local.sh` and `scripts/verify.sh` (UID 100, healthy, the hardening checks, a signature reload on the read-only root, a restart that kept the signatures), and `docker compose config` accepted `docker-compose.yml`. The two blocks of section 2 ran as root in a throwaway container with a stand-in `curl` and `sudo`: the six files land, ClamAV's two under `docker/clamav/`, a second run refuses and keeps them, and the data folders get their owners and modes, a second run changing nothing. An outside clamd was not tried.
 
