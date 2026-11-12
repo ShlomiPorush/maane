@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # The Release workflow runs the whole CI on the commit it releases when it finds no green CI run of that commit on
+  # main to reuse (scripts/ci-result.sh). GitHub documents that a called workflow sees the caller's github context:
+  # its event (workflow_dispatch), so the full sweep runs, and its run id, so the run gets a concurrency group of its
+  # own. Not yet observed on GitHub; check it on the first Release run.
+  workflow_call:
   schedule:
     # Weekly full sweep that ignores path filters.
     - cron: "17 3 * * 1"
@@ -14,7 +19,8 @@ permissions:
 
 concurrency:
   # Pull request runs share a group per pull request, and a new push cancels the superseded run. Every other run
-  # (main, manual, weekly) has a group of its own, so none is ever cancelled or dropped while it waits.
+  # (main, manual, weekly, called by a release) has a group of its own, so none is ever cancelled or dropped while
+  # it waits.
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 

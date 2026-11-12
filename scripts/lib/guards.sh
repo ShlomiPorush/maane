@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Repository guards. scripts/verify.sh runs this inside the toolchain container; run it there, not on the host.
-# Usage: bash scripts/lib/guards.sh [ROOT]
+# Usage: bash scripts/lib/guards.sh [ROOT]. Without ROOT it also runs the tests of the release scripts.
 # Checks tracked files and new files that are not ignored in ROOT (default: this repository), so a violation
 # fails before it is committed. scripts/lib/test-guards.sh runs it against a scratch repository.
 set -euo pipefail
@@ -339,5 +339,17 @@ while read -r mode _ _ path; do
     fail=1
   }
 done <<<"$modes"
+
+# The tests of the release scripts belong to this repository, not to the scratch repositories test-guards.sh guards.
+if [ $# -eq 0 ]; then
+  echo "--- Release script: refusals and resume paths against a local remote"
+  bash scripts/test-release.sh || fail=1
+
+  echo "--- CI result script: which CI run a release reuses, against a stand-in gh"
+  bash scripts/test-ci-result.sh || fail=1
+
+  echo "--- Release workflow: jobs and steps on both CI paths, with and without dry_run"
+  bash scripts/test-release-workflow.sh || fail=1
+fi
 
 exit "$fail"
