@@ -86,8 +86,9 @@ function exchange(
     socket.on("data", (data: Buffer) => {
       received = Buffer.concat([received, data])
       const end = received.indexOf(0)
-      if (end >= 0) finish(null, received.subarray(0, end).toString("utf8").trim())
-      else if (received.length > MAX_REPLY_BYTES) finish(new ClamdError("reply_too_long"))
+      // The limit applies to the reply itself, also when its terminator has arrived: a padded reply is never read.
+      if ((end >= 0 ? end : received.length) > MAX_REPLY_BYTES) finish(new ClamdError("reply_too_long"))
+      else if (end >= 0) finish(null, received.subarray(0, end).toString("utf8").trim())
     })
     socket.on("end", () => finish(new ClamdError("closed")))
     socket.on("close", () => finish(new ClamdError("closed")))

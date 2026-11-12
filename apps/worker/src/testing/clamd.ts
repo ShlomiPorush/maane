@@ -29,9 +29,10 @@ export interface StandInOptions {
    * A peer that misbehaves on every connection: `silent` reads everything, never answers, and never closes, also
    * after the client stops writing (the case the clamscan package could not bound); `halfClose` reads everything and ends its
    * side without an answer; `noRead` accepts and never reads; `trickle` sends a byte every 50 ms and never ends the
-   * reply; `flood` answers with a reply far longer than clamd ever gives.
+   * reply; `flood` answers with a reply far longer than clamd ever gives; `padded` answers `stream: OK` after 4 KiB of
+   * spaces, in one write; `paddedSplit` sends the same reply in two writes, the second crossing the limit.
    */
-  peer?: "silent" | "halfClose" | "noRead" | "trickle" | "flood"
+  peer?: "silent" | "halfClose" | "noRead" | "trickle" | "flood" | "padded" | "paddedSplit"
   /** Refuses a stream longer than this many bytes, as clamd does past StreamMaxLength. */
   streamMaxLength?: number
 }
@@ -142,6 +143,18 @@ export async function startStandInClamd(options: StandInOptions = {}): Promise<S
       case "flood":
         socket.once("data", () => socket.write(Buffer.alloc(16 * 1024, 0x61)))
         return
+      case "padded":
+      case "paddedSplit": {
+        const reply = Buffer.concat([Buffer.alloc(4096, 0x20), Buffer.from("stream: OK\0")])
+        socket.once("data", () => {
+          if (options.peer === "padded") socket.write(reply)
+          else {
+            socket.write(reply.subarray(0, 4000))
+            setTimeout(() => socket.write(reply.subarray(4000)), 20)
+          }
+        })
+        return
+      }
       default:
         // A client that ends its side before an answer gets its side ended too, as clamd closes after answering.
         socket.on("end", () => socket.end())

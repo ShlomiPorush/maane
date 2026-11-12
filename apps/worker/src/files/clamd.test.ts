@@ -99,6 +99,13 @@ describe("the clamd protocol", () => {
     expect((await failure(scanStream(target, CLEAN_SAMPLE, { deadlineMs: 5_000 }))).code).toBe("reply_too_long")
   })
 
+  it("refuses a padded reply over the limit even when its terminator arrives, in one write or across the limit", async () => {
+    for (const peer of ["padded", "paddedSplit"] as const) {
+      const { target } = await standIn({ peer })
+      expect((await failure(scanStream(target, CLEAN_SAMPLE, { deadlineMs: 5_000 }))).code).toBe("reply_too_long")
+    }
+  })
+
   it("reports a refused connection, and a connection that never completes, by their own codes", async () => {
     const refused = await refusedAddress()
     const [host, port] = refused.split(":")
