@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The single verification entry point, used locally and in CI.
-# Usage: scripts/verify.sh [--changed [BASE]] [--guards-only] [--skip-integration]
+# Usage: scripts/verify.sh [--changed [BASE]] [--guards-only] [--skip-integration] [--only checks|integration|e2e]
 set -euo pipefail
 
 # shellcheck source=scripts/lib/common.sh
@@ -11,18 +11,24 @@ MERGE_BASE=""
 CHANGED=""
 CHECKS=1
 INTEGRATION=1
+ONLY=""
 
 usage() {
   cat <<'EOF'
 Usage: scripts/verify.sh [options]
 
   (no options)      Full sweep: guards and their tests, then install from the lockfile, lint and format,
-                    types, unit tests and builds of every package.
+                    types, unit tests and builds of every package, the integration tests, and the container
+                    stack with the end-to-end tests.
   --changed [BASE]  Compare with BASE (default origin/main). Guards only when every change is documentation;
                     only the changed packages and their dependents when every change is inside apps/ or
                     packages/; otherwise the full sweep.
   --guards-only     Only the repository guards and their tests.
-  --skip-integration  Skip the integration tests against a disposable PostgreSQL.
+  --skip-integration  Skip the integration tests against a disposable PostgreSQL, the container stack checks, and
+                    the end-to-end tests.
+  --only STAGE      One stage while working on it, without the guards: checks (install, lint, types, unit tests,
+                    builds, schema), integration (install, then the integration tests), or e2e (install, then the
+                    image, the stack checks, and the end-to-end tests). Not a substitute for the full sweep.
 EOF
 }
 
@@ -37,6 +43,11 @@ while [ $# -gt 0 ]; do
       ;;
     --guards-only) CHECKS=0 ;;
     --skip-integration) INTEGRATION=0 ;;
+    --only)
+      ONLY="${2:-}"
+      [[ "$ONLY" =~ ^(checks|integration|e2e)$ ]] || die "--only needs checks, integration, or e2e"
+      shift
+      ;;
     -h | --help)
       usage
       exit 0
@@ -136,9 +147,152 @@ run_integration() {
   trap - EXIT
 }
 
+# The production Compose file, with its three files filled in with values new for this check: it must be valid, show
+# no secret in `docker compose config --no-env-resolution` (secrets come only through env_file), and give PostgreSQL
+# only its own variables. Runs in a subshell, so the caller removes the directory whatever happens.
+production_compose_checks() {
+  local dir="$1" password auth keys names
+  password="$(random_hex)" auth="$(random_hex)" keys="$(random_hex)"
+  cp "$REPO_ROOT/docker-compose.yml" "$dir/docker-compose.yml"
+  (
+    umask 077
+    printf 'VERSION=0.0.0\nDOMAIN=maane.example.com\n' >"$dir/.env"
+    printf 'POSTGRES_USER=maane\nPOSTGRES_DB=maane\nPOSTGRES_PASSWORD=%s\n' "$password" >"$dir/postgres.env"
+    printf 'DATABASE_URL=postgres://maane:%s@postgres:5432/maane\nMAANE_AUTH_SECRETS=1:%s\nMAANE_SETTINGS_KEYS=1:%s\n' \
+      "$password" "$auth" "$keys" >"$dir/app.env"
+  )
+  production() {
+    env -u COMPOSE_ENV_FILES -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME \
+      docker compose --project-directory "$dir" -f "$dir/docker-compose.yml" "$@"
+  }
+  production config --quiet || die "docker-compose.yml is not valid with its .env, postgres.env, and app.env"
+  # Never printed: the output holds this check's values when the file is wrong.
+  production config --no-env-resolution >"$dir/unresolved.yml" || die "docker compose config failed"
+  if grep -qF -e "$password" -e "$auth" -e "$keys" "$dir/unresolved.yml"; then
+    die "docker compose config --no-env-resolution shows a secret: docker-compose.yml interpolates one or sets it under environment:"
+  fi
+  production config --format json >"$dir/resolved.json" || die "docker compose config failed"
+  TOOLCHAIN_EXTRA_ARGS=(-v "$dir:/production:ro")
+  names="$(in_toolchain 'jq -r ".services.postgres.environment | keys | join(\" \")" /production/resolved.json')" ||
+    die "cannot read the postgres service's environment"
+  TOOLCHAIN_EXTRA_ARGS=()
+  [ "$names" = "POSTGRES_DB POSTGRES_PASSWORD POSTGRES_USER" ] ||
+    die "the production postgres service gets more than its own variables: $names"
+  echo "    docker-compose.yml: valid, secrets only through env_file, postgres gets only POSTGRES_*"
+}
+
+check_production_compose() {
+  local dir status=0
+  info "Production Compose file"
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-production.XXXXXX")"
+  chmod 700 "$dir"
+  (production_compose_checks "$dir") || status=$?
+  rm -r -f -- "$dir"
+  [ "$status" -eq 0 ] || exit "$status"
+}
+
+# The container stack: the image built from this checkout, started from the tracked development template with a data
+# directory and secrets new for this run, then health, readiness, runtime users, and hardening are checked. The project
+# and the image tag belong to this run alone, so a verify running in another checkout cannot replace the image under it.
+RUN_ID="$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+STACK_PROJECT="maane-verify-stack-$RUN_ID"
+STACK_TAG="verify-$RUN_ID"
+STACK_DIR=""
+stack() {
+  env -u COMPOSE_ENV_FILES MAANE_DATA_DIR="$STACK_DIR" MAANE_IMAGE_TAG="$STACK_TAG" MAANE_PORT=0 \
+    MAANE_PUBLIC_URL=http://127.0.0.1:8095 \
+    docker compose --env-file /dev/null -p "$STACK_PROJECT" --project-directory "$REPO_ROOT" \
+    -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
+}
+
+# Stops the stack, then removes its data directory and image, but only once Docker confirms that no container of the
+# project is left: data a running container still uses is kept and reported instead.
+cleanup_stack() {
+  local left
+  [ -z "$STACK_DIR" ] || stack down --remove-orphans >/dev/null 2>&1 || true
+  if ! left="$(docker ps -aq --filter "label=com.docker.compose.project=$STACK_PROJECT")" || [ -n "$left" ]; then
+    echo "error: $STACK_PROJECT did not stop, so its data (${STACK_DIR:-none}) and maane:$STACK_TAG were kept." >&2
+    echo "  Stop it with: docker compose -p $STACK_PROJECT down, then remove them." >&2
+    return 1
+  fi
+  if [ -n "$STACK_DIR" ]; then
+    remove_data_dir "$STACK_DIR"
+    STACK_DIR=""
+  fi
+  if docker image inspect "maane:$STACK_TAG" >/dev/null 2>&1; then
+    docker image rm "maane:$STACK_TAG" >/dev/null || echo "warning: could not remove maane:$STACK_TAG" >&2
+  fi
+}
+
+fail_stack() {
+  stack ps -a || true
+  stack logs --tail 60 || true
+  die "$1"
+}
+
+# Runs e2e/ in the Playwright image on the stack's network. e2e/global-setup.ts forwards 127.0.0.1:8095, the stack's
+# MAANE_PUBLIC_URL, to the server, so the server's Origin checks see its own address.
+run_e2e() {
+  local pinned
+  pinned="$(sed -nE 's|.*"@playwright/test": "([^"]+)".*|\1|p' "$REPO_ROOT/e2e/package.json")"
+  [ "v$pinned-noble" = "${PLAYWRIGHT_IMAGE##*:}" ] ||
+    die "@playwright/test $pinned does not match $PLAYWRIGHT_IMAGE; keep both on one version"
+  docker run --rm --ipc=host --network "${STACK_PROJECT}_default" \
+    --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" -e E2E_TARGET=server:8080 \
+    -v "$REPO_ROOT:/repo" -w /repo/e2e "$PLAYWRIGHT_IMAGE" \
+    npx --no-install playwright test
+}
+
+run_stack() {
+  check_production_compose
+  # Set before the build, so an image built by a run that stops early is removed too.
+  trap cleanup_stack EXIT
+  build_image "$STACK_TAG" "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
+  STACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-stack.XXXXXX")"
+  ensure_stack_env "$STACK_DIR"
+
+  info "Container stack: health, readiness, runtime users, and hardening ($STACK_PROJECT)"
+  stack up -d --remove-orphans --wait --wait-timeout 240 || fail_stack "the stack did not become healthy"
+  TOOLCHAIN_EXTRA_ARGS=(--network "${STACK_PROJECT}_default")
+  # shellcheck disable=SC2016 # expands inside the container
+  in_toolchain 'body="$(curl -fsS http://server:8080/healthz/ready)" && echo "    /healthz/ready: $body" &&
+    grep -q "\"database\":\"ok\"" <<<"$body"' || fail_stack "/healthz/ready does not report the database"
+  TOOLCHAIN_EXTRA_ARGS=()
+  check_non_root "$STACK_PROJECT" server worker postgres
+  check_hardening "$STACK_PROJECT" server worker
+
+  info "End-to-end: the web UI against the stack (Playwright, $PLAYWRIGHT_IMAGE)"
+  run_e2e || fail_stack "end-to-end tests failed"
+
+  info "Stopping $STACK_PROJECT"
+  trap - EXIT
+  cleanup_stack || die "the verification stack did not stop"
+}
+
 main() {
   require_docker
   build_toolchain
+
+  if [ -n "$ONLY" ]; then
+    if [ -n "$CHANGED_BASE" ] || [ $CHECKS -eq 0 ] || [ $INTEGRATION -eq 0 ]; then
+      die "--only runs one stage and takes no other option"
+    fi
+    case "$ONLY" in
+      checks) run_checks "" ;;
+      integration)
+        info "Install from the lockfile"
+        install_deps
+        run_integration ""
+        ;;
+      e2e)
+        info "Install from the lockfile"
+        install_deps
+        run_stack
+        ;;
+    esac
+    info "Stage $ONLY passed (not the full sweep)"
+    return
+  fi
 
   local filter=""
   if [ -n "$CHANGED_BASE" ] && [ $CHECKS -eq 1 ]; then
@@ -163,7 +317,10 @@ main() {
   run_guards
   if [ $CHECKS -eq 1 ]; then
     run_checks "$filter"
-    if [ $INTEGRATION -eq 1 ]; then run_integration "$filter"; fi
+    if [ $INTEGRATION -eq 1 ]; then
+      run_integration "$filter"
+      run_stack
+    fi
   fi
   info "Verify passed"
 }

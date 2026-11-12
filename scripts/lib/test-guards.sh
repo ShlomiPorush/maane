@@ -69,6 +69,7 @@ env_file="an environment file; keep only an example"
 env_value="Example environment files must leave secrets"
 secret="A secret-like value is in the repository"
 compose="Compose files must not build"
+env_only="Put secrets in an env_file"
 pinned="is not pinned to a full commit SHA"
 token="gh""p_$(repeat a 36)"
 
@@ -98,6 +99,17 @@ plant "build: in a Compose file" "$compose" docker-compose.yml $'services:\n  se
 plant "a quoted build key" "$compose" docker-compose.yml $'services:\n  server:\n    "build"'":"$' .\n'
 plant "build in a flow mapping" "$compose" docker/docker-compose-dev.example.yml \
   $'services: { server: { image: x, build'": . } }"$'\n'
+# shellcheck disable=SC2016 # the Compose variables must stay literal
+plant "a password interpolated into a service" "$env_only" docker-compose.yml \
+  $'services:\n  postgres:\n    image: x\n    environment:\n      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it}\n'
+# shellcheck disable=SC2016
+plant "a password interpolated into a database URL" "$env_only" docker-compose.yml \
+  $'services:\n  server:\n    image: x\n    environment:\n      URL: postgres://maane:${DB_PASSWORD}@db/maane\n'
+plant "a database URL in an environment list" "$env_only" docker/docker-compose-dev.example.yml \
+  $'services:\n  server:\n    image: x\n    environment:\n      - DATABASE_URL\n'
+# shellcheck disable=SC2016
+plant "a key interpolated into a command" "$env_only" docker-compose.yml \
+  $'services:\n  server:\n    image: x\n    command: ["run", "--key=$MAANE_SETTINGS_KEYS"]\n'
 plant "a CRLF file" "Files must use LF line endings" docs/crlf.txt $'line\r\n'
 plant "an action pinned to a tag" "$pinned" .github/workflows/ci.yml \
   $'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v'"7"$'\n'
@@ -165,7 +177,12 @@ expect_pass "after the locale keys match again"
 mkdir -p "$scratch/.github/workflows" "$scratch/docs" "$scratch/docker"
 printf 'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@%s # v7\n      - uses: ./.github/actions/x\n' \
   "$(repeat a 40)" >"$scratch/.github/workflows/ok.yml"
-printf 'services:\n  server:\n    image: maane:dev\n' >"$scratch/docker/docker-compose-dev.example.yml"
+# Secrets through env_file, a value that is not secret interpolated, and $$ for the container's own variable.
+# shellcheck disable=SC2016 # the Compose variables must stay literal
+printf '%s\n' 'services:' '  server:' '    image: maane:dev' '    env_file: [app.env]' '    environment:' \
+  '      MAANE_PUBLIC_URL: https://${DOMAIN:?set it}' '  postgres:' '    image: postgres' '    env_file: [postgres.env]' \
+  '    healthcheck:' '      test: ["CMD-SHELL", "test -n \"$$POSTGRES_PASSWORD\""]' \
+  >"$scratch/docker/docker-compose-dev.example.yml"
 # shellcheck disable=SC2016 # the placeholders must stay literal
 printf '%s\n' 'Use 192.0.2.10 or 127.0.0.1. Version 1.2.3.4.5.' \
   'postgres://maane:${PASSWORD}@db postgres://maane:$PASSWORD@db postgres://maane:<password>@db' \

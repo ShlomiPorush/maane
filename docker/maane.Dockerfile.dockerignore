@@ -1,0 +1,20 @@
+**/node_modules
+**/dist
+**/coverage
+**/test-results
+**/playwright-report
+.git
+.github
+.pnpm-store
+docs
+scripts
+e2e
+# Environment files at any depth, as .gitignore ignores them: the real ones hold secrets and must never enter the
+# build context, an image layer, or the build cache. The examples are not needed in the image either.
+**/.env
+**/.env.*
+**/*.env
+**/*.env.*
+docker-compose*.yml
+data
+postgres-data
