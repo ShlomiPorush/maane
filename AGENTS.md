@@ -76,6 +76,7 @@ CI (`.github/workflows/ci.yml`) runs `Detect changes`, `Guards` always, `Checks`
 - In component tests the router is a memory router: code must read the location from React Router, never from `window.location` (a handler that did looped on the sign-in page).
 - Vitest runs the web tests in happy-dom; a test that reads files with `import.meta.url` (`src/guards.test.ts`) declares `// @vitest-environment node`.
 - A test that needs a URL with a password builds it at run time; the guards refuse credentials in a URL literal unless the password is a placeholder (`$NAME`, `${...}`, `%s`, `<name>`, or asterisks).
+- In the end-to-end tests, type a password or a code with `fillSecret` (`e2e/helpers.ts`), never `fill`: a failing `fill` prints its value in the call log, and so in the CI log. Failure details (`error-context.md`) hold a snapshot of the page with its secrets, so the output directory stays inside the container.
 
 ## Repository policies
 

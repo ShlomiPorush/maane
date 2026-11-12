@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { ADMIN, freshAddress, he, password, signIn } from "./helpers.ts"
+import { ADMIN, fillSecret, freshAddress, he, password, signIn } from "./helpers.ts"
 import { loadState, saveState } from "./state.ts"
 import { freshTotp } from "./totp.ts"
 
@@ -24,8 +24,8 @@ test("creates the first admin with two-factor and backup codes", async ({ page, 
 
   await page.goto("/setup")
   await page.getByLabel(he("auth.username"), { exact: true }).fill(ADMIN)
-  await page.getByLabel(he("auth.password"), { exact: true }).fill(password())
-  await page.getByLabel(he("auth.repeatPassword"), { exact: true }).fill(password())
+  await fillSecret(page.getByLabel(he("auth.password"), { exact: true }), password())
+  await fillSecret(page.getByLabel(he("auth.repeatPassword"), { exact: true }), password())
   await page.getByRole("button", { name: he("setup.create"), exact: true }).click()
 
   // Two-factor: the secret the page shows, then a code made from it.
@@ -33,14 +33,12 @@ test("creates the first admin with two-factor and backup codes", async ({ page, 
   expect(secret.length).toBeGreaterThanOrEqual(16)
   saveState({ secret })
   // The sixth digit sends the code.
-  await page.getByLabel(he("auth.code"), { exact: true }).fill(await freshTotp(secret))
+  await fillSecret(page.getByLabel(he("auth.code"), { exact: true }), await freshTotp(secret))
 
   // The backup codes, shown once.
   const list = page.getByTestId("backup-codes").locator("li")
   await expect(list.first()).toBeVisible()
-  const codes = (await list.allTextContents()).map((code) => code.trim())
-  expect(codes.length).toBeGreaterThan(0)
-  saveState({ backupCodes: codes })
+  expect(await list.count()).toBeGreaterThan(0)
   const done = page.getByRole("button", { name: he("enroll.continue"), exact: true })
   await expect(done).toBeDisabled()
   await page.getByLabel(he("backupCodes.saved"), { exact: true }).check()
@@ -64,7 +62,7 @@ test("refuses a wrong password without saying whether the user exists", async ({
   await freshAddress(page)
   await page.goto("/login")
   await page.getByLabel(he("auth.username"), { exact: true }).fill(ADMIN)
-  await page.getByLabel(he("auth.password"), { exact: true }).fill(`${password()}x`)
+  await fillSecret(page.getByLabel(he("auth.password"), { exact: true }), `${password()}x`)
   await page.getByRole("button", { name: he("login.submit"), exact: true }).click()
   await expect(page.getByRole("alert")).toBeVisible()
   await expect(page.getByLabel(he("auth.code"), { exact: true })).toHaveCount(0)

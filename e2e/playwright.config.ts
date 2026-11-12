@@ -12,6 +12,9 @@ export default defineConfig({
   testDir: fileURLToPath(new URL(".", import.meta.url)),
   testMatch: "*.spec.ts",
   globalSetup: fileURLToPath(new URL("./global-setup.ts", import.meta.url)),
+  // A failed test's error-context.md holds an ARIA snapshot of the page: field values, the TOTP secret, and backup
+  // codes. It stays in the container's temporary directory, which goes with the container; never point this at a
+  // mounted directory or upload it. Traces and screenshots stay off for the same reason.
   outputDir: join(tmpdir(), "maane-e2e"),
   reporter: "list",
   fullyParallel: false,

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
-import { expect, type Page } from "@playwright/test"
+import { expect, type Locator, type Page } from "@playwright/test"
 import { loadState, saveState } from "./state.ts"
 import { freshTotp } from "./totp.ts"
 
@@ -21,6 +21,17 @@ export function he(key: string, values: Record<string, string | number> = {}): s
   for (const part of key.split(".")) node = typeof node === "object" ? node[part] : undefined
   if (typeof node !== "string") throw new Error(`he.json has no text for ${key}`)
   return node.replace(/\{(\w+)\}/g, (_, name: string) => String(values[name] ?? `{${name}}`))
+}
+
+/**
+ * Types a password or a code into a field without Playwright writing it down: `fill` puts its value in the call log,
+ * which a failing test prints (`- fill("...")`) to the console and so to the CI log. `clear` waits for the field as
+ * `fill` does and logs only `fill("")`; `keyboard.insertText` then types into the focused field, and its value
+ * appears only in step titles, which the list reporter does not print.
+ */
+export async function fillSecret(field: Locator, value: string): Promise<void> {
+  await field.clear()
+  await field.page().keyboard.insertText(value)
 }
 
 /** The admin's password made for this run by global-setup.ts. */
@@ -48,9 +59,9 @@ export async function signIn(page: Page): Promise<void> {
   await freshAddress(page)
   await page.goto("/login")
   await page.getByLabel(he("auth.username"), { exact: true }).fill(ADMIN)
-  await page.getByLabel(he("auth.password"), { exact: true }).fill(password())
+  await fillSecret(page.getByLabel(he("auth.password"), { exact: true }), password())
   await page.getByRole("button", { name: he("login.submit"), exact: true }).click()
   // The sixth digit sends the code.
-  await page.getByLabel(he("auth.code"), { exact: true }).fill(await freshTotp(secret))
+  await fillSecret(page.getByLabel(he("auth.code"), { exact: true }), await freshTotp(secret))
   await expect(page).toHaveURL(/\/$/)
 }

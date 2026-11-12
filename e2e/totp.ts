@@ -39,6 +39,3 @@ export async function freshTotp(secret: string): Promise<string> {
     await new Promise((resolve) => setTimeout(resolve, 1000))
   }
 }
-
-/** The base32 secret of an otpauth:// URI. */
-export const secretOf = (uri: string) => new URL(uri).searchParams.get("secret") ?? ""
