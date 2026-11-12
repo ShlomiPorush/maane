@@ -434,3 +434,57 @@ describe("Maane's API requests", () => {
     expect(put?.url).toBe("/api/v1/settings")
   })
 })
+describe("identity changes while a page is open", () => {
+  it("goes to enrollment when another tab turned two-factor off", async () => {
+    const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": admin }
+    session.set({ session: { id: "current" }, user: { id: "u1", role: "admin", twoFactorEnabled: true } } as never)
+    await renderAt("/account", answers)
+    await vi.waitFor(() => expect(text()).toContain("first.admin"))
+    answers["/api/v1/me"] = totpRequired
+    await act(async () =>
+      session.set({ session: { id: "current" }, user: { id: "u1", role: "admin", twoFactorEnabled: false } } as never),
+    )
+    await vi.waitFor(() => expect(where()).toBe("/enroll?next=%2Faccount"))
+  })
+  it("drops a previous admin's settings draft even when me answers quickly", async () => {
+    const view = (key: string, value: unknown) => ({ key, value, locked: false, variable: null })
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": ok({ settings: [view("general.defaultLocale", "he"), view("security.sessionDays", 30)] }),
+    }
+    await renderAt("/settings", answers)
+    const days = await vi.waitFor(() => {
+      const input = document.querySelector<HTMLInputElement>("input[type=number]")
+      expect(input).not.toBeNull()
+      return input as HTMLInputElement
+    })
+    await act(async () => type(days, "14"))
+    answers["/api/v1/me"] = ok({ id: "u2", username: "second.admin", role: "admin" })
+    await act(async () => session.set({ session: { id: "other" }, user: { id: "u2", role: "admin" } }))
+    await vi.waitFor(() => expect(document.querySelector<HTMLInputElement>("input[type=number]")?.value).toBe("30"))
+    expect(document.querySelector(".ui-savebar")).toBeNull()
+  })
+  it("hides previous user's one-time backup codes on a fast identity switch", async () => {
+    const codes = Array.from({ length: 2 }, () => crypto.randomUUID().slice(0, 11))
+    auth.generateBackupCodes.mockResolvedValue({ data: { backupCodes: codes }, error: null })
+    const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": admin }
+    await renderAt("/account", answers)
+    const button = (label: string) =>
+      Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+    await vi.waitFor(() => expect(button(he("account.newCodes"))).toBeDefined())
+    await act(async () => button(he("account.newCodes"))?.click())
+    const field = await vi.waitFor(() => {
+      const input = document.querySelector<HTMLInputElement>("[role=dialog] input")
+      expect(input).not.toBeNull()
+      return input as HTMLInputElement
+    })
+    await act(async () => type(field, crypto.randomUUID()))
+    await act(async () => button(he("account.newCodesSubmit"))?.click())
+    await vi.waitFor(() => expect(text()).toContain(codes[0] as string))
+    answers["/api/v1/me"] = agent
+    await act(async () => session.set({ session: { id: "other" }, user: { id: "u2", role: "agent" } }))
+    await vi.waitFor(() => expect(text()).toContain("agent.one"))
+    expect(text()).not.toContain(codes[0] as string)
+  })
+})

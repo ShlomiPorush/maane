@@ -9,7 +9,7 @@
 // user or another role than before, every cached read is dropped and read again for the user signed in now.
 
 import { useQueryClient } from "@tanstack/react-query"
-import { type ReactNode, type RefObject, useEffect, useRef } from "react"
+import { Fragment, type ReactNode, type RefObject, useEffect, useRef } from "react"
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router"
 import { authClient, onAuthUnauthorized } from "../api/auth.ts"
 import { ApiError, onUnauthorized } from "../api/client.ts"
@@ -86,11 +86,13 @@ export function SessionGate({ children }: { children: ReactNode }) {
   if (error instanceof ApiError && (error.status === 401 || error.code === "totp_required"))
     return <Navigate to={authPath(error, here)} replace />
   // A later read that failed for another reason keeps the page as it is.
+  // The pages are keyed by who Maane's API says is signed in: another user or role mounts them afresh, so no page
+  // keeps state (a draft, codes shown once) that the previous identity left.
   if (me.data)
     return (
       <>
         <SessionKeeper seen={sessionUser} />
-        {children}
+        <Fragment key={`${me.data.id}:${me.data.role}`}>{children}</Fragment>
       </>
     )
   if (me.isPending) return <Loading label={t("app.loading")} />
@@ -104,16 +106,16 @@ export function SessionGate({ children }: { children: ReactNode }) {
 /**
  * Better Auth's client session: mounted, it refreshes the session by itself (a GET, then the POST that extends it
  * when the answer says so). When it learns that the session is gone (signed out in another tab), the gate checks
- * again and goes to sign-in. When it shows another user or another role than it did before (signed in as someone
- * else in another tab, a changed role), unsaved changes are dropped and every cached read starts again, so nothing
- * the previous identity loaded stays on screen.
+ * again and goes to sign-in. When it shows another user, another role, or two-factor turned on or off (signed in as
+ * someone else in another tab, a changed role, two-factor turned off in another tab), unsaved changes are dropped and
+ * every cached read starts again: Maane's API then answers for the new state (another user, or enrollment).
  */
 function SessionKeeper({ seen }: { seen: RefObject<string | null> }) {
   const queryClient = useQueryClient()
   const clearUnsaved = useClearUnsaved()
   const { data, isPending } = authClient.useSession()
-  const user = data?.user as { id?: string; role?: string | null } | undefined
-  const identity = user?.id ? `${user.id}:${user.role ?? ""}` : null
+  const user = data?.user as { id?: string; role?: string | null; twoFactorEnabled?: boolean | null } | undefined
+  const identity = user?.id ? `${user.id}:${user.role ?? ""}:${user.twoFactorEnabled ? "2fa" : ""}` : null
   useEffect(() => {
     if (identity) {
       const before = seen.current
