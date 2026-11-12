@@ -192,6 +192,31 @@ for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.
   fi
 done
 
+echo "--- Secrets reach containers only through env_file"
+# A secret set under environment: or interpolated by Compose shows in `docker compose config`, even with
+# --no-env-resolution. Names only: the names under environment: (map or list form), and every name Compose would
+# interpolate in any value ($$ is a literal dollar for the container).
+secret_name='(DATABASE_URL|[A-Z0-9_]*(PASSWORD|SECRET|SECRETS|KEY|KEYS|TOKEN))'
+for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.example.yml; do
+  [ -f "$file" ] || continue
+  # shellcheck disable=SC2016 # a jq program, not a shell expansion
+  if ! names="$(yq -r '(.services // {})[]? | select(type == "object") | .environment // empty |
+      if type == "object" then keys[] elif type == "array" then .[] | tostring | sub("=.*"; "") else empty end' \
+    "$file" 2>/dev/null)" || ! values="$(yq -r '.. | strings' "$file" 2>/dev/null)"; then
+    echo "  $file: not valid YAML"
+    fail=1
+    continue
+  fi
+  set_names="$(grep -xE "$secret_name" <<<"$names" | sort -u | tr '\n' ' ' || true)"
+  interpolated="$(grep -oP '(?<!\$)(?:\$\$)*\$\{?\K'"$secret_name"'\b' <<<"$values" | sort -u | tr '\n' ' ' || true)"
+  if [ -n "$set_names$interpolated" ]; then
+    [ -z "$set_names" ] || echo "  $file: set under environment: ${set_names% }"
+    [ -z "$interpolated" ] || echo "  $file: interpolated by Compose: ${interpolated% }"
+    echo "  Put secrets in an env_file the scripts or the deployment generate; interpolate only values that are not secret."
+    fail=1
+  fi
+done
+
 echo "--- Local deny list"
 deny=docs/private/deny-list.txt
 if [ -f "$deny" ]; then

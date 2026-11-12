@@ -147,6 +147,50 @@ run_integration() {
   trap - EXIT
 }
 
+# The production Compose file, with its three files filled in with values new for this check: it must be valid, show
+# no secret in `docker compose config --no-env-resolution` (secrets come only through env_file), and give PostgreSQL
+# only its own variables. Runs in a subshell, so the caller removes the directory whatever happens.
+production_compose_checks() {
+  local dir="$1" password auth keys names
+  password="$(random_hex)" auth="$(random_hex)" keys="$(random_hex)"
+  cp "$REPO_ROOT/docker-compose.yml" "$dir/docker-compose.yml"
+  (
+    umask 077
+    printf 'VERSION=0.0.0\nDOMAIN=maane.example.com\n' >"$dir/.env"
+    printf 'POSTGRES_USER=maane\nPOSTGRES_DB=maane\nPOSTGRES_PASSWORD=%s\n' "$password" >"$dir/postgres.env"
+    printf 'DATABASE_URL=postgres://maane:%s@postgres:5432/maane\nMAANE_AUTH_SECRETS=1:%s\nMAANE_SETTINGS_KEYS=1:%s\n' \
+      "$password" "$auth" "$keys" >"$dir/app.env"
+  )
+  production() {
+    env -u COMPOSE_ENV_FILES -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME \
+      docker compose --project-directory "$dir" -f "$dir/docker-compose.yml" "$@"
+  }
+  production config --quiet || die "docker-compose.yml is not valid with its .env, postgres.env, and app.env"
+  # Never printed: the output holds this check's values when the file is wrong.
+  production config --no-env-resolution >"$dir/unresolved.yml" || die "docker compose config failed"
+  if grep -qF -e "$password" -e "$auth" -e "$keys" "$dir/unresolved.yml"; then
+    die "docker compose config --no-env-resolution shows a secret: docker-compose.yml interpolates one or sets it under environment:"
+  fi
+  production config --format json >"$dir/resolved.json" || die "docker compose config failed"
+  TOOLCHAIN_EXTRA_ARGS=(-v "$dir:/production:ro")
+  names="$(in_toolchain 'jq -r ".services.postgres.environment | keys | join(\" \")" /production/resolved.json')" ||
+    die "cannot read the postgres service's environment"
+  TOOLCHAIN_EXTRA_ARGS=()
+  [ "$names" = "POSTGRES_DB POSTGRES_PASSWORD POSTGRES_USER" ] ||
+    die "the production postgres service gets more than its own variables: $names"
+  echo "    docker-compose.yml: valid, secrets only through env_file, postgres gets only POSTGRES_*"
+}
+
+check_production_compose() {
+  local dir status=0
+  info "Production Compose file"
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-production.XXXXXX")"
+  chmod 700 "$dir"
+  (production_compose_checks "$dir") || status=$?
+  rm -r -f -- "$dir"
+  [ "$status" -eq 0 ] || exit "$status"
+}
+
 # The container stack: the image built from this checkout, started from the tracked development template with a data
 # directory and secrets new for this run, then health, readiness, runtime users, and hardening are checked.
 STACK_PROJECT="maane-verify-stack-$$"
@@ -185,6 +229,7 @@ run_e2e() {
 }
 
 run_stack() {
+  check_production_compose
   build_image verify "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
   STACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-stack.XXXXXX")"
   trap cleanup_stack EXIT
