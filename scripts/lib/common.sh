@@ -151,7 +151,7 @@ env_file_valid() {
 # Creates postgres.env and app.env once, before PostgreSQL first starts, and never rewrites them. A database without
 # its files is refused: new values would not open it.
 ensure_stack_env() {
-  local dir="$1" contents password tmp
+  local dir="$1" contents password tmp tries=0 has_postgres=0 has_app=0
   require_linux_dir "$dir"
   require_outside_repo "$dir"
   mkdir -p "$dir/postgres"
@@ -168,10 +168,26 @@ ensure_stack_env() {
       printf 'DATABASE_URL=postgres://maane:%s@postgres:5432/maane\nMAANE_AUTH_SECRETS=1:%s\nMAANE_SETTINGS_KEYS=1:%s\n' \
         "$password" "$(random_hex)" "$(random_hex)" >"$tmp/app.env"
     )
-    # ln fails when the file exists, so a run that started at the same time keeps the values it published.
-    ln "$tmp/postgres.env" "$dir/postgres.env" 2>/dev/null || true
-    ln "$tmp/app.env" "$dir/app.env" 2>/dev/null || true
+    # ln never replaces a file. Only the run that publishes postgres.env publishes app.env, so the pair always comes
+    # from one run; a run that started at the same time discards its own values and uses those.
+    if ln "$tmp/postgres.env" "$dir/postgres.env" 2>/dev/null; then
+      ln "$tmp/app.env" "$dir/app.env" 2>/dev/null || true
+    fi
     rm -r -f -- "$tmp"
+  fi
+  # The run that published postgres.env may still be publishing app.env.
+  while [ -e "$dir/postgres.env" ] && [ ! -e "$dir/app.env" ] && [ "$tries" -lt 10 ]; do
+    sleep 0.5
+    tries=$((tries + 1))
+  done
+  [ -e "$dir/postgres.env" ] && has_postgres=1
+  [ -e "$dir/app.env" ] && has_app=1
+  if [ "$has_postgres" != "$has_app" ]; then
+    contents="$(ls -A "$dir/postgres")" || die "cannot read $dir/postgres"
+    [ -n "$contents" ] ||
+      die "$dir holds only one of postgres.env and app.env, and no database yet: an earlier start stopped half way.
+  Delete the file that is there, then start again"
+    die "$dir holds a database but only one of postgres.env and app.env. Restore the missing file; new values would not open the database"
   fi
   env_file_valid "$dir/postgres.env" "${POSTGRES_ENV_NAMES[@]}" ||
     die "$dir/postgres.env is missing, incomplete, or not mode 600. Restore it; new values would not open the database"
