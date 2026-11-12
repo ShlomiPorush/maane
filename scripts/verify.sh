@@ -229,12 +229,16 @@ cleanup_stack() {
 # The file checks of the stack, as the worker runs them: apps/worker/src/testing/stack-check.ts, bundled here and run
 # in a container of the worker service (its user, networks, read-only root, and /data), never shipped in the image.
 run_file_checks() {
-  local sha stored
+  local out sha stored
   info "Files: the worker's scanner and store against the real ClamAV ($STACK_PROJECT)"
   in_toolchain "pnpm --filter @maane/worker run build:stack-check" >/dev/null || die "building the stack check failed"
   local check=(stack run --rm --no-deps -T -v "$REPO_ROOT/apps/worker/dist/stack-check:/check:ro" worker)
-  sha="$("${check[@]}" node /check/stack-check.js scan | tee /dev/stderr | sed -n 's/^stored //p')" ||
+  out="$("${check[@]}" node /check/stack-check.js 2>&1)" || {
+    echo "$out"
     fail_stack "the file checks failed"
+  }
+  echo "$out" | grep -v '^stored '
+  sha="$(sed -n 's/^stored //p' <<<"$out")"
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || fail_stack "the file checks stored no file"
   info "Files: the server reads what the worker stored, after both containers are recreated"
   stack up -d --no-deps --force-recreate --wait --wait-timeout 240 server worker || fail_stack "server and worker did not come back"

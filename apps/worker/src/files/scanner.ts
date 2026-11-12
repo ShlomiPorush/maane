@@ -6,7 +6,7 @@ import NodeClam from "clamscan"
 // (requirements 3.3). This module only turns clamd's answer into a verdict; it never decides that a file is clean on
 // its own. clamscan's `timeout` is an idle timeout on the connection: when it passes, the client ends its side and
 // the scan settles once clamd closes (an answer that is not a verdict). A clamd that keeps a half-closed connection
-// open without answering is not bounded by it; see "Scanner" in docs/project-foundation.md.
+// open without answering is not bounded by it; see "File store and scanning" in docs/project-foundation.md.
 
 /** The idle time after which a file scan is given up: above clamd's MaxScanTime (120 s in docker/clamav/clamd.conf). */
 export const SCAN_TIMEOUT_MS = 150_000

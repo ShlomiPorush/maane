@@ -408,7 +408,7 @@
         "clean": "הסורק סימן טקסט תמים"
       },
       "tested": "נבדק {address}",
-      "version": "גרסה {version}",
+      "version": "גרסת ClamAV {version}, חתימות {signatures}",
       "checked": "נבדק",
       "test": "בדיקת חיבור",
       "testing": "בודק...",
@@ -419,7 +419,7 @@
     },
     "scannerAddress": {
       "label": "כתובת הסורק",
-      "hint": "ה-clamd שמענה סורק איתו, בצורה host:port. הסורק המובנה הוא clamav:3310. ב-clamd חיצוני צריך להגדיר את AlertExceedsMax, AlertEncrypted, AlertEncryptedArchive ו-AlertEncryptedDoc כ-yes, ו-StreamMaxLength לפחות בגודל הקובץ הגדול ביותר."
+      "hint": "ה-clamd שמענה סורק איתו, בצורה {form}. הסורק המובנה הוא {bundled}. ב-clamd חיצוני צריך להפעיל את {alerts}, ולקבוע את {stream} לפחות כגודל הקובץ הגדול ביותר."
     },
     "scannerPolicy": {
       "label": "כשהסורק לא זמין",

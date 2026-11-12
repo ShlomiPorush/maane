@@ -64,11 +64,23 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # ClamAV's signatures for the container stack stage: scripts/verify.sh copies them into its stack and the stack's
+      # newer ones back, so freshclam downloads only what changed. A new key each ISO week, restored from the newest
+      # older one, keeps the cache from growing stale.
+      - name: Week of the ClamAV signature cache
+        id: clamav-week
+        run: echo "week=$(date -u +%G-%V)" >>"$GITHUB_OUTPUT"
+      - name: ClamAV signatures
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/maane/clamav
+          key: clamav-${{ steps.clamav-week.outputs.week }}
+          restore-keys: clamav-
       - name: Verify changed areas
         if: github.event_name == 'pull_request'
         run: scripts/verify.sh --changed "origin/${{ github.base_ref }}"

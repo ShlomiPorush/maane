@@ -408,7 +408,7 @@
         "clean": "The scanner flagged harmless text"
       },
       "tested": "Tested {address}",
-      "version": "Version {version}",
+      "version": "ClamAV {version}, signatures {signatures}",
       "checked": "Checked",
       "test": "Test connection",
       "testing": "Testing...",
@@ -419,7 +419,7 @@
     },
     "scannerAddress": {
       "label": "Scanner address",
-      "hint": "The clamd Maane scans with, as host:port. The bundled scanner is clamav:3310. An outside clamd needs AlertExceedsMax, AlertEncrypted, AlertEncryptedArchive, and AlertEncryptedDoc set to yes, and a StreamMaxLength of at least the largest file."
+      "hint": "The clamd Maane scans with, as {form}. The bundled scanner is {bundled}. An outside clamd needs {alerts} set to yes, and {stream} at least as large as the largest file."
     },
     "scannerPolicy": {
       "label": "When the scanner is unavailable",

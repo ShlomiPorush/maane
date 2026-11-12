@@ -331,7 +331,12 @@ function Settings() {
           <ScannerRow addressChanged={changed.includes(address)} />
           <Row
             label={t(labelKey(address))}
-            hint={t("settings.scannerAddress.hint")}
+            hint={t("settings.scannerAddress.hint", {
+              form: "host:port",
+              bundled: SETTINGS["scanner.address"].defaultValue,
+              alerts: "AlertExceedsMax, AlertEncrypted, AlertEncryptedArchive, AlertEncryptedDoc",
+              stream: "StreamMaxLength",
+            })}
             htmlFor={addressId}
             lock={lockOf(address)}
             reset={resetOf(address)}
@@ -505,6 +510,7 @@ function ScannerState({ status }: { status: ScannerStatusView | null }) {
         <span className="ui-scanner-note">{t("settings.scanner.notCheckedNote")}</span>
       </>
     )
+  const engine = engineOf(status.version)
   return (
     <>
       <span className="ui-scanner-line">
@@ -518,17 +524,19 @@ function ScannerState({ status }: { status: ScannerStatusView | null }) {
       {status.failedCheck ? (
         <span className="ui-scanner-fail">{t(`settings.scanner.check.${status.failedCheck}`)}</span>
       ) : null}
-      <span className="ui-scanner-note">
-        {t("settings.scanner.tested", { address: status.address })}
-        {status.version ? (
-          <>
-            {" · "}
-            {t("settings.scanner.version", { version: status.version })}
-          </>
-        ) : null}
-      </span>
+      <span className="ui-scanner-note">{t("settings.scanner.tested", { address: status.address })}</span>
+      {engine ? <span className="ui-scanner-note">{t("settings.scanner.version", engine)}</span> : null}
     </>
   )
+}
+
+/**
+ * clamd's version line, "ClamAV <engine>/<signatures>/<date of the signatures>", as the engine and the signature
+ * version only: the date in it is written with an English month name, which Maane never shows (FW-9).
+ */
+export function engineOf(version: string | null): { version: string; signatures: string } | null {
+  const match = version ? /^ClamAV ([^/\s]+)\/(\d+)/.exec(version) : null
+  return match?.[1] && match[2] ? { version: match[1], signatures: match[2] } : null
 }
 
 /** The label of a setting. */

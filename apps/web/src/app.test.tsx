@@ -457,17 +457,30 @@ describe("settings", () => {
       "/api/v1/me": admin,
       "/api/v1/settings": filesViews(),
       "/api/v1/settings/scanner": ok({
-        status: { address: "clamav:3310", ok: false, failedCheck: "encrypted_pdf", version: "ClamAV 1.5.4", checkedAt },
+        status: {
+          address: "clamav:3310",
+          ok: false,
+          failedCheck: "encrypted_pdf",
+          version: "ClamAV 1.5.4/28181/Thu Nov 12 06:27:14 2026",
+          checkedAt,
+        },
       }),
       "/api/v1/settings/scanner/test": { status: 202, body: { id } },
       [`/api/v1/settings/scanner/test/${id}`]: ok({
         state: "done",
-        result: { address: "clamav:3310", ok: true, failedCheck: null, version: "ClamAV 1.5.4", checkedAt },
+        result: {
+          address: "clamav:3310",
+          ok: true,
+          failedCheck: null,
+          version: "ClamAV 1.5.4/28182/Thu Nov 12 09:27:14 2026",
+          checkedAt,
+        },
       }),
     })
     await vi.waitFor(() => expect(text()).toContain(he("settings.scanner.check.encrypted_pdf")))
     expect(text()).toContain(he("settings.scanner.failed"))
-    expect(text()).toContain("ClamAV 1.5.4")
+    expect(text()).toContain(he("settings.scanner.version", { version: "1.5.4", signatures: "28181" }))
+    expect(text()).not.toContain("Nov")
     expect(text()).toContain(he("settings.scannerPolicy.explain.allow"))
     expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("exe, js")
     expect(document.querySelector<HTMLInputElement>('input[max="100"]')?.value).toBe("50")
