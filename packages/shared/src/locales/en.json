@@ -564,7 +564,10 @@
       "search": "Find an agent by username",
       "noMatch": "No agent's username contains {search}.",
       "allMembers": "Every agent found is already in this organization.",
-      "more": "Showing the first {shown} of {total} agents. Type more of a username to find the others."
+      "more": "Showing {shown} of {total} agents.",
+      "showMore": "Show more agents",
+      "loadingMore": "Loading more agents",
+      "moreFailed": "Could not load more agents."
     }
   }
 }

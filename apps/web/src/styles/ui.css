@@ -906,6 +906,12 @@ button {
 .ui-check-result > :last-child {
   margin-bottom: 14px;
 }
+/* The note and the Show more button under a list that loads by pages. */
+.ui-agents-more {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+}
 /* A setting's explanation in several lines, one per choice. */
 .ui-set-desc-line {
   display: block;

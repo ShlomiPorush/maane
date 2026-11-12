@@ -7,7 +7,7 @@
 // takes effect on their next request.
 
 import { ADDRESS_KINDS, type AddressKind, ORGANIZATION_NAME_MAX, parseSupportAddress } from "@maane/shared"
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useInfiniteQuery, useQueryClient } from "@tanstack/react-query"
 import { Ellipsis, Pencil, Plus, Star, Trash2, UserMinus, UserPlus } from "lucide-react"
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router"
@@ -35,9 +35,12 @@ import type { ListedUser } from "./UsersPage.tsx"
 
 export function OrganizationPage() {
   const { t } = useI18n()
+  const { id = "" } = useParams()
   return (
     <AdminOnly title={t("organizations.title")}>
-      <Organization />
+      {/* One instance per organization: moving from one to another (Back, Forward) replaces it, so an answer that
+          arrives late for the previous one (a delete, a dialog's save) finds its instance gone and does nothing. */}
+      <Organization key={id} />
     </AdminOnly>
   )
 }
@@ -535,15 +538,19 @@ function AddAddressDialog({ id, onClose }: { id: string; onClose: () => void }) 
   )
 }
 
-/** How many agents one search shows; more are found by typing more of a username. */
+/** How many agents one page of a search holds; Show more loads the next page. */
 export const AGENT_PAGE = 50
 
-/** Agents whose username contains the text, through the admin plugin's documented search of /admin/list-users. */
-export function searchAgents(search: string): Promise<{ users: ListedUser[]; total: number }> {
+/**
+ * One page of the agents whose username contains the text, from `offset` on, through the admin plugin's documented
+ * search of /admin/list-users. Its `total` counts every agent the same filters match.
+ */
+export function searchAgents(search: string, offset = 0): Promise<{ users: ListedUser[]; total: number }> {
   return authData(
     authClient.admin.listUsers({
       query: {
         limit: AGENT_PAGE,
+        offset,
         sortBy: "name",
         sortDirection: "asc",
         filterField: "role",
@@ -576,15 +583,25 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
     const timer = window.setTimeout(() => setSearch(typed.trim().toLowerCase()), 250)
     return () => window.clearTimeout(timer)
   }, [typed])
-  const found = useQuery({
+  // Pages by offset, each kept once loaded: every agent the search matches can be reached, however many come first.
+  const found = useInfiniteQuery({
     queryKey: ["agents", search],
-    queryFn: () => searchAgents(search),
+    queryFn: ({ pageParam }) => searchAgents(search, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((sum, page) => sum + page.users.length, 0)
+      return last.users.length > 0 && loaded < last.total ? loaded : undefined
+    },
     placeholderData: keepPreviousData,
     staleTime: EVERY.live,
   })
   const present = new Set(data.members.map((member) => member.userId))
-  const shown = found.data?.users ?? []
-  const total = found.data?.total ?? 0
+  const seen = new Set<string>()
+  // A user can appear on two pages when the list changed in between: each one shows once.
+  const shown = (found.data?.pages ?? [])
+    .flatMap((page) => page.users)
+    .filter((user) => !seen.has(user.id) && Boolean(seen.add(user.id)))
+  const total = found.data?.pages.at(-1)?.total ?? 0
   const agents = shown.filter((user) => !present.has(user.id))
   const chosen = agents.find((agent) => agent.id === userId)
   const name = data.organization.name
@@ -628,7 +645,9 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
   else
     list = (
       <>
-        {agents.length === 0 ? <p className="ui-hint">{t("organization.members.allMembers")}</p> : null}
+        {agents.length === 0 && !found.hasNextPage ? (
+          <p className="ui-hint">{t("organization.members.allMembers")}</p>
+        ) : null}
         {agents.length > 0 ? (
           <fieldset className="ui-field ui-choice">
             <legend className="ui-label">{t("organization.members.choose")}</legend>
@@ -655,10 +674,25 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
             ))}
           </fieldset>
         ) : null}
-        {total > shown.length ? (
-          <p className="ui-hint" data-testid="agents-more">
-            {t("organization.members.more", { shown: shown.length, total })}
-          </p>
+        {found.hasNextPage ? (
+          <div className="ui-agents-more">
+            <p className="ui-hint" data-testid="agents-more">
+              {t("organization.members.more", { shown: shown.length, total })}
+            </p>
+            {found.isFetchNextPageError ? <p className="ui-hint">{t("organization.members.moreFailed")}</p> : null}
+            <button
+              type="button"
+              className="ui-btn ui-btn-sm"
+              disabled={found.isFetchingNextPage}
+              onClick={() => void found.fetchNextPage()}
+            >
+              {found.isFetchingNextPage
+                ? t("organization.members.loadingMore")
+                : found.isFetchNextPageError
+                  ? t("common.tryAgain")
+                  : t("organization.members.showMore")}
+            </button>
+          </div>
         ) : null}
       </>
     )

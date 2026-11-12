@@ -641,6 +641,7 @@ describe("organization dialogs", () => {
     expect(auth.listUsers.mock.calls[0]?.[0]).toEqual({
       query: {
         limit: 50,
+        offset: 0,
         sortBy: "name",
         sortDirection: "asc",
         filterField: "role",
@@ -659,6 +660,77 @@ describe("organization dialogs", () => {
       query: { searchValue: "dana", searchField: "name", searchOperator: "contains", filterValue: "agent" },
     })
     expect(document.querySelector('[data-testid="agents-more"]')).toBeNull()
+  })
+
+  it("reaches an agent that 50 others sort before, by loading the next page", async () => {
+    // "sam" sorts after a000.sam to a049.sam: the first page of a search for "sam" never holds it.
+    const everyone = [
+      ...Array.from({ length: 50 }, (_, i) => agent(`p${i}`, `a${String(i).padStart(3, "0")}.sam`)),
+      agent("u7", "sam"),
+    ]
+    auth.listUsers.mockImplementation(async ({ query }: { query: Record<string, unknown> }) => {
+      const search = typeof query.searchValue === "string" ? query.searchValue : ""
+      const matching = everyone.filter((user) => user.name.includes(search))
+      const offset = Number(query.offset ?? 0)
+      const limit = Number(query.limit)
+      return { data: { users: matching.slice(offset, offset + limit), total: matching.length }, error: null }
+    })
+    await renderAt(`/organizations/${ORG}`, {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      [`/api/v1/admin/organizations/${ORG}`]: detail,
+    })
+    await vi.waitFor(() => expect(button(he("organization.members.add"))).toBeDefined())
+    await act(async () => button(he("organization.members.add"))?.click())
+    const search = await vi.waitFor(() => {
+      const found = dialog()?.querySelector<HTMLInputElement>('input[type="search"]')
+      expect(found).toBeTruthy()
+      return found as HTMLInputElement
+    })
+    await act(async () => type(search, "sam"))
+    await vi.waitFor(() =>
+      expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({ query: { searchValue: "sam", offset: 0 } }),
+    )
+    await vi.waitFor(() => expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(50))
+    expect(dialog()?.querySelector('input[type="radio"][value="u7"]')).toBeNull()
+
+    await act(async () => button(he("organization.members.showMore"), dialog() as HTMLElement)?.click())
+    await vi.waitFor(() => expect(dialog()?.querySelector('input[type="radio"][value="u7"]')).not.toBeNull())
+    expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({ query: { searchValue: "sam", offset: 50 } })
+    // What was loaded stays, and nothing more is offered.
+    expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(51)
+    expect(button(he("organization.members.showMore"), dialog() as HTMLElement)).toBeUndefined()
+  })
+
+  it("stays on another organization when the answer to deleting the previous one arrives late", async () => {
+    const OTHER = "6f1e2d3c-4b5a-4968-8776-655443322110"
+    const empty = (id: string, name: string) =>
+      ok({ organization: { id, name, createdAt: when }, addresses: [], members: [] })
+    const pending = held()
+    await renderAt(`/organizations/${ORG}`, {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/organizations": ok({ organizations: [] }),
+      [`/api/v1/admin/organizations/${ORG}`]: (request) =>
+        request.method === "DELETE" ? pending.answer : empty(ORG, "First"),
+      [`/api/v1/admin/organizations/${OTHER}`]: empty(OTHER, "Second"),
+    })
+    await vi.waitFor(() => expect(button(he("organization.delete"))).toBeDefined())
+    await act(async () => button(he("organization.delete"))?.click())
+    const question = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[role="alertdialog"]')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    await act(async () => button(he("organization.delete"), question)?.click())
+    await vi.waitFor(() => expect(requests.some((r) => r.method === "DELETE")).toBe(true))
+
+    // Straight from one organization to another, as Back or Forward does: the same route, another id.
+    await act(async () => router?.navigate(`/organizations/${OTHER}`))
+    await vi.waitFor(() => expect(text()).toContain("Second"))
+    await act(async () => pending.release(ok({ ok: true })))
+    await vi.waitFor(() => expect(text()).toContain(he("organization.deleteDone", { name: "First" })))
+    expect(where()).toBe(`/organizations/${OTHER}`)
   })
 
   it("keeps a newly opened address dialog open when the answer to a closed one arrives late", async () => {
