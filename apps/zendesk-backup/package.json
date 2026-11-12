@@ -1,0 +1,17 @@
+{
+  "name": "@maane/zendesk-backup",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/zendesk-backup.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@maane/zendesk": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

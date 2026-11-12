@@ -9,7 +9,7 @@ Maane is a self-hosted helpdesk for email only. Mail reaches one Microsoft 365 s
 - Product requirements: `docs/requirements.md`
 - Foundation plan, decisions, order of work, and status: `docs/project-foundation.md`
 
-The foundation plan is the desired state. Items marked planned do not exist yet. Check the repository before assuming a file, command, or feature exists. Today the repository holds the workspace baseline (1a): manifests, the lockfile, `packages/shared` with the locale files, the toolchain image, the guards, `scripts/verify.sh`, CI, and Dependabot. No application, Compose file, or other workflow script exists yet.
+The foundation plan is the desired state. Items marked planned do not exist yet. Check the repository before assuming a file, command, or feature exists. Today the repository holds the workspace baseline (1a): manifests, the lockfile, `packages/shared` with the locale files, the toolchain image, the guards, `scripts/verify.sh`, CI, and Dependabot; and the phase 0 Zendesk backup tool. No application server, web UI, worker, Compose file, or other workflow script exists yet.
 
 UI follows the `v3-ui-style` skill.
 
@@ -23,12 +23,14 @@ Exists:
 - `scripts/verify.sh`, and `scripts/lib/`: `common.sh` (shared helpers), `guards.sh` (repository guards), `test-guards.sh` (plants each violation in a scratch repository and expects its guard to fail).
 - `.github/`: `workflows/ci.yml`, `dependabot.yml`, the pull request template.
 
+- `packages/zendesk`: the Zendesk API client (the token goes only to the API origin; downloads follow redirects without it, HTTPS only, with a size limit), the archive format (`archive.ts`), one backup run (`backup.ts`), and the offline check (`check.ts`). `src/testing/stand-in.ts` is a stand-in Zendesk API with a second origin for files; tests never reach Zendesk.
+- `apps/zendesk-backup`: the phase 0 command line (`backup`, `check`), bundled by esbuild into `dist/zendesk-backup.mjs` for Node 24 and later. It reads the token from a terminal only and refuses an archive folder inside a Git working tree. How to run it: `docs/zendesk-backup.md`.
+
 Planned, not created (see the architecture table in `docs/project-foundation.md`):
 
 - `apps/server`: Hono, Better Auth, Drizzle with PostgreSQL, the UI API, the public routes, and the built UI.
 - `apps/web`: React and Vite UI. Hebrew and English, RTL and LTR, light and dark.
 - `apps/worker`: the PostgreSQL job queue consumer: Graph intake, sending, delivery polling, scheduled actions, Web Push, import.
-- `apps/zendesk-backup` and `packages/zendesk`: the phase 0 backup tool, and the Zendesk client and archive format it shares with the import.
 - `scripts/local.sh`, `scripts/try-pr.sh`, `scripts/release.sh`. `docker/`: the application Dockerfile, the development Compose template, env examples.
 
 ## Commands
