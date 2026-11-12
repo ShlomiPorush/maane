@@ -35,6 +35,10 @@ test.describe("desktop", () => {
     await fillSecret(userDialog.getByLabel(he("auth.repeatPassword"), { exact: true }), agentPassword)
     await userDialog.getByRole("button", { name: he("users.create"), exact: true }).click()
     await expect(userDialog).toHaveCount(0)
+    // The page has finished its own work after the create (the list shows the new agent) before the test leaves it,
+    // as users.spec.ts waits. A page.goto at once failed once with net::ERR_ABORTED (2026-11-12); it did not happen
+    // again in about 150 tries of this sequence, so its cause is not known.
+    await expect(page.getByText(AGENT, { exact: true })).toBeVisible()
 
     // The organization: Add organization opens it once it exists.
     await page.goto("/organizations")

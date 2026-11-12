@@ -10,7 +10,8 @@ Every command block below runs in Bash on the Docker host and is safe to run aga
 
 - **Image.** `ghcr.io/shlomiporush/maane:<version>`, published by the Release workflow. Each release has an immutable version tag (for example `0.1.0`) and moves `latest`. Run a version tag, never `latest`: `docker-compose.yml` refuses to start without `VERSION`.
 - **Package visibility.** GitHub creates a new package as private, also for a public repository, and a server that is not logged in cannot pull a private one. Once, after the first release and before the first deployment, open the package on GitHub (the repository's Packages, `maane`, Package settings) and change its visibility to public. To keep it private instead, log the server in with a token that can only read packages, taken from your secret store and piped to `docker login ghcr.io --username <your GitHub user> --password-stdin`; never type it on the command line.
-- **Services.** `docker-compose.yml` runs `server` (the web UI and the API, behind Traefik), `worker` (background jobs), and `postgres` (PostgreSQL 18, data in `./postgres-data`). `server` and `worker` run as `node`, with no capabilities, no new privileges, and a read-only root file system. Only `server` is on the `traefik` network; `postgres` and `worker` are on a network with no route outside the stack. No port is published.
+- **Services.** `docker-compose.yml` runs `server` (the web UI and the API, behind Traefik), `worker` (background jobs), `postgres` (PostgreSQL 18, data in `./postgres-data`), and `clamav` (ClamAV 1.5.4, the virus scanner, signatures in `./clamav`). `server` and `worker` run as `node` and share the attachments in `./data`; `clamav` runs as `clamav` (UID 100) through the image's unprivileged entrypoint, with Maane's configuration from `./docker/clamav/`. `server`, `worker`, and `clamav` run with no capabilities, no new privileges, and a read-only root file system. Only `server` is on the `traefik` network. `postgres` is on a network with no route outside the stack. `clamav`, `server`, and `worker` share the `scanner` network, which can reach the internet: freshclam downloads signatures, and the worker will reach Microsoft Graph. No port is published.
+- **Memory.** ClamAV holds its signature database in memory, about 1.5 to 3 GB, twice that for a moment while it loads new signatures. Make room for it on the host, or point Maane at a clamd you already run ([An outside clamd](#an-outside-clamd)).
 - **Migrations** run every time `server` starts, before it reports healthy. The worker starts after the server is healthy. There is no separate migration step.
 - **Backups** are yours. Maane has no backup feature. [Back up](#5-back-up) lists what your backup must hold.
 
@@ -44,7 +45,7 @@ The agent UI, the setup screen, and later the tracked links, the download links,
 
 ## 2. Create the deployment folder
 
-This block creates `~/maane` and downloads, from the release's tag, `docker-compose.yml`, `.env.example`, and the two secret contracts `postgres.env.example` and `app.env.example` (from `docker/env/` in the repository). Set `version` to the release you deploy. It refuses when any of these files is already there.
+This block creates `~/maane` and downloads, from the release's tag, `docker-compose.yml`, `.env.example`, the two secret contracts `postgres.env.example` and `app.env.example` (from `docker/env/` in the repository), and ClamAV's configuration `docker/clamav/clamd.conf` and `docker/clamav/freshclam.conf` (kept at the same path, where `docker-compose.yml` mounts them; they hold no secret). Set `version` to the release you deploy. It refuses when any of these files is already there.
 
 ```bash
 (
@@ -55,7 +56,7 @@ This block creates `~/maane` and downloads, from the release's tag, `docker-comp
   base="https://raw.githubusercontent.com/ShlomiPorush/maane/v$version"
   mkdir -p "$dir"
   cd "$dir"
-  files="docker-compose.yml .env.example postgres.env.example app.env.example"
+  files="docker-compose.yml .env.example postgres.env.example app.env.example docker/clamav/clamd.conf docker/clamav/freshclam.conf"
   for file in $files; do
     [ ! -e "$file" ] || { echo "error: $dir/$file exists; nothing was downloaded" >&2; exit 1; }
   done
@@ -65,11 +66,28 @@ This block creates `~/maane` and downloads, from the release's tag, `docker-comp
   curl -fsSL -o "$tmp/.env.example" "$base/.env.example"
   curl -fsSL -o "$tmp/postgres.env.example" "$base/docker/env/postgres.env.example"
   curl -fsSL -o "$tmp/app.env.example" "$base/docker/env/app.env.example"
+  mkdir -p "$tmp/docker/clamav" docker/clamav
+  curl -fsSL -o "$tmp/docker/clamav/clamd.conf" "$base/docker/clamav/clamd.conf"
+  curl -fsSL -o "$tmp/docker/clamav/freshclam.conf" "$base/docker/clamav/freshclam.conf"
   # ln refuses an existing name, so nothing is overwritten even by a run that started at the same time.
   for file in $files; do ln "$tmp/$file" "$file"; done
   echo "Downloaded $files of v$version into $dir"
 )
 ```
+
+Then create the two data folders, once. `./data` holds the attachments and belongs to UID 1000, the `node` user of the server and the worker; `./clamav` holds ClamAV's signatures and belongs to UID 100, the `clamav` user. The block creates only a folder that is missing, never changes one you have, and prints the owner of each:
+
+```bash
+(
+  set -euo pipefail
+  cd "$HOME/maane"
+  [ -e data ] || sudo install -d -o 1000 -g 1000 -m 750 data
+  [ -e clamav ] || sudo install -d -o 100 -g 101 -m 755 clamav
+  stat -c '%n: owner %u:%g, mode %a' data clamav
+)
+```
+
+It prints `data: owner 1000:1000, mode 750` and `clamav: owner 100:101, mode 755`. Another owner means the folder was there before; give it the owner above, or the server and the worker cannot store files, and ClamAV cannot keep its signatures.
 
 ## 3. Generate the settings and secrets once
 
@@ -195,7 +213,18 @@ If the window closed before you created the admin, the setup screen says so. Res
 cd "$HOME/maane" && docker compose restart server
 ```
 
-Check from any machine that the server is up and migrated: `curl -fsS https://maane.example.com/healthz/ready` answers `{"ok":true,"database":"ok","version":"<version>"}`. `docker compose ps` shows `server` and `worker` as `healthy`.
+The first start of `clamav` downloads the signatures (about 110 MB) and loads them, which takes a few minutes; it reports healthy when clamd answers. Until then, and whenever the scanner fails its self-test, Settings, Files and scanning, shows the scanner as failed and incoming files wait (the default policy). Once it is healthy, open that section and press Test connection: it passes when the scanner finds the EICAR test file and alerts on an encrypted ZIP and an encrypted PDF.
+
+Check from any machine that the server is up and migrated: `curl -fsS https://maane.example.com/healthz/ready` answers `{"ok":true,"database":"ok","version":"<version>"}`. `docker compose ps` shows `server`, `worker`, and `clamav` as `healthy`.
+
+### An outside clamd
+
+To scan with a clamd you already run instead of the bundled one, set Settings, Files and scanning, Scanner address to its `host:port` (or `MAANE_SCANNER_ADDRESS` in `app.env`), make it reachable from the `scanner` network, and remove the `clamav` service from your `docker-compose.yml`. That clamd must have these settings in its `clamd.conf`; compare them with `docker/clamav/clamd.conf`:
+
+- `AlertEncrypted yes`, `AlertEncryptedArchive yes`, and `AlertEncryptedDoc yes`. Maane's self-test proves these: the scanner fails it otherwise, and counts as unavailable.
+- `AlertExceedsMax yes`. No sample can prove this one, so check it yourself: without it, a file beyond a scan limit comes back clean instead of not fully scanned.
+- `StreamMaxLength` at least the largest file in Settings (50 MB by default, at most 100 MB). A longer stream is refused, not scanned, and the file waits.
+- A `TCPSocket` the worker can reach, and nothing else listening on it: clamd has no authentication, so keep it off any network but the one it shares with Maane.
 
 ## 5. Back up
 
@@ -207,9 +236,11 @@ Your backup must hold:
 | `app.env` and `postgres.env` | `~/maane/app.env`, `~/maane/postgres.env` | `MAANE_AUTH_SECRETS` decrypts every user's two-factor secret and backup codes: without it nobody can sign in after a restore. `MAANE_SETTINGS_KEYS` decrypts the secrets stored in Settings. The database password opens the database. Keep every key version you ever used. |
 | `.env` | `~/maane/.env` | `VERSION` and `DOMAIN`; no secret |
 | `docker-compose.yml` | `~/maane/docker-compose.yml` | Your copy, with any label you changed |
-| Attachments (from phase 2) | `./data`, once the release that adds it is deployed | Attachments and inline images are stored as files, not in the database |
+| Attachments | `./data` | Attachments and inline images are stored as files, named by their SHA-256, not in the database. Copy it after the dump: a dump taken after the copy of `./data` can name a file the copy lacks. |
 | The VAPID key pair (from phase 4) | `app.env` | Push notifications stop for every device when it changes |
 | The Zendesk archive (phase 0) | Wherever you keep it, outside every repository | The only full copy of the Zendesk history |
+
+`./clamav` is not part of the backup: it holds only ClamAV's signatures, which freshclam downloads again into an empty folder.
 
 Treat the backup as secret: `app.env` and `postgres.env` open the data they sit next to.
 
@@ -232,7 +263,26 @@ A dump, while the stack runs. It writes an owner-only file under `~/maane/backup
 )
 ```
 
-Copy the dump, `postgres.env`, `app.env`, and `.env` off the host with your own backup tools. A copy of `./postgres-data` instead of a dump is consistent only when taken with the stack stopped (`cd "$HOME/maane" && docker compose stop`, then copy keeping owners and modes, then `docker compose start`).
+Then the attachments, after the dump, so every file the dump names is in the archive. The archive keeps the owners and modes the server and the worker need (`--numeric-owner`, read by root), is written owner-only under `~/maane/backups`, and never replaces one:
+
+```bash
+(
+  set -euo pipefail
+  umask 077
+  cd "$HOME/maane"
+  [ -d data ] || { echo "error: $HOME/maane/data is missing" >&2; exit 1; }
+  mkdir -p backups
+  file="backups/maane-data-$(date -u +%Y%m%dT%H%M%SZ).tar"
+  partial="$(mktemp backups/.partial-XXXXXX)"
+  trap 'rm -f -- "$partial"' EXIT
+  sudo tar --numeric-owner -cpf - data >"$partial"
+  # ln refuses an existing name: an archive is never replaced.
+  ln -- "$partial" "$file"
+  echo "Wrote $HOME/maane/$file"
+)
+```
+
+Copy the dump, the data archive, `postgres.env`, `app.env`, and `.env` off the host with your own backup tools. A copy of `./postgres-data` instead of a dump is consistent only when taken with the stack stopped (`cd "$HOME/maane" && docker compose stop`, then copy keeping owners and modes, then `docker compose start`).
 
 ## 6. Test a restore
 
@@ -255,14 +305,46 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
      )
      ```
 
-3. Start the server and PostgreSQL only, never the worker. From phase 2 the worker reads the shared mailbox and sends mail, and a restored worker would act on real mail:
+3. Put the attachments back, also before `server` starts: unpack the data archive of section 5 as `data`, with its owners (UID 1000) and modes. Set `archive` to the archive's path:
+
+   ```bash
+   (
+     set -euo pipefail
+     archive="$HOME/maane-restore/maane-data.tar"
+     cd "$HOME/maane-restore"
+     [ -f "$archive" ] || { echo "error: $archive is missing" >&2; exit 1; }
+     [ ! -e data ] || { echo "error: data exists; restore only into a folder without it" >&2; exit 1; }
+     [ -z "$(tar -tf "$archive" | grep -v '^data\(/\|$\)')" ] || { echo "error: $archive holds more than data/" >&2; exit 1; }
+     sudo tar --numeric-owner -xpf "$archive"
+     sudo stat -c '%n: owner %u:%g, mode %a' data
+   )
+   ```
+
+   It prints `data: owner 1000:1000, mode 750`.
+4. Start the server and PostgreSQL only, never the worker. From phase 2 the worker reads the shared mailbox and sends mail, and a restored worker would act on real mail:
 
    ```bash
    cd "$HOME/maane-restore" && docker compose up -d --wait server
    ```
 
-4. Open `https://maane-restore.example.com` and sign in with an existing user: the username, the password, and a current code from that user's authenticator app. This proves that the database and `MAANE_AUTH_SECRETS` restore together. Open the audit log and check that the latest entries match the time of the backup. From phase 2, also open Settings and check that the stored secrets read as set: that proves `MAANE_SETTINGS_KEYS`.
-5. Remove the test stack and its data. The folder holds real data:
+5. Check that the attachments came back with the database: the newest file the restored database references must be readable by the server, with the content its name says. With no stored file yet (a backup from before the first message with a file), it says so:
+
+   ```bash
+   (
+     set -euo pipefail
+     cd "$HOME/maane-restore"
+     sha="$(docker compose exec -T postgres psql -U maane -d maane -Atc 'select sha256 from stored_file order by created_at desc limit 1')"
+     if [ -z "$sha" ]; then echo "The restored database references no stored file yet; nothing to check"; exit 0; fi
+     [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "error: the database did not answer with a hash" >&2; exit 1; }
+     read_back="$(docker compose exec -T server sha256sum "/data/files/${sha:0:2}/$sha")" ||
+       { echo "error: the server cannot read the file $sha; restore data (step 3)" >&2; exit 1; }
+     [ "${read_back%% *}" = "$sha" ] || { echo "error: the file $sha does not match its hash" >&2; exit 1; }
+     echo "The server reads the newest stored file, $sha, and it matches its hash"
+   )
+   ```
+
+6. Open `https://maane-restore.example.com` and sign in with an existing user: the username, the password, and a current code from that user's authenticator app. This proves that the database and `MAANE_AUTH_SECRETS` restore together. Open the audit log and check that the latest entries match the time of the backup. From phase 2, also open Settings and check that the stored secrets read as set: that proves `MAANE_SETTINGS_KEYS`.
+7. Remove the test stack and its data. The folder holds real data:
 
    ```bash
    cd "$HOME/maane-restore" && docker compose down && cd "$HOME" && sudo rm -rf -- "$HOME/maane-restore"
@@ -305,6 +387,10 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
 To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported.
 
 ## What was verified
+
+Phase 2.2 (2026-11-12): the `clamav` service of the development template, which matches `docker-compose.yml` but for its paths, ran with `scripts/local.sh` and `scripts/verify.sh` (UID 100, healthy, the hardening checks, a signature reload on the read-only root, a restart that kept the signatures), and `docker compose config` accepted `docker-compose.yml`. The two blocks of section 2 ran as root in a throwaway container with a stand-in `curl` and `sudo`: the six files land, ClamAV's two under `docker/clamav/`, a second run refuses and keeps them, and the data folders get their owners and modes, a second run changing nothing. An outside clamd was not tried.
+
+The data archive of section 5 and steps 3 and 5 of section 6 ran the same way, as root with a stand-in `sudo` and a stand-in `docker` that answers the database query and reads the restored folder: the archive is written mode 600 and keeps UID 1000 and the modes, which the restore puts back (`data: owner 1000:1000, mode 750`, a file `1000:1000 600`); the restore refuses an existing `data` and an archive that holds more than `data/`; the check passes for a file the database names, says so when it names none, and fails for a missing file and for changed content. Not run against a real stack.
 
 Checked on 2026-11-11, before the first release, with stand-ins and throwaway containers. Nothing ran on a server.
 

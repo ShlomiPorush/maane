@@ -192,8 +192,10 @@ check_production_compose() {
 }
 
 # The container stack: the image built from this checkout, started from the tracked development template with a data
-# directory and secrets new for this run, then health, readiness, runtime users, and hardening are checked. The project
-# and the image tag belong to this run alone, so a verify running in another checkout cannot replace the image under it.
+# directory and secrets new for this run, then health, readiness, runtime users, and hardening are checked, and the
+# worker's file service runs against the real ClamAV. The project and the image tag belong to this run alone, so a
+# verify running in another checkout cannot replace the image under it. ClamAV's signatures come from the cache
+# (ensure_stack_dirs) and go back to it once the stack ran, so freshclam downloads only what changed.
 RUN_ID="$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 STACK_PROJECT="maane-verify-stack-$RUN_ID"
 STACK_TAG="verify-$RUN_ID"
@@ -224,6 +226,27 @@ cleanup_stack() {
   fi
 }
 
+# The file checks of the stack, as the worker runs them: apps/worker/src/testing/stack-check.ts, bundled here and run
+# in a container of the worker service (its user, networks, read-only root, and /data), never shipped in the image.
+run_file_checks() {
+  local out sha stored
+  info "Files: the worker's scanner and store against the real ClamAV ($STACK_PROJECT)"
+  in_toolchain "pnpm --filter @maane/worker run build:stack-check" >/dev/null || die "building the stack check failed"
+  local check=(stack run --rm --no-deps -T -v "$REPO_ROOT/apps/worker/dist/stack-check:/check:ro" worker)
+  out="$("${check[@]}" node /check/stack-check.js 2>&1)" || {
+    echo "$out"
+    fail_stack "the file checks failed"
+  }
+  echo "$out" | grep -v '^stored '
+  sha="$(sed -n 's/^stored //p' <<<"$out")"
+  [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || fail_stack "the file checks stored no file"
+  info "Files: the server reads what the worker stored, after both containers are recreated"
+  stack up -d --no-deps --force-recreate --wait --wait-timeout 240 server worker || fail_stack "server and worker did not come back"
+  stored="$(stack exec -T server sha256sum "/data/files/${sha:0:2}/$sha")" || fail_stack "the server cannot read /data/files/${sha:0:2}/$sha"
+  [ "${stored%% *}" = "$sha" ] || fail_stack "the file the server reads differs from the one the worker stored"
+  echo "    /data/files/${sha:0:2}/$sha: the same content in the recreated server"
+}
+
 fail_stack() {
   stack ps -a || true
   stack logs --tail 60 || true
@@ -250,16 +273,20 @@ run_stack() {
   build_image "$STACK_TAG" "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
   STACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-stack.XXXXXX")"
   ensure_stack_env "$STACK_DIR"
+  ensure_stack_dirs "$STACK_DIR"
 
   info "Container stack: health, readiness, runtime users, and hardening ($STACK_PROJECT)"
-  stack up -d --remove-orphans --wait --wait-timeout 240 || fail_stack "the stack did not become healthy"
+  # ClamAV loads its signatures before it turns healthy, and downloads them first when the cache was empty.
+  stack up -d --remove-orphans --wait --wait-timeout 600 || fail_stack "the stack did not become healthy"
   TOOLCHAIN_EXTRA_ARGS=(--network "${STACK_PROJECT}_default")
   # shellcheck disable=SC2016 # expands inside the container
   in_toolchain 'body="$(curl -fsS http://server:8080/healthz/ready)" && echo "    /healthz/ready: $body" &&
     grep -q "\"database\":\"ok\"" <<<"$body"' || fail_stack "/healthz/ready does not report the database"
   TOOLCHAIN_EXTRA_ARGS=()
-  check_non_root "$STACK_PROJECT" server worker postgres
-  check_hardening "$STACK_PROJECT" server worker
+  check_non_root "$STACK_PROJECT" server worker postgres clamav
+  check_hardening "$STACK_PROJECT" server worker clamav
+  save_clamav_cache "$STACK_DIR"
+  run_file_checks
 
   info "End-to-end: the web UI against the stack (Playwright, $PLAYWRIGHT_IMAGE)"
   run_e2e || fail_stack "end-to-end tests failed"

@@ -428,6 +428,117 @@ describe("settings", () => {
     expect(days.value).toBe("21")
     expect(document.querySelector(".ui-savebar")).not.toBeNull()
   })
+
+  const filesViews = () =>
+    ok({
+      settings: [
+        view("general.defaultLocale", "he"),
+        view("security.sessionDays", 14),
+        view("intake.mode", "listening"),
+        view("scanner.address", "clamav:3310"),
+        view("scanner.unavailablePolicy", "block"),
+        view("files.maxBytes", 50 * 1024 * 1024),
+        view("files.blockedTypes", ["exe", "js"]),
+      ],
+    })
+  const checkedAt = "2026-11-12T08:00:00.000Z"
+  const button = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+  /** Types into a React-controlled text area the way a browser does. */
+  function typeArea(area: HTMLTextAreaElement, value: string) {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(area, value)
+    area.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+
+  it("shows the scanner's self-test, and runs a connection test the worker answers", async () => {
+    const id = "6f1c2f8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+    await renderAt("/settings", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": filesViews(),
+      "/api/v1/settings/scanner": ok({
+        status: {
+          address: "clamav:3310",
+          ok: false,
+          failedCheck: "encrypted_pdf",
+          version: "ClamAV 1.5.4/28181/Thu Nov 12 06:27:14 2026",
+          checkedAt,
+        },
+      }),
+      "/api/v1/settings/scanner/test": { status: 202, body: { id } },
+      [`/api/v1/settings/scanner/test/${id}`]: ok({
+        state: "done",
+        result: {
+          address: "clamav:3310",
+          ok: true,
+          failedCheck: null,
+          version: "ClamAV 1.5.4/28182/Thu Nov 12 09:27:14 2026",
+          checkedAt,
+        },
+      }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("settings.scanner.check.encrypted_pdf")))
+    expect(text()).toContain(he("settings.scanner.failed"))
+    expect(text()).toContain(he("settings.scanner.version", { version: "1.5.4", signatures: "28181" }))
+    expect(text()).not.toContain("Nov")
+    expect(text()).toContain(he("settings.scannerPolicy.explain.allow"))
+    expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("exe, js")
+    expect(document.querySelector<HTMLInputElement>('input[max="100"]')?.value).toBe("50")
+
+    await act(async () => button(he("settings.scanner.test"))?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("settings.scanner.testPassed")), { timeout: 5_000 })
+    expect(text()).toContain(he("settings.scanner.passed"))
+    expect(text()).not.toContain(he("settings.scanner.check.encrypted_pdf"))
+    expect(requests.filter((r) => r.method === "POST" && r.url.endsWith("/settings/scanner/test"))).toHaveLength(1)
+  })
+
+  it("checks the file fields before saving, and sends the size in bytes and the types as a list", async () => {
+    await renderAt("/settings", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": (request) => (request.method === "PUT" ? filesViews() : filesViews()),
+      "/api/v1/settings/scanner": ok({ status: null }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("settings.scanner.notChecked")))
+    const address = document.querySelector<HTMLInputElement>('input[dir="ltr"].ui-mono') as HTMLInputElement
+    await act(async () => type(address, "clamav"))
+    // A new address is tested only once it is saved.
+    expect(text()).toContain(he("settings.scanner.saveFirst"))
+    expect(button(he("settings.scanner.test"))?.disabled).toBe(true)
+    await act(async () => document.querySelector<HTMLButtonElement>(".ui-savebar-save")?.click())
+    expect(text()).toContain(he("settings.invalid", { field: he("settings.scannerAddress.label") }))
+    expect(document.activeElement).toBe(address)
+    expect(requests.some((r) => r.method === "PUT")).toBe(false)
+
+    await act(async () => type(address, "scanner.example.com:3310"))
+    await act(async () => type(document.querySelector<HTMLInputElement>('input[max="100"]') as HTMLInputElement, "20"))
+    await act(async () => typeArea(document.querySelector("textarea") as HTMLTextAreaElement, ".EXE,\njs  bat"))
+    await act(async () => document.querySelector<HTMLButtonElement>('button[data-policy="allow"]')?.click())
+    await act(async () => document.querySelector<HTMLButtonElement>(".ui-savebar-save")?.click())
+    await vi.waitFor(() => expect(requests.some((r) => r.method === "PUT")).toBe(true))
+    expect(JSON.parse(requests.find((r) => r.method === "PUT")?.body ?? "{}")).toEqual({
+      "scanner.address": "scanner.example.com:3310",
+      "scanner.unavailablePolicy": "allow",
+      "files.maxBytes": 20 * 1024 * 1024,
+      "files.blockedTypes": ["exe", "js", "bat"],
+    })
+  })
+
+  it("counts no change for the same list written another way", async () => {
+    await renderAt("/settings", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": filesViews(),
+      "/api/v1/settings/scanner": ok({ status: null }),
+    })
+    const area = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLTextAreaElement>("textarea")
+      expect(found).not.toBeNull()
+      return found as HTMLTextAreaElement
+    })
+    await act(async () => typeArea(area, "EXE\n.js"))
+    expect(document.querySelector(".ui-savebar")).toBeNull()
+  })
 })
 
 describe("organizations", () => {

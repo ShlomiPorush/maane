@@ -8,13 +8,21 @@
 // - no Hebrew and no literal bidirectional control character in apps/web (Hebrew lives only in he.json);
 // - the page loads nothing from another origin and has no inline script or style (the server's CSP forbids both);
 // - every setting the server registers has a place on the Settings page;
-// - every audit action the server's writeAudit calls can write has its words on the audit page.
+// - every audit action the server's and the worker's writeAudit calls can write has its words on the audit page.
 // Each check is a function over file texts, so the self-tests show it catches a planted bypass.
 
 import { readdirSync, readFileSync } from "node:fs"
 import { join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
-import { ADDRESS_KINDS, INTAKE_MODES, MESSAGES, ROLES, SETTING_KEYS } from "@maane/shared"
+import {
+  ADDRESS_KINDS,
+  INTAKE_MODES,
+  MESSAGES,
+  ROLES,
+  SCANNER_CHECKS,
+  SCANNER_POLICIES,
+  SETTING_KEYS,
+} from "@maane/shared"
 import { describe, expect, it } from "vitest"
 import { ERROR_TEXT, STATUS_TEXT } from "./api/errors.ts"
 import { AUDIT_ACTIONS } from "./pages/AuditPage.tsx"
@@ -279,6 +287,9 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "organizations.check.": ["exact", "pattern", "default"],
   "settings.intakeMode.mode.": INTAKE_MODES,
   "settings.intakeMode.explain.": INTAKE_MODES,
+  "settings.scannerPolicy.mode.": SCANNER_POLICIES,
+  "settings.scannerPolicy.explain.": SCANNER_POLICIES,
+  "settings.scanner.check.": SCANNER_CHECKS,
 }
 
 // --- Language policy: Hebrew only in he.json, bidirectional controls only as escapes ---
@@ -487,8 +498,9 @@ describe("settings", () => {
 // --- Audit actions: every action the server can write has its words ---
 
 const SERVER_SRC = fileURLToPath(new URL("../../server/src/", import.meta.url))
+const WORKER_SRC = fileURLToPath(new URL("../../worker/src/", import.meta.url))
 
-/** The server's sources without tests. */
+/** The server's and the worker's sources without tests (the worker's by a path from the server's, ../../worker/). */
 function serverFiles(): Record<string, string> {
   const out: Record<string, string> = {}
   const visit = (dir: string) => {
@@ -500,6 +512,7 @@ function serverFiles(): Record<string, string> {
     }
   }
   visit(SERVER_SRC)
+  visit(WORKER_SRC)
   return out
 }
 

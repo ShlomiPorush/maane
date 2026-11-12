@@ -2160,3 +2160,52 @@ fieldset.ui-seg {
 .ui-set-clear.is-reset {
   color: var(--ui-info);
 }
+/* A list typed as text (the blocked file types): a field that grows downward, one entry per line or comma. */
+textarea.ui-input.ui-textarea {
+  height: auto;
+  min-height: calc(var(--ui-ctl-h) * 3);
+  padding: 8px 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+/* The scanner's latest self-test on the Settings page: its status tag and when, then what failed and what was tested,
+   at the end of its row like the other controls. */
+.ui-scanner {
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+  text-align: end;
+  min-width: 0;
+}
+.ui-scanner-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 10px;
+}
+.ui-scanner-note {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+  overflow-wrap: anywhere;
+}
+.ui-scanner-fail {
+  color: var(--ui-fail);
+  font-size: var(--ui-fs-sm);
+  font-weight: 600;
+}
+.ui-set-control > .ui-hint {
+  text-align: end;
+}
+@media (max-width: 760px) {
+  .ui-scanner {
+    justify-items: start;
+    text-align: start;
+  }
+  .ui-scanner-line {
+    justify-content: flex-start;
+  }
+  .ui-set-control > .ui-hint {
+    text-align: start;
+  }
+}

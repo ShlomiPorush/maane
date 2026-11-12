@@ -1,10 +1,12 @@
-# Production deployment. Runs the image the release workflow publishes to GHCR; nothing is built here.
-# Behind Traefik on the external "traefik" network, so no port is published. Three files sit next to this one, as
-# docs/deployment.md describes; none is ever committed:
+# Production deployment. Runs the image the release workflow publishes to GHCR and ClamAV's published image; nothing is
+# built here. Behind Traefik on the external "traefik" network, so no port is published. Three files sit next to this
+# one, as docs/deployment.md describes; none is ever committed:
 #   .env          VERSION and DOMAIN, the only values Compose interpolates; neither is a secret (contract: .env.example).
 #   postgres.env  PostgreSQL's own variables, read only by postgres (contract: docker/env/postgres.env.example).
 #   app.env       the server's and the worker's secrets and overrides (contract: docker/env/app.env.example).
 # The secrets reach the containers only through env_file, so `docker compose config --no-env-resolution` shows none.
+# Beside them: ./data (attachments, owned by UID 1000), ./clamav (ClamAV's signatures, owned by UID 100), and
+# ClamAV's configuration in ./docker/clamav/, which holds no secret.
 name: maane
 
 x-app: &app
@@ -21,6 +23,9 @@ x-app: &app
   read_only: true
   tmpfs:
     - /tmp
+  # Attachments and inline images, stored by hash under /data/files; the server and the worker share it.
+  volumes:
+    - ./data:/data
   logging:
     driver: json-file
     options:
@@ -37,6 +42,7 @@ services:
     networks:
       - traefik
       - internal
+      - scanner
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik"
@@ -62,6 +68,7 @@ services:
         condition: service_healthy
     networks:
       - internal
+      - scanner
     healthcheck:
       test: ["CMD", "node", "dist/worker/healthcheck.js"]
       interval: 15s
@@ -85,9 +92,51 @@ services:
       timeout: 5s
       retries: 10
 
+  # The virus scanner. clamd answers INSTREAM on port 3310 to the server and the worker only; freshclam keeps the
+  # signatures in ./clamav up to date. Runs as clamav (UID 100) through the image's own unprivileged entrypoint, which
+  # starts both without root; that entrypoint ignores CLAMD_CONF_* variables, so Maane mounts its own configuration.
+  clamav:
+    image: clamav/clamav:1.5.4
+    user: "100:101"
+    entrypoint: ["/init-unprivileged"]
+    environment:
+      # Signature checks per day (the entrypoint passes it to freshclam --checks).
+      FRESHCLAM_CHECKS: "12"
+    volumes:
+      - ./clamav:/var/lib/clamav
+      - ./docker/clamav/clamd.conf:/etc/clamav/clamd.conf:ro
+      - ./docker/clamav/freshclam.conf:/etc/clamav/freshclam.conf:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    # clamd's socket, its scan files, and the entrypoint's first-download configuration. Logs go to stdout.
+    tmpfs:
+      - /tmp
+    networks:
+      - scanner
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    # The image's own check: clamd answers PING on port 3310. The first start downloads the signatures first.
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15m
+      start_interval: 5s
+      retries: 3
+
 networks:
   traefik:
     external: true
-  # PostgreSQL and the worker have no route outside the stack.
+  # PostgreSQL has no route outside the stack.
   internal:
     internal: true
+  # ClamAV and the two services that scan. Not internal: freshclam downloads signatures, and the worker reaches
+  # outside services (Microsoft Graph from phase 2.3).
+  scanner: {}

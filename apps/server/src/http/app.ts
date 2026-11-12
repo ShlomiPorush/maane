@@ -1,13 +1,15 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { serveStatic } from "@hono/node-server/serve-static"
-import { desc, lt, sql } from "drizzle-orm"
+import { SCANNER_CHECKS, type ScannerStatusView, type ScannerTestView } from "@maane/shared"
+import { desc, eq, lt, sql } from "drizzle-orm"
 import { Hono } from "hono"
 import { z } from "zod"
 import type { Auth } from "../auth/auth.ts"
 import type { SetupWindow } from "../auth/setup-window.ts"
 import type { Db } from "../db/client.ts"
-import { auditLog, authUser } from "../db/schema.ts"
+import { auditLog, authUser, scannerCheck } from "../db/schema.ts"
+import { type JobQueue, SCANNER_SELF_TEST } from "../jobs/queue.ts"
 import { errorFacts, log } from "../log.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { Organizations } from "../organizations/service.ts"
@@ -26,10 +28,33 @@ export interface AppContext {
   version: string
   /** Called after settings change, so the auth instance can pick up a new session length. */
   onSettingsChanged?: () => Promise<void>
+  /** The job queue: the server only queues jobs the worker runs, and reads their state. */
+  jobs: JobQueue
 }
 
 type User = AppUser
 type Env = ApiEnv
+
+/** The output the worker's self-test job returns, read back with its shape checked. */
+const selfTestOutput = z.object({
+  address: z.string(),
+  ok: z.boolean(),
+  failedCheck: z.enum(SCANNER_CHECKS).nullable(),
+  version: z.string().nullable(),
+  checkedAt: z.string(),
+})
+
+/** pg-boss's job states, as the Settings page shows a connection test. */
+const TEST_STATES: Record<string, ScannerTestView["state"]> = {
+  created: "queued",
+  retry: "queued",
+  active: "running",
+  completed: "done",
+  cancelled: "failed",
+  failed: "failed",
+}
+
+const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** The header every state-changing browser request to /api/v1 carries; a cross-site form cannot set it. */
 export const REQUEST_HEADER = "x-maane-request"
@@ -145,7 +170,46 @@ export function createApp(ctx: AppContext) {
       throw error
     }
     await ctx.onSettingsChanged?.()
+    // A new scanner address is trusted only after it passed the self-test: the worker runs it now.
+    if ("scanner.address" in parsed.data) {
+      await ctx.jobs
+        .send(SCANNER_SELF_TEST)
+        .catch((error) => log.warn("could not queue the scanner self-test", errorFacts(error)))
+    }
     return c.json({ settings: await ctx.settings.view() })
+  })
+
+  // The scanner's latest self-test, and a connection test the worker runs (the server never calls the scanner).
+  api.get("/settings/scanner", adminOnly, async (c) => {
+    const [row] = await ctx.db.select().from(scannerCheck).where(eq(scannerCheck.id, 1))
+    const status: ScannerStatusView | null = row
+      ? {
+          address: row.address,
+          ok: row.ok,
+          failedCheck: SCANNER_CHECKS.find((check) => check === row.failedCheck) ?? null,
+          version: row.version,
+          checkedAt: row.checkedAt.toISOString(),
+        }
+      : null
+    return c.json({ status })
+  })
+
+  api.post("/settings/scanner/test", adminOnly, async (c) => {
+    const id = await ctx.jobs.send(SCANNER_SELF_TEST)
+    return c.json({ id }, 202)
+  })
+
+  api.get("/settings/scanner/test/:id", adminOnly, async (c) => {
+    const id = c.req.param("id")
+    const job = JOB_ID.test(id) ? await ctx.jobs.job(SCANNER_SELF_TEST, id) : null
+    if (!job) return c.json({ error: "not_found" }, 404)
+    const state = TEST_STATES[job.state] ?? "failed"
+    const output = state === "done" ? selfTestOutput.safeParse(job.output) : null
+    const view: ScannerTestView = {
+      state: output && !output.success ? "failed" : state,
+      result: output?.success ? output.data : null,
+    }
+    return c.json(view)
   })
 
   api.get("/audit", adminOnly, async (c) => {

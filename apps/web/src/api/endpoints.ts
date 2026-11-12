@@ -1,6 +1,14 @@
 // Maane's own API, typed, and the TanStack Query keys of each read.
 
-import type { AddressKind, Locale, Role, SettingKey, SettingView } from "@maane/shared"
+import type {
+  AddressKind,
+  Locale,
+  Role,
+  ScannerStatusView,
+  ScannerTestView,
+  SettingKey,
+  SettingView,
+} from "@maane/shared"
 import { query, request } from "./client.ts"
 
 export type SetupStatus = {
@@ -66,6 +74,7 @@ export const qk = {
   setupStatus: ["setup-status"] as const,
   me: ["me"] as const,
   settings: ["settings"] as const,
+  scanner: ["settings", "scanner"] as const,
   audit: ["audit"] as const,
   users: ["users"] as const,
   sessions: ["sessions"] as const,
@@ -79,6 +88,11 @@ export const api = {
   settings: () => request<{ settings: SettingView[] }>("GET", "/settings"),
   saveSettings: (changes: Partial<Record<SettingKey, unknown>>) =>
     request<{ settings: SettingView[] }>("PUT", "/settings", changes),
+  /** The scanner's latest self-test. */
+  scannerStatus: () => request<{ status: ScannerStatusView | null }>("GET", "/settings/scanner"),
+  /** Queues a connection test the worker runs; scannerTest reads where it is. */
+  testScanner: () => request<{ id: string }>("POST", "/settings/scanner/test"),
+  scannerTest: (id: string) => request<ScannerTestView>("GET", `/settings/scanner/test/${encodeURIComponent(id)}`),
   audit: (before: number | null) =>
     request<AuditPage>("GET", `/audit${query({ before: before ?? undefined, limit: AUDIT_PAGE_SIZE })}`),
   organizations: () => request<{ organizations: OrganizationSummary[] }>("GET", ORGANIZATIONS),

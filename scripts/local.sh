@@ -8,8 +8,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
 PROJECT="$DEV_PROJECT"
 export MAANE_DATA_DIR="${MAANE_DATA_DIR:-$DEV_DEFAULT_DATA_DIR}"
-SERVICES=(server worker postgres)
-APP_SERVICES=(server worker)
+SERVICES=(server worker postgres clamav)
+# The services that run with no capability, no new privileges, and a read-only root.
+HARDENED_SERVICES=(server worker clamav)
 
 usage() {
   cat <<EOF
@@ -23,7 +24,8 @@ Usage: scripts/local.sh <command>
   logs     Follow the logs.
   nuke     Stop the stack and delete its data directory (asks first).
 
-Data directory: $MAANE_DATA_DIR (the database, and postgres.env and app.env with its generated password and keys)
+Data directory: $MAANE_DATA_DIR (the database, postgres.env and app.env with its generated password and keys,
+data/ with the attachments, and clamav/ with ClamAV's signatures)
 The shell may set MAANE_PORT (default 8095) and MAANE_PUBLIC_URL.
 EOF
 }
@@ -35,7 +37,7 @@ build() {
 status() {
   dev_compose ps
   check_non_root "$PROJECT" "${SERVICES[@]}"
-  check_hardening "$PROJECT" "${APP_SERVICES[@]}"
+  check_hardening "$PROJECT" "${HARDENED_SERVICES[@]}"
 }
 
 nuke() {
@@ -61,14 +63,25 @@ main() {
       ;;
     up)
       ensure_stack_env "$MAANE_DATA_DIR"
+      ensure_stack_dirs "$MAANE_DATA_DIR"
       build
       dev_compose up --remove-orphans
       ;;
     start)
       ensure_stack_env "$MAANE_DATA_DIR"
+      ensure_stack_dirs "$MAANE_DATA_DIR"
       build
-      info "Starting $PROJECT"
-      dev_compose up -d --remove-orphans --wait --wait-timeout 180 || {
+      # The server first: its setup screen is open for 5 minutes from its start while no user exists, and ClamAV's
+      # first signature download can take longer than that.
+      info "Starting the server of $PROJECT"
+      dev_compose up -d --remove-orphans --wait --wait-timeout 180 server || {
+        dev_compose ps
+        die "the server did not become healthy; see: scripts/local.sh logs"
+      }
+      info "Server ready: http://$(dev_compose port server 8080) (the setup screen is open for 5 minutes while no user exists)"
+      info "Starting the rest of $PROJECT"
+      # ClamAV loads its signatures before it turns healthy, and downloads them first on the first start.
+      dev_compose up -d --remove-orphans --wait --wait-timeout 600 || {
         dev_compose ps
         die "the stack did not become healthy; see: scripts/local.sh logs"
       }

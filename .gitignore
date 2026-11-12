@@ -26,6 +26,7 @@ test-results/
 # Production data, when the stack runs from a checkout
 /data/
 /postgres-data/
+/clamav/
 
 # Logs and OS files
 *.log

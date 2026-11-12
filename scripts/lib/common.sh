@@ -194,6 +194,68 @@ ensure_stack_env() {
   exec {lock}>&-
 }
 
+# --- Data and signature directories ---
+# Next to the database, a stack has DIR/data, the attachments the server and the worker share (owned by UID 1000, the
+# image's node user), and DIR/clamav, ClamAV's signatures (owned by UID 100, the clamav user). Both are created by a
+# root container, because the host user is not always UID 1000 (a CI runner is not) and can never be UID 100.
+FILES_OWNER="1000:1000"
+CLAMAV_OWNER="100:101"
+# Signatures kept between stacks, so freshclam does not download them for every verification run. Stacks never mount
+# it: each copies it in and out under CLAMAV_CACHE_LOCK, so runs in several checkouts at once do not mix their files.
+CLAMAV_CACHE="$CACHE_DIR/clamav"
+CLAMAV_CACHE_LOCK="$CACHE_DIR/clamav.lock"
+
+# Creates DIR/data and DIR/clamav when missing, and gives them their owners. An empty signature directory is filled
+# from the cache when the cache holds signatures; otherwise ClamAV downloads them on its first start.
+ensure_stack_dirs() {
+  local dir="$1" lock
+  require_linux_dir "$dir"
+  require_outside_repo "$dir"
+  build_toolchain
+  mkdir -p "$CLAMAV_CACHE"
+  exec {lock}>"$CLAMAV_CACHE_LOCK" || die "cannot open $CLAMAV_CACHE_LOCK"
+  flock "$lock" || die "cannot lock $CLAMAV_CACHE_LOCK"
+  # shellcheck disable=SC2016 # expands inside the container
+  docker run --rm --user 0 -v "$dir:/stack" -v "$CLAMAV_CACHE:/cache:ro" "$TOOLCHAIN_IMAGE" bash -c '
+    set -euo pipefail
+    install -d -o "${0%:*}" -g "${0#*:}" -m 750 /stack/data
+    install -d -o "${1%:*}" -g "${1#*:}" -m 755 /stack/clamav
+    shopt -s nullglob
+    # freshclam keeps a database as .cvd, or as .cld once a differential update changed it: either one is a cache.
+    if [ ! -e /stack/clamav/main.cvd ] && [ ! -e /stack/clamav/main.cld ] &&
+      { [ -e /cache/main.cvd ] || [ -e /cache/main.cld ]; }; then
+      files=(/cache/*.cvd /cache/*.cld /cache/*.sign)
+      cp -- "${files[@]}" /stack/clamav/
+      chown -R "$1" /stack/clamav
+      echo "    signatures copied from the cache"
+    fi' "$FILES_OWNER" "$CLAMAV_OWNER" || die "cannot prepare the data and signature directories in $dir"
+  exec {lock}>&-
+}
+
+# Replaces the signature cache with the signatures of a running or stopped stack, as one swap of directories under
+# the lock, so a run that copies from the cache meanwhile never sees half of an update.
+save_clamav_cache() {
+  local dir="$1" lock
+  [ -e "$dir/clamav/main.cvd" ] || [ -e "$dir/clamav/main.cld" ] || return 0
+  mkdir -p "$CLAMAV_CACHE"
+  exec {lock}>"$CLAMAV_CACHE_LOCK" || die "cannot open $CLAMAV_CACHE_LOCK"
+  flock "$lock" || die "cannot lock $CLAMAV_CACHE_LOCK"
+  # shellcheck disable=SC2016 # expands inside the container
+  docker run --rm --user 0 -v "$dir/clamav:/stack:ro" -v "$CACHE_DIR:/caches" "$TOOLCHAIN_IMAGE" bash -c '
+    set -euo pipefail
+    shopt -s nullglob
+    rm -rf /caches/clamav.new /caches/clamav.old
+    mkdir /caches/clamav.new
+    files=(/stack/*.cvd /stack/*.cld /stack/*.sign)
+    [ ${#files[@]} -eq 0 ] || cp -- "${files[@]}" /caches/clamav.new/
+    chown -R "$0" /caches/clamav.new
+    chmod 755 /caches/clamav.new
+    mv /caches/clamav /caches/clamav.old
+    mv /caches/clamav.new /caches/clamav
+    rm -rf /caches/clamav.old' "$(id -u):$(id -g)" || echo "warning: could not save the ClamAV signatures to $CLAMAV_CACHE" >&2
+  exec {lock}>&-
+}
+
 # --- Development stack ---
 DEV_PROJECT="maane-dev"
 DEV_COMPOSE_FILE="$REPO_ROOT/docker-compose-dev.yml"

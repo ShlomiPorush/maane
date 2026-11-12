@@ -27,10 +27,32 @@ export {
   USERNAME_MIN,
   userEmail,
 } from "./auth.ts"
+export {
+  SCAN_STATUSES,
+  SCANNER_CHECKS,
+  type ScannerCheck,
+  type ScannerStatusView,
+  type ScannerTestView,
+  type ScanStatus,
+  STORED_STATUSES,
+  type StoredStatus,
+} from "./files.ts"
 export { DEFAULT_LOCALE, direction, LOCALES, type Locale, MESSAGES, type Messages } from "./locales.ts"
 export {
+  BLOCKED_TYPE,
+  BLOCKED_TYPES_MAX,
+  DEFAULT_BLOCKED_TYPES,
+  FILES_MAX_BYTES_MAX,
+  FILES_MAX_BYTES_MIN,
   INTAKE_MODES,
   type IntakeMode,
+  MEGABYTE,
+  normalizeBlockedTypes,
+  parseScannerAddress,
+  SCAN_TIMEOUT_MAX_SECONDS,
+  SCAN_TIMEOUT_MIN_SECONDS,
+  SCANNER_POLICIES,
+  type ScannerPolicy,
   SETTING_KEYS,
   SETTINGS,
   type SettingDefinition,
