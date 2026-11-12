@@ -39,6 +39,7 @@ async function main(): Promise<void> {
     setup,
     publicUrl: config.publicUrl,
     webDir: config.webDir,
+    filesDir: config.filesDir,
     version: config.version,
     // A new session length applies to sessions made from now on; requests in flight finish on the old instance.
     onSettingsChanged: async () => {

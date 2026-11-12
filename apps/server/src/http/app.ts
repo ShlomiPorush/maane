@@ -22,6 +22,7 @@ import { Organizations } from "../organizations/service.ts"
 import { type Settings, SettingsError } from "../settings/service.ts"
 import { organizationRoutes } from "./organizations.ts"
 import { type ApiEnv, type AppUser, clientIp } from "./request.ts"
+import { ticketRoutes } from "./tickets.ts"
 
 export interface AppContext {
   db: Db
@@ -31,6 +32,8 @@ export interface AppContext {
   setup: SetupWindow
   publicUrl: URL
   webDir: string
+  /** The content-addressed file store the worker writes (MAANE_FILES_DIR); the server only reads it. */
+  filesDir: string
   version: string
   /** Called after settings change, so the auth instance can pick up a new session length. */
   onSettingsChanged?: () => Promise<void>
@@ -90,6 +93,8 @@ const CSP = [
   "img-src 'self' data:",
   "font-src 'self'",
   "connect-src 'self'",
+  // The ticket view frames each message body from /api/v1/messages/:id/body, which sends its own policy.
+  "frame-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'none'",
   "form-action 'self'",
@@ -99,13 +104,16 @@ const CSP = [
 export function createApp(ctx: AppContext) {
   const app = new Hono<Env>()
 
-  // On every answer, so no page of the UI is ever served without its Content Security Policy, however it is reached.
+  // On every answer, so no page of the UI is ever served without its Content Security Policy, however it is reached. A
+  // route may declare its own policy for its successful answer (a message body, a file: SecurityHeaders in
+  // tickets.ts); every other answer, a refusal or an error of that route included, gets the UI's.
   app.use("*", async (c, next) => {
     await next()
-    c.header("Content-Security-Policy", CSP)
+    const own = c.get("security")
+    c.header("Content-Security-Policy", own?.csp ?? CSP)
     c.header("X-Content-Type-Options", "nosniff")
     c.header("Referrer-Policy", "no-referrer")
-    c.header("X-Frame-Options", "DENY")
+    if (!own || own.frameDeny) c.header("X-Frame-Options", "DENY")
     if (c.res.headers.get("content-type")?.startsWith("text/html")) c.header("Cache-Control", "no-store")
   })
 
@@ -261,6 +269,7 @@ export function createApp(ctx: AppContext) {
   })
 
   api.route("/admin/organizations", organizationRoutes(new Organizations(ctx.db)))
+  api.route("/", ticketRoutes(ctx.db, ctx.filesDir))
 
   app.route("/api/v1", api)
   app.all("/api/*", (c) => c.json({ error: "not_found" }, 404))
@@ -274,6 +283,8 @@ export function createApp(ctx: AppContext) {
   })
 
   app.onError((error, c) => {
+    // An error answer never keeps a policy its route declared for success.
+    c.set("security", undefined)
     log.error("request failed", { path: new URL(c.req.url).pathname, ...errorFacts(error) })
     return c.json({ error: "internal" }, 500)
   })

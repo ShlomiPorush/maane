@@ -37,6 +37,8 @@ export function createTestApp(
   database: TestDatabase,
   overrides: Record<string, string> = {},
   jobs: JobQueue = NO_JOBS,
+  /** The file store the ticket routes read; tests that serve files give a temporary directory. */
+  filesDir = "/nonexistent",
 ) {
   const audit = openDatabase(database.url, 2)
   const clock = new TestClock()
@@ -68,6 +70,7 @@ export function createTestApp(
     setup,
     publicUrl,
     webDir: "/nonexistent",
+    filesDir,
     version: "test",
     onSettingsChanged: build,
     jobs,
