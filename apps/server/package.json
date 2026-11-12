@@ -17,6 +17,7 @@
     "@hono/node-server": "2.1.6",
     "@maane/shared": "workspace:*",
     "better-auth": "1.7.18",
+    "bidi-js": "1.1.0",
     "content-disposition": "3.0.0",
     "drizzle-orm": "0.45.4",
     "hono": "4.13.17",

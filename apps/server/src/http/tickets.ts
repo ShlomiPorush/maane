@@ -64,11 +64,13 @@ const unsafe = (point: number) =>
   point < 0x20 || (point >= 0x7f && point <= 0x9f) || BIDI_CONTROLS.has(point) || point === 0x2f || point === 0x5c
 
 export function safeFileName(name: string | null): string {
-  const cleaned = [...(name ?? "")]
+  // Well formed first (an unpaired surrogate becomes U+FFFD), so the UTF-8 form of the name always exists.
+  const kept = [...(name ?? "").toWellFormed()]
     .map((char) => (unsafe(char.codePointAt(0) ?? 0) ? "_" : char))
     .join("")
     .trim()
-    .slice(0, 200)
+  // At most 200 characters, cut between code points: half of a surrogate pair would make the header unwritable.
+  const cleaned = [...kept].slice(0, 200).join("")
   return cleaned === "" || cleaned === "." || cleaned === ".." ? "file" : cleaned
 }
 
@@ -133,7 +135,6 @@ export function ticketRoutes(db: Db, filesDir: string): Hono<ApiEnv> {
     c.header("Content-Type", type)
     c.header("Content-Length", String(size))
     c.header("Content-Disposition", contentDisposition(safeFileName(access.fileName), { type: disposition }))
-    c.header("Cache-Control", "private, no-store")
     return c.body(Readable.toWeb(createReadStream(path)) as ReadableStream)
   }
 

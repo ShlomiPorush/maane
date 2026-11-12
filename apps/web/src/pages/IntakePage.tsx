@@ -5,7 +5,7 @@
 // (?mode=listening|live&review=1). "Show older entries" follows the cursor (TB-6); the page reads itself again every
 // 30 seconds (SV-10).
 
-import type { IntakeEntry, IntakeLog } from "@maane/shared"
+import { INTAKE_REASONS, type IntakeEntry, type IntakeLog } from "@maane/shared"
 import { useId } from "react"
 import { Link, useSearchParams } from "react-router"
 import { api, type IntakeFilters, qk } from "../api/endpoints.ts"
@@ -186,12 +186,9 @@ function IntakeRow({ entry }: { entry: IntakeEntry }) {
               </Link>
             </span>
           ) : null}
-          {entry.reason ? (
-            <span>
-              {t("intake.reason")}:{" "}
-              <bdi className="ui-mono" dir="ltr">
-                {entry.reason}
-              </bdi>
+          {entry.reasons.length > 0 ? (
+            <span className="ui-intake-reasons">
+              {t("intake.reasonLabel")}: <ReasonWords codes={entry.reasons} />
             </span>
           ) : null}
         </span>
@@ -217,5 +214,28 @@ function IntakeRow({ entry }: { entry: IntakeEntry }) {
         <Time value={entry.receivedAt} />
       </span>
     </div>
+  )
+}
+
+const KNOWN_REASONS = new Set<string>(INTAKE_REASONS)
+
+/** Each reason in words; a code the UI does not know yet shows as it is, in mono, left to right. */
+function ReasonWords({ codes }: { codes: string[] }) {
+  const { t } = useI18n()
+  return (
+    <>
+      {codes.map((code, index) => (
+        <span key={code} data-reason={code}>
+          {index > 0 ? ", " : null}
+          {KNOWN_REASONS.has(code) ? (
+            t(`intake.reason.${code}`)
+          ) : (
+            <bdi className="ui-mono" dir="ltr">
+              {code}
+            </bdi>
+          )}
+        </span>
+      ))}
+    </>
   )
 }

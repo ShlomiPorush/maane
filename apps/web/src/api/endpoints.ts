@@ -94,9 +94,12 @@ export type TicketFilters = { organization?: string; flagged?: boolean }
 /** The intake log's filters. */
 export type IntakeFilters = { mode?: "listening" | "live"; flagged?: boolean }
 
-/** Where a message body, a download, and a preview are served: the frame and the links use these addresses. */
-export const bodyUrl = (messageId: string, remoteImages: boolean) =>
-  `/api/v1/messages/${encodeURIComponent(messageId)}/body${remoteImages ? "?images=1" : ""}`
+/**
+ * Where a message body, a download, and a preview are served: the frame and the links use these addresses. The body's
+ * address carries its content version, so the frame reloads once a waiting part of it was decided.
+ */
+export const bodyUrl = (messageId: string, version: string, remoteImages: boolean) =>
+  `/api/v1/messages/${encodeURIComponent(messageId)}/body${query({ v: version, images: remoteImages ? 1 : undefined })}`
 export const downloadUrl = (attachmentId: string) => `/api/v1/files/${encodeURIComponent(attachmentId)}`
 export const previewUrl = (attachmentId: string) => `/api/v1/files/${encodeURIComponent(attachmentId)}/preview`
 

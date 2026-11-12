@@ -86,6 +86,35 @@ export const INTAKE_OUTCOMES = [
 ] as const
 export type IntakeOutcome = (typeof INTAKE_OUTCOMES)[number]
 
+/** The signs of automated mail (RFC 3834, RFC 3464, RFC 8098, RFC 2919, RFC 2369), as the intake record names them. */
+export const AUTOMATED_SIGNS = [
+  "auto_submitted",
+  "delivery_report",
+  "disposition_report",
+  "precedence",
+  "list",
+  "autoreply_header",
+] as const
+export type AutomatedSign = (typeof AUTOMATED_SIGNS)[number]
+
+/**
+ * Every reason an intake record can give (its `reason` column, a comma-separated list for automated mail): why a
+ * message is a copy, unreadable, without an address, or linked, and each sign of automated mail. The intake log shows
+ * each in words; apps/web/src/guards.test.ts fails on a reason the worker can write that is not listed here.
+ */
+export const INTAKE_REASONS = [
+  "copy",
+  "process_failed",
+  "unavailable",
+  "unparsed",
+  "too_large",
+  "no_default_address",
+  "sender_not_participant",
+  "ambiguous_original",
+  ...AUTOMATED_SIGNS,
+] as const
+export type IntakeReason = (typeof INTAKE_REASONS)[number]
+
 /** The threading layer that matched: the headers, a late original's pending reference, the body code, the subject. */
 export const MATCH_LAYERS = ["header", "original", "reference", "subject"] as const
 export type MatchLayer = (typeof MATCH_LAYERS)[number]

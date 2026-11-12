@@ -114,7 +114,10 @@ export function createApp(ctx: AppContext) {
     c.header("X-Content-Type-Options", "nosniff")
     c.header("Referrer-Policy", "no-referrer")
     if (!own || own.frameDeny) c.header("X-Frame-Options", "DENY")
-    if (c.res.headers.get("content-type")?.startsWith("text/html")) c.header("Cache-Control", "no-store")
+    // Everything under /api/v1 is private to the signed-in user and checked on every request (scope, role): no browser
+    // or proxy may keep a copy, success or refusal, so nothing is ever served again without that check.
+    if (c.req.path === "/api/v1" || c.req.path.startsWith("/api/v1/")) c.header("Cache-Control", "private, no-store")
+    else if (c.res.headers.get("content-type")?.startsWith("text/html")) c.header("Cache-Control", "no-store")
   })
 
   app.get("/healthz/live", (c) => c.json({ ok: true, version: ctx.version }))

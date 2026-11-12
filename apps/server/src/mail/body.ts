@@ -9,8 +9,8 @@
 // policy allows only inline styles and the images built here, and no font from anywhere, so the style names fonts the
 // system has.
 
-import { textDirection } from "@maane/shared"
 import sanitizeHtml from "sanitize-html"
+import { textDirection } from "./bidi.ts"
 
 const STYLE = [
   "html{color-scheme:light}",

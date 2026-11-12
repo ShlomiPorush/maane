@@ -27,7 +27,6 @@ export {
   USERNAME_MIN,
   userEmail,
 } from "./auth.ts"
-export { textDirection } from "./bidi.ts"
 export {
   SCAN_STATUSES,
   SCANNER_CHECKS,
@@ -39,6 +38,8 @@ export {
   type StoredStatus,
 } from "./files.ts"
 export {
+  AUTOMATED_SIGNS,
+  type AutomatedSign,
   type FieldScan,
   GRAPH_FOLDERS,
   GRAPH_PROBLEMS,
@@ -47,7 +48,9 @@ export {
   type GraphTestResult,
   type GraphTestView,
   INTAKE_OUTCOMES,
+  INTAKE_REASONS,
   type IntakeOutcome,
+  type IntakeReason,
   isClientId,
   isMailbox,
   isTenantId,

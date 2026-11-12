@@ -104,6 +104,8 @@ export interface MessageView {
   remoteImages: number
   /** About how many lines the body takes, so the UI can size its frame (a sandboxed frame cannot be measured). */
   bodyLines: number
+  /** Changes whenever what the body route serves changes (a waiting field or inline image decided). */
+  bodyVersion: string
   fields: FieldNotice[]
   attachments: AttachmentView[]
 }
@@ -134,7 +136,8 @@ export interface IntakeEntry {
   mode: "listening" | "live"
   outcome: IntakeOutcome
   classification: string | null
-  reason: string | null
+  /** The record's reason codes (INTAKE_REASONS; an unknown one stays as it is): the intake log shows their words. */
+  reasons: string[]
   matchLayer: MatchLayer | null
   subject: string | null
   from: MailAddress | null

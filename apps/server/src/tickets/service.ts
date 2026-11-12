@@ -4,6 +4,7 @@
 // its hash, so the same content in two organizations leaks nothing across them. The intake log is for admins and reads
 // every record.
 
+import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import {
   type AttachmentView,
@@ -126,6 +127,21 @@ function senderOf(row: { fromAddress: string | null; fromName: string | null; gr
   const address = graph?.from?.address
   if (typeof address !== "string" || address === "") return null
   return { address: address.toLowerCase(), name: typeof graph?.from?.name === "string" ? graph.from.name : null }
+}
+
+/**
+ * What the body document is made of: the stored text and HTML, their field scans, and the scan state of the parts an
+ * HTML body can show inline. It changes when a waiting field or image is decided, so the frame loads the new document.
+ */
+function bodyVersion(
+  m: { textBody: string | null; htmlBody: string | null; fieldScans: unknown },
+  inline: { part: { id: string; status: string; storedSha256: string | null }; storedStatus: string | null }[],
+): string {
+  const hash = createHash("sha256")
+  hash.update(JSON.stringify([m.textBody, m.htmlBody, m.fieldScans]))
+  for (const { part, storedStatus } of inline)
+    hash.update(JSON.stringify([part.id, part.status, part.storedSha256, storedStatus]))
+  return hash.digest("hex").slice(0, 16)
 }
 
 /** About how many lines a body takes at a usual width: its text wrapped at 90 characters, and room for images. */
@@ -345,6 +361,10 @@ export class Tickets {
         body: html ? "html" : text ? "text" : null,
         remoteImages: html ? renderMailHtml(html, { remoteImages: false, inline: () => null }).remoteImages : 0,
         bodyLines: bodyLines(text, html),
+        bodyVersion: bodyVersion(
+          m,
+          parts.filter(({ part }) => part.messageId === m.id && part.contentId !== null),
+        ),
         fields: fieldNotices(m.fieldScans),
         attachments,
       }
@@ -490,7 +510,10 @@ export class Tickets {
       mode: row.record.mode === "live" ? "live" : "listening",
       outcome: row.record.outcome as IntakeEntry["outcome"],
       classification: row.record.classification,
-      reason: row.record.reason,
+      reasons: (row.record.reason ?? "")
+        .split(",")
+        .map((code) => code.trim())
+        .filter(Boolean),
       matchLayer: row.record.matchLayer as IntakeEntry["matchLayer"],
       subject: subjectOf(row),
       from: senderOf(row),

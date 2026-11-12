@@ -4,16 +4,11 @@
 // message that carries it, so it is never a sign. A From of MAILER-DAEMON or postmaster without any sign opens a ticket
 // flagged "possibly automated" for a person to look at.
 
-/** The signs of automated mail, as the intake record names them. */
-export const AUTOMATED_SIGNS = [
-  "auto_submitted",
-  "delivery_report",
-  "disposition_report",
-  "precedence",
-  "list",
-  "autoreply_header",
-] as const
-export type AutomatedSign = (typeof AUTOMATED_SIGNS)[number]
+// The signs of automated mail, as the intake record names them, live in @maane/shared (intake.ts), where the intake
+// log finds their words.
+import type { AutomatedSign } from "@maane/shared"
+
+export { AUTOMATED_SIGNS, type AutomatedSign } from "@maane/shared"
 
 export interface ClassifyInput {
   /** Every header line as received (`Key: value`, possibly folded). */

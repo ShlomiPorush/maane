@@ -347,6 +347,53 @@ describe("files", () => {
   })
 })
 
+describe("caching", () => {
+  it("lets no browser or proxy keep any private answer: lists, tickets, bodies, files, the intake log, and refusals", async () => {
+    const admin = await firstAdmin()
+    const agent = await newAgent(admin, "agent.one")
+    const t = await newTicket(await newOrganization("Alpha"))
+    const m = await newMessage(t.id, { htmlBody: "<p>hello</p>" })
+    const file = await pngPart(m)
+    const markup = await newPart(m, { storedSha256: await storeFile(Buffer.from("<svg/>"), "image/svg+xml") })
+    const answers: [string, Response, number][] = [
+      ["the list", await admin.get("/api/v1/tickets"), 200],
+      ["a ticket", await admin.get(`/api/v1/tickets/${t.number}`), 200],
+      ["a body", await admin.get(`/api/v1/messages/${m}/body`), 200],
+      ["a body with remote images", await admin.get(`/api/v1/messages/${m}/body?images=1`), 200],
+      ["a download", await admin.get(`/api/v1/files/${file}`), 200],
+      ["a preview", await admin.get(`/api/v1/files/${file}/preview`), 200],
+      ["the intake log", await admin.get("/api/v1/intake"), 200],
+      ["who is signed in", await admin.get("/api/v1/me"), 200],
+      ["a ticket outside the scope", await agent.b.get(`/api/v1/tickets/${t.number}`), 404],
+      ["a body outside the scope", await agent.b.get(`/api/v1/messages/${m}/body`), 404],
+      ["a file outside the scope", await agent.b.get(`/api/v1/files/${file}`), 404],
+      ["a refused preview", await admin.get(`/api/v1/files/${markup}/preview`), 403],
+      ["the intake log for an agent", await agent.b.get("/api/v1/intake"), 403],
+      ["a bad filter", await admin.get("/api/v1/tickets?status=closed"), 400],
+      ["signed out", await browser().get("/api/v1/tickets"), 401],
+    ]
+    for (const [what, answer, status] of answers) {
+      expect(answer.status, what).toBe(status)
+      expect(answer.headers.get("cache-control"), what).toBe("private, no-store")
+    }
+  })
+})
+
+describe("file names", () => {
+  it("cuts a long name between characters, never inside an emoji, and still serves the file", async () => {
+    const admin = await firstAdmin()
+    const t = await newTicket(await newOrganization("Alpha"))
+    const m = await newMessage(t.id)
+    // 199 letters, then an emoji (two UTF-16 units), so the 200th character is the whole emoji.
+    const emoji = String.fromCodePoint(0x1f4c4)
+    const part = await pngPart(m, { fileName: `${"a".repeat(199)}${emoji}.pdf` })
+    const download = await admin.get(`/api/v1/files/${part}`)
+    expect(download.status).toBe(200)
+    const named = parseDisposition(download.headers.get("content-disposition") ?? "")
+    expect(named.parameters.filename).toBe(`${"a".repeat(199)}${emoji}`)
+  })
+})
+
 describe("message bodies", () => {
   it("sends the body route's own headers, while an ordinary route and every refusal keep the UI's", async () => {
     const admin = await firstAdmin()
@@ -570,10 +617,11 @@ describe("the intake log", () => {
       mode: "listening",
       matchedTicket: t.number,
       ticket: null,
+      reasons: ["sender_not_participant"],
       flags: ["sender_not_participant"],
       organization: { id: a, name: "Alpha" },
     })
-    expect(all.entries[2]).toMatchObject({ mode: "live", ticket: t.number, flags: [] })
+    expect(all.entries[2]).toMatchObject({ mode: "live", ticket: t.number, flags: [], reasons: [] })
     const listeningOnly = (await admin.call("GET", "/api/v1/intake?mode=listening")).json.entries
     expect(listeningOnly).toHaveLength(2)
     const flagged = (await admin.call("GET", "/api/v1/intake?flagged=1")).json.entries

@@ -2,7 +2,7 @@
 // and role lands (signed out, two-factor off, agent, admin), the setup screen's states, sign-in with its second
 // step, and a session that ends while a page is open. Texts are read from the locale files.
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { createMemoryRouter, RouterProvider } from "react-router"
@@ -1348,7 +1348,7 @@ describe("tickets", () => {
     download: true,
     ...over,
   })
-  const view = () =>
+  const view = (version = "v1") =>
     ok({
       ticket: {
         number: 7,
@@ -1377,6 +1377,7 @@ describe("tickets", () => {
           body: "html",
           remoteImages: 2,
           bodyLines: 4,
+          bodyVersion: version,
           fields: [{ field: "text", status: "infected", signature: "Eicar-Signature" }],
           attachments: [
             file({ id: "f1", fileName: "photo.png", detectedType: "image/png", preview: "image" }),
@@ -1451,13 +1452,13 @@ describe("tickets", () => {
       expect(found).not.toBeNull()
       return found as HTMLIFrameElement
     })
-    expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body`)
+    expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?v=v1`)
     expect(frame.getAttribute("sandbox")).toBe("")
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer")
     expect(frame.style.height).toBe("140px")
     expect(text()).toContain(translate("he", "ticket.imagesHidden.two", { count: "2" }))
     await act(async () => button(he("ticket.showImages"))?.click())
-    expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?images=1`)
+    expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?v=v1&images=1`)
     expect(text()).toContain(he("ticket.imagesShown"))
 
     // The message's own review flag, and the blocked text: its words and its signature, never its content.
@@ -1498,6 +1499,34 @@ describe("tickets", () => {
     expect(document.querySelector('[data-testid="ticket-missing"] a')?.getAttribute("href")).toBe("/")
   })
 
+  it("reloads the frame once what its body shows changed, and keeps the remote images choice", async () => {
+    let version = "v1"
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": () => view(version),
+    })
+    const frame = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLIFrameElement>("iframe.ui-mail-frame")
+      expect(found).not.toBeNull()
+      return found as HTMLIFrameElement
+    })
+    await act(async () => button(he("ticket.showImages"))?.click())
+    expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?v=v1&images=1`)
+    // A waiting inline image or HTML body was decided: the next read of the ticket carries a new version.
+    version = "v2"
+    await act(async () => {
+      focusManager.setFocused(false)
+      focusManager.setFocused(true)
+    })
+    await vi.waitFor(() =>
+      expect(document.querySelector("iframe.ui-mail-frame")?.getAttribute("src")).toBe(
+        `/api/v1/messages/${MESSAGE}/body?v=v2&images=1`,
+      ),
+    )
+    focusManager.setFocused(undefined)
+  })
+
   it("never asks for a ticket whose number is not a number", async () => {
     await renderAt("/tickets/abc", { "/api/setup/status": status(), "/api/v1/me": agent })
     await vi.waitFor(() => expect(text()).toContain(he("ticket.notFound")))
@@ -1515,7 +1544,7 @@ describe("the intake log", () => {
     mode: "live",
     outcome: "new_ticket",
     classification: "customer",
-    reason: null,
+    reasons: [],
     matchLayer: null,
     subject: "Hello",
     from: { address: "dana@example.com", name: null },
@@ -1539,9 +1568,10 @@ describe("the intake log", () => {
             outcome: "joined",
             ticket: null,
             matchedTicket: 7,
+            reasons: ["sender_not_participant"],
             flags: ["sender_not_participant"],
           }),
-          entry({}),
+          entry({ outcome: "automated", ticket: null, reasons: ["auto_submitted", "list", "planted_code"] }),
         ],
         next: null,
       }),
@@ -1556,7 +1586,15 @@ describe("the intake log", () => {
     expect(heard.textContent).toContain(he("flag.sender_not_participant"))
     expect(heard.querySelector('a[href="/tickets/7"]')).not.toBeNull()
     const live = document.querySelector('[data-message="m1"]') as HTMLElement
-    expect(live.textContent).toContain(he("intake.outcome.new_ticket"))
+    expect(live.textContent).toContain(he("intake.outcome.automated"))
+    // Every reason in words, never its code; a code the UI does not know yet shows as it is, left to right.
+    expect(heard.querySelector('[data-reason="sender_not_participant"]')?.textContent).toBe(
+      he("intake.reason.sender_not_participant"),
+    )
+    expect(live.querySelector('[data-reason="auto_submitted"]')?.textContent).toBe(he("intake.reason.auto_submitted"))
+    expect(live.querySelector('[data-reason="list"]')?.textContent).toContain(he("intake.reason.list"))
+    expect(live.textContent).not.toContain("auto_submitted")
+    expect(live.querySelector('[data-reason="planted_code"] bdi[dir="ltr"]')?.textContent).toBe("planted_code")
     expect(live.querySelector('.ui-item-meta bdi[dir="ltr"].ui-mono')?.textContent).toBe("dana@example.com")
     await act(async () => button(he("intake.mode.listening"))?.click())
     await vi.waitFor(() => expect(where()).toBe("/intake?mode=listening"))

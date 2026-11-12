@@ -255,7 +255,7 @@ function MailFrame({ message }: { message: MessageView }) {
       <iframe
         className="ui-mail-frame"
         title={t("ticket.frameTitle", { sender })}
-        src={bodyUrl(message.id, images)}
+        src={bodyUrl(message.id, message.bodyVersion, images)}
         sandbox=""
         referrerPolicy="no-referrer"
         loading="lazy"
