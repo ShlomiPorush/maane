@@ -316,6 +316,7 @@ Decisions where the plan was silent (2.4, for the owner's review):
 Open for the owner after 2.4:
 
 - A PDF whose images are JPEG 2000 shows without those images (WebAssembly is off); turning it on needs `'wasm-unsafe-eval'` in the UI's policy and the decoders served from the app's origin.
+- In a framed HTML body, a block with no letter of its own (an image alone, such as a logo) lines up on the left also in right-to-left mail: `unicode-bidi: plaintext` gives a paragraph without a strong character the left-to-right direction. Setting a direction per block on the server would need a parser beyond sanitize-html's documented hooks, which see attributes but not the text.
 - Fonts a PDF embeds are loaded by pdf.js through the Font Loading API from memory; the end-to-end PDF uses a standard font, so a PDF with embedded fonts was not checked against the policy in the browser.
 
 ## Required workflow contracts
