@@ -241,7 +241,6 @@ Decisions (owner, 2026-11-12):
 Open for the owner after 2.1:
 
 - An agent promoted to admin keeps their membership rows. They have no effect while the user is an admin, who sees every organization by role, and apply again if the user becomes an agent again. The organization page shows such a member with an admin tag. Removing the rows on a role change would need a new Better Auth hook, so it was left out.
-- `docs/requirements.md` section 8 still says membership uses the `organization` plugin if it fits. The decision above replaces that; 2.1 did not change the requirements text.
 
 ## Required workflow contracts
 
