@@ -192,21 +192,36 @@ check_production_compose() {
 }
 
 # The container stack: the image built from this checkout, started from the tracked development template with a data
-# directory and secrets new for this run, then health, readiness, runtime users, and hardening are checked.
-STACK_PROJECT="maane-verify-stack-$$"
+# directory and secrets new for this run, then health, readiness, runtime users, and hardening are checked. The project
+# and the image tag belong to this run alone, so a verify running in another checkout cannot replace the image under it.
+RUN_ID="$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+STACK_PROJECT="maane-verify-stack-$RUN_ID"
+STACK_TAG="verify-$RUN_ID"
 STACK_DIR=""
 stack() {
-  env -u COMPOSE_ENV_FILES MAANE_DATA_DIR="$STACK_DIR" MAANE_IMAGE_TAG=verify MAANE_PORT=0 \
+  env -u COMPOSE_ENV_FILES MAANE_DATA_DIR="$STACK_DIR" MAANE_IMAGE_TAG="$STACK_TAG" MAANE_PORT=0 \
     MAANE_PUBLIC_URL=http://127.0.0.1:8095 \
     docker compose --env-file /dev/null -p "$STACK_PROJECT" --project-directory "$REPO_ROOT" \
     -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
 }
 
+# Stops the stack, then removes its data directory and image, but only once Docker confirms that no container of the
+# project is left: data a running container still uses is kept and reported instead.
 cleanup_stack() {
-  [ -n "$STACK_DIR" ] || return 0
-  stack down --remove-orphans >/dev/null 2>&1 || true
-  remove_data_dir "$STACK_DIR"
-  STACK_DIR=""
+  local left
+  [ -z "$STACK_DIR" ] || stack down --remove-orphans >/dev/null 2>&1 || true
+  if ! left="$(docker ps -aq --filter "label=com.docker.compose.project=$STACK_PROJECT")" || [ -n "$left" ]; then
+    echo "error: $STACK_PROJECT did not stop, so its data (${STACK_DIR:-none}) and maane:$STACK_TAG were kept." >&2
+    echo "  Stop it with: docker compose -p $STACK_PROJECT down, then remove them." >&2
+    return 1
+  fi
+  if [ -n "$STACK_DIR" ]; then
+    remove_data_dir "$STACK_DIR"
+    STACK_DIR=""
+  fi
+  if docker image inspect "maane:$STACK_TAG" >/dev/null 2>&1; then
+    docker image rm "maane:$STACK_TAG" >/dev/null || echo "warning: could not remove maane:$STACK_TAG" >&2
+  fi
 }
 
 fail_stack() {
@@ -230,9 +245,10 @@ run_e2e() {
 
 run_stack() {
   check_production_compose
-  build_image verify "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
-  STACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-stack.XXXXXX")"
+  # Set before the build, so an image built by a run that stops early is removed too.
   trap cleanup_stack EXIT
+  build_image "$STACK_TAG" "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
+  STACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-stack.XXXXXX")"
   ensure_stack_env "$STACK_DIR"
 
   info "Container stack: health, readiness, runtime users, and hardening ($STACK_PROJECT)"
@@ -249,10 +265,8 @@ run_stack() {
   run_e2e || fail_stack "end-to-end tests failed"
 
   info "Stopping $STACK_PROJECT"
-  stack down --remove-orphans || die "the verification stack did not stop"
-  [ -z "$(stack ps -q)" ] || die "the verification stack still runs after stopping it"
-  cleanup_stack
   trap - EXIT
+  cleanup_stack || die "the verification stack did not stop"
 }
 
 main() {
