@@ -35,11 +35,11 @@ const MEDIA_TYPE = /^[a-z0-9!#$&^_.+-]{1,63}\/[a-z0-9!#$&^_.+-]{1,63}$/
 const TOKEN = /^[a-z0-9.+-]{1,64}$/
 
 /**
- * mailparser's parsed content type, bounded: a media type that is not a plain token pair reads as
- * application/octet-stream, and the report type keeps its first word (mailparser leaves an RFC 822 comment after it).
+ * mailparser's parsed content type (its parser already drops an RFC 822 comment), bounded: a media type that is not a
+ * plain token pair reads as application/octet-stream, and a report type that is not one token is none.
  */
 export function storedContentType(type: ParsedMessage["contentType"]): StoredContentType {
-  const report = (type.params["report-type"] ?? "").trim().split(/[\s(;"]/)[0] ?? ""
+  const report = (type.params["report-type"] ?? "").trim()
   return {
     value: MEDIA_TYPE.test(type.value) ? type.value : "application/octet-stream",
     reportType: TOKEN.test(report) ? report : null,
