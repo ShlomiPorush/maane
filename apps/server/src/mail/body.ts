@@ -3,8 +3,11 @@
 // escaped, line by line, each line with the direction of its first strong character (requirements 4.2: the server sets
 // the direction per paragraph, never dir="auto"; a line is a paragraph in the Unicode bidirectional algorithm). The
 // document's own direction follows the message's first strong character, so HTML written without `dir` (common in
-// Hebrew mail) still reads right to left. The route's policy allows only inline styles and the images built here, and
-// no font from anywhere, so the style names fonts the system has.
+// Hebrew mail) still reads right to left, and in HTML each block the sender gave no direction (a paragraph, a list
+// item, a cell), and that sits in no block the sender gave one, takes the direction of its own first strong character
+// (CSS unicode-bidi: plaintext), so an English paragraph reads left to right inside a Hebrew message. The route's
+// policy allows only inline styles and the images built here, and no font from anywhere, so the style names fonts the
+// system has.
 
 import { textDirection } from "@maane/shared"
 import sanitizeHtml from "sanitize-html"
@@ -21,14 +24,19 @@ const STYLE = [
   ".text>div{white-space:pre-wrap;min-height:1.55em}",
 ].join("")
 
+/** Blocks without a direction of their own, outside every block the sender gave one: each one by its own text. */
+const HTML_STYLE =
+  ":where(p,div,li,dd,dt,td,th,h1,h2,h3,h4,h5,h6,blockquote,pre,center):not([dir]):not(body [dir] *)" +
+  "{unicode-bidi:plaintext;text-align:start}"
+
 const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (char) => ESCAPES[char] ?? char)
 
-function document(dir: "rtl" | "ltr", inner: string): string {
+function document(dir: "rtl" | "ltr", inner: string, style = STYLE): string {
   return (
     `<!doctype html><html dir="${dir}"><head><meta charset="utf-8">` +
     `<meta name="color-scheme" content="light"><meta name="referrer" content="no-referrer">` +
-    `<style>${STYLE}</style></head><body dir="${dir}">${inner}</body></html>`
+    `<style>${style}</style></head><body dir="${dir}">${inner}</body></html>`
   )
 }
 
@@ -38,7 +46,7 @@ const textOf = (html: string) => sanitizeHtml(html, { allowedTags: [], allowedAt
 /** The rendered HTML as a document, right to left when the message's first strong character is. */
 export function htmlDocument(html: string, text: string | null): string {
   const dir = textDirection(text ?? "") ?? textDirection(textOf(html)) ?? "ltr"
-  return document(dir, html)
+  return document(dir, html, STYLE + HTML_STYLE)
 }
 
 /** Plain text as a document: escaped, every line kept, each line with its own direction. */

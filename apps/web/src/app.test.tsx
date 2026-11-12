@@ -1460,7 +1460,8 @@ describe("tickets", () => {
     expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?images=1`)
     expect(text()).toContain(he("ticket.imagesShown"))
 
-    // The blocked text: its words and its signature, never its content.
+    // The message's own review flag, and the blocked text: its words and its signature, never its content.
+    expect(document.querySelector(".ui-message-head")?.textContent).toContain(he("flag.blocked_content"))
     const notice = document.querySelector('[data-field="text"]')
     expect(notice?.textContent).toContain(he("scan.status.infected"))
     expect(notice?.querySelector('bdi[dir="ltr"]')?.textContent).toBe("Eicar-Signature")

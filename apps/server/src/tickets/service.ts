@@ -135,7 +135,7 @@ function bodyLines(text: string | null, html: string | null): number {
   for (const line of source.split(/\r?\n/)) lines += Math.max(1, Math.ceil(line.length / 90))
   // Only an estimate of the frame height: the HTML itself is never rewritten by a pattern.
   const images = html ? (html.match(/<img\b/gi)?.length ?? 0) : 0
-  return Math.min(400, lines + images * 6)
+  return Math.min(400, lines + images * 3)
 }
 
 export interface ListFilters {

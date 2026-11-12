@@ -19,6 +19,7 @@ import { Copyable } from "../ui/Copyable.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { Banner, ErrorState, Loading, StaleNote } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
+import { Tag } from "../ui/tags.tsx"
 import { FilePreview } from "./tickets/FilePreview.tsx"
 import { AddressLine, ScanTag, Sender, TicketNumber, TicketTags } from "./tickets/parts.tsx"
 
@@ -168,6 +169,11 @@ function MessageCard({ message, onPreview }: { message: MessageView; onPreview: 
       <header className="ui-message-head">
         <span className="ui-message-from">
           {message.from ? <AddressLine value={message.from} /> : <Sender sender={null} />}
+          {message.reviewFlags.map((flag) => (
+            <Tag key={flag} tone="warn">
+              {t(`flag.${flag}`)}
+            </Tag>
+          ))}
         </span>
         <Time value={message.sentAt ?? message.receivedAt} mode="full" />
       </header>
