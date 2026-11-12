@@ -1980,7 +1980,7 @@ html.ui-layer-on .ui-page {
   text-align: right;
 }
 [dir="ltr"] [dir="auto"] {
-  text-align: start;
+  text-align: left;
 }
 /* A title that is a button keeps to its column, so a long title ends in an ellipsis instead of overflowing */
 button.ui-item-title {
