@@ -6,3 +6,8 @@ packages:
 # Packages allowed to run install scripts. esbuild verifies its platform binary.
 allowBuilds:
   esbuild: true
+
+# drizzle-kit 0.31 pulls esbuild 0.18 through the deprecated @esbuild-kit loader (GHSA-67mh-4wv8-2f99, fixed in
+# esbuild 0.25.0). Pin it to the esbuild that drizzle-kit already uses itself.
+overrides:
+  "@esbuild-kit/core-utils>esbuild": 0.25.12
