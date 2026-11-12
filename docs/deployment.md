@@ -81,7 +81,7 @@ Three files sit beside `docker-compose.yml`:
 | `postgres.env` | The `postgres` service only | The database user, name, and password |
 | `app.env` | `server` and `worker` | `DATABASE_URL` with the same password, `MAANE_AUTH_SECRETS`, `MAANE_SETTINGS_KEYS`, `MAANE_TRUSTED_PROXIES` |
 
-The secrets reach the containers only through these files, never through Compose's variable substitution, so `docker compose config` does not show them. Generate the files once, on the server, and keep `postgres.env` and `app.env` with your backup: a restore without them cannot open the data (see [Back up](#5-back-up)).
+The secrets reach the containers only through these files, never through Compose's variable substitution, so `docker compose config --no-env-resolution` does not show them. Plain `docker compose config` reads the files and prints every secret in them. Generate the files once, on the server, and keep `postgres.env` and `app.env` with your backup: a restore without them cannot open the data (see [Back up](#5-back-up)).
 
 The block fills in:
 
@@ -171,7 +171,7 @@ Set `version` and `domain` before you run it:
 )
 ```
 
-Check the result without printing a value: `cd "$HOME/maane" && docker compose config --quiet && echo "Compose reads its files"`. Never `cat` `postgres.env` or `app.env` where others can see the screen.
+Check the result without printing a value: `cd "$HOME/maane" && docker compose config --quiet && echo "Compose reads its files"`. Never run `docker compose config` without `--quiet` or `--no-env-resolution`, and never `cat` `postgres.env` or `app.env`, where others can see the screen: both print the secrets.
 
 Everything else is set in Maane itself, in Settings. A variable in the lower part of `app.env` may override a setting instead; Settings then shows that field locked. Never set a `BETTER_AUTH_*` or `AUTH_SECRET` variable: the server refuses to start with one.
 
