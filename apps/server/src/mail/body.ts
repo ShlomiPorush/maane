@@ -24,10 +24,13 @@ const STYLE = [
   ".text>div{white-space:pre-wrap;min-height:1.55em}",
 ].join("")
 
-/** Blocks without a direction of their own, outside every block the sender gave one: each one by its own text. */
+/**
+ * Blocks without a direction of their own (by dir or by style), outside every block the sender gave one: each one by its
+ * own text. Alignment stays the sender's: start, the default, follows each paragraph's direction.
+ */
 const HTML_STYLE =
-  ":where(p,div,li,dd,dt,td,th,h1,h2,h3,h4,h5,h6,blockquote,pre,center):not([dir]):not(body [dir] *)" +
-  "{unicode-bidi:plaintext;text-align:start}"
+  ":where(p,div,li,dd,dt,td,th,h1,h2,h3,h4,h5,h6,blockquote,pre,center)" +
+  ":not([dir],[style*=direction]):not(body [dir] *,body [style*=direction] *){unicode-bidi:plaintext}"
 
 const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (char) => ESCAPES[char] ?? char)

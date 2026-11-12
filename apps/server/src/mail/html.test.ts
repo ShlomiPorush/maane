@@ -70,7 +70,10 @@ describe("body documents", () => {
     expect(htmlDocument("<p>hello</p>", `${SHALOM}`)).toContain('<body dir="rtl">')
     expect(htmlDocument("<p>hello</p>", null)).toContain('<body dir="ltr">')
     // Each block without the sender's direction takes its own: an English paragraph inside a Hebrew message.
-    expect(document).toContain(":not([dir]):not(body [dir] *){unicode-bidi:plaintext;text-align:start}")
+    expect(document).toContain(
+      ":not([dir],[style*=direction]):not(body [dir] *,body [style*=direction] *){unicode-bidi:plaintext}",
+    )
+    expect(document).not.toContain("text-align")
     expect(textDocument("hello")).not.toContain("unicode-bidi:plaintext")
   })
 

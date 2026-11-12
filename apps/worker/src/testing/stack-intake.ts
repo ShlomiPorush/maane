@@ -126,6 +126,7 @@ try {
           `<p>${SHALOM_OLAM},</p><p>${INVOICE} 2026-117 (PDF).</p>` +
           '<p><img src="cid:logo@example.com" alt="logo"></p>' +
           '<p><img src="https://images.example.com/banner.png" alt="banner" width="320" height="80"></p>' +
+          '<p align="center">Example Alpha</p>' +
           "<p>Order 2026-117 is attached in English too.</p>",
       },
       attachments: [
