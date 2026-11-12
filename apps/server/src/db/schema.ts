@@ -659,3 +659,41 @@ export const intakeConversationPending = pgTable(
     index("intake_conversation_pending_message_id_idx").on(t.messageIdHeader),
   ],
 )
+
+/**
+ * Listening mode's pending references owned by an existing ticket (review G4): a listening message that would join a
+ * ticket and refers to a missing original keeps the reference here, never in the ticket's own pending references, so
+ * a later listening message naming it, or the late original, would join that ticket as live mode would.
+ */
+export const intakeTicketPending = pgTable(
+  "intake_ticket_pending",
+  {
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => ticket.id, { onDelete: "restrict" }),
+    messageIdHeader: text("message_id_header").notNull(),
+    resolvedBy: uuid("resolved_by").references(() => message.id, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.ticketId, t.messageIdHeader] }),
+    index("intake_ticket_pending_message_id_idx").on(t.messageIdHeader),
+  ],
+)
+
+/** A listening conversation opened beside existing tickets it matched (review G17): every candidate ticket is kept. */
+export const intakeConversationTicketLink = pgTable(
+  "intake_conversation_ticket_link",
+  {
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => intakeConversation.id, { onDelete: "restrict" }),
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => ticket.id, { onDelete: "restrict" }),
+    /** `sender_not_participant` or `ambiguous_original`. */
+    reason: text("reason").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.conversationId, t.ticketId] })],
+)

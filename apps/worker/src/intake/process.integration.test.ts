@@ -2,7 +2,14 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SYSTEM } from "@maane/server/audit"
-import { intakeRecord, message, ticket, ticketPendingReference } from "@maane/server/db/schema"
+import {
+  intakeConversation,
+  intakeConversationTicketLink,
+  intakeRecord,
+  message,
+  ticket,
+  ticketPendingReference,
+} from "@maane/server/db/schema"
 import { INTAKE_PROCESS } from "@maane/server/jobs/queue"
 import { REFERENCE_CODE } from "@maane/shared"
 import { eq, sql } from "drizzle-orm"
@@ -14,7 +21,7 @@ import { registerJobs } from "../jobs.ts"
 import { type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
 import { type IntakeHarness, startIntake } from "../testing/intake.ts"
 import { mime } from "../testing/mime.ts"
-import { DEPENDENCY_WAIT_MS } from "./process.ts"
+import { DEPENDENCY_WAIT_MS, IntakeProcessor } from "./process.ts"
 
 let clamd: StandInClamd
 let intake: IntakeHarness | null = null
@@ -243,9 +250,8 @@ describe("missing originals", () => {
     const original = h.graph.add(mime({ messageId: "same-round@example.com" }), { receivedAt: at(2) })
     await h.round()
     expect((await h.ticketOf(original))?.id).toBe((await h.ticketOf(reply))?.id)
-    // The reply waited for the stored original (review G15): the original opened the ticket, the reply joined it.
-    expect(await h.recordOf(original)).toMatchObject({ outcome: "new_ticket" })
-    expect(await h.recordOf(reply)).toMatchObject({ outcome: "joined", matchLayer: "header" })
+    // The reply was stored first, so it does not wait for the original (review G16): the original joins it late.
+    expect(await h.recordOf(original)).toMatchObject({ outcome: "joined", matchLayer: "original" })
     expect(await h.tickets()).toHaveLength(1)
   })
 
@@ -549,21 +555,130 @@ describe("review round 2", () => {
     }
   })
 
-  it("stops a reply waiting once its original has waited longer than the limit (G15)", async () => {
-    const h = await live()
-    const original = h.graph.add(mime({ messageId: "slow@example.com" }), { receivedAt: at(1) })
-    const reply = h.graph.add(mime({ inReplyTo: "slow@example.com" }), { receivedAt: at(2) })
+  it("stops a reply waiting an hour after the reply was stored, whatever an attacker keeps sending (G15, G16)", async () => {
+    const state = { down: true }
+    const scanner: Scanner = {
+      ...clamdScanner,
+      scan: async (address, bytes, deadline) =>
+        state.down && Buffer.from(bytes).includes("ATTACK")
+          ? { kind: "error" }
+          : clamdScanner.scan(address, bytes, deadline),
+    }
+    intake = await startIntake(clamd, {}, { scanner })
+    const h = intake
+    await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
+    await h.mode("live")
+    const original = h.graph.add(mime({ messageId: "thread@example.com" }), { receivedAt: at(1) })
+    await h.round()
+    const opened = await h.ticketOf(original)
+    // Mallory sends records with the thread's Message-ID that wait for the scanner, before and after Dana's reply.
+    const attack = (n: number) =>
+      h.graph.add(
+        mime({
+          messageId: "thread@example.com",
+          from: "Mallory <mallory@example.com>",
+          text: { content: `ATTACK ${n}` },
+        }),
+        { receivedAt: at(2 + n) },
+      )
+    attack(1)
+    attack(2)
     await h.sync.run()
-    // The original cannot be processed (its text waits), and was stored long ago.
+    const reply = h.graph.add(mime({ inReplyTo: "thread@example.com" }), { receivedAt: at(10) })
+    await h.sync.run()
+    // Right after storing, the reply waits for the attack records stored before it.
+    expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
+    expect((await h.messageOf(reply)).state).toBe("stored")
+    // Mallory goes on: one more pair, stored just before the clock below, every few minutes.
+    attack(3)
+    attack(4)
+    await h.sync.run()
+    const storedAt = (await h.messageOf(reply)).createdAt.getTime()
+    const later = new Date(storedAt + DEPENDENCY_WAIT_MS + 60_000)
     await h.database.db
       .update(message)
-      .set({
-        fieldScans: { text: { status: "waiting", signature: null, blockedBy: null } },
-        createdAt: new Date(Date.now() - DEPENDENCY_WAIT_MS - 60_000),
-      })
-      .where(eq(message.graphId, original))
-    expect(await h.processor.run()).toEqual({ processed: 1, failed: 0 })
-    expect((await h.messageOf(reply)).state).toBe("processed")
+      .set({ createdAt: new Date(later.getTime() - 2 * 60_000) })
+      .where(eq(message.fromAddress, "mallory@example.com"))
+    // An hour after the reply was stored, it is processed whatever arrived meanwhile.
+    const clock = new IntakeProcessor({ db: h.database.db, now: () => later })
+    expect((await clock.run()).processed).toBe(1)
+    expect((await h.messageOf(reply)).ticketId).toBe(opened?.id)
+  })
+
+  it("keeps listening pending references of a ticket in the shadow, and matches them as live mode would (G4)", async () => {
+    const h = await live()
+    const original = h.graph.add(mime({ messageId: "g4-open@example.com" }), { receivedAt: at(1) })
+    await h.round()
+    const opened = await h.ticketOf(original)
+    await h.mode("listening")
+    // Dana's mail refers to a missing original M and carries the ticket's code: it would join the ticket.
+    const first = h.graph.add(
+      mime({ inReplyTo: "missing-m@example.com", text: { content: `Ref: ${opened?.referenceCode}` } }),
+      { receivedAt: at(2) },
+    )
+    await h.round()
+    expect(await h.recordOf(first)).toMatchObject({
+      outcome: "joined",
+      matchedTicketId: opened?.id,
+      matchLayer: "reference",
+    })
+    // A second mail from her names only M: it would join the ticket through the pending reference.
+    const second = h.graph.add(mime({ inReplyTo: "missing-m@example.com" }), { receivedAt: at(3) })
+    await h.round()
+    expect(await h.recordOf(second)).toMatchObject({
+      outcome: "joined",
+      matchedTicketId: opened?.id,
+      matchLayer: "header",
+    })
+    // The late original M would join the ticket too.
+    const late = h.graph.add(mime({ messageId: "missing-m@example.com" }), { receivedAt: at(4) })
+    await h.round()
+    expect(await h.recordOf(late)).toMatchObject({
+      outcome: "joined",
+      matchedTicketId: opened?.id,
+      matchLayer: "original",
+    })
+    // The ticket's own pending references were never touched, and no conversation was opened.
+    expect(await h.database.db.select().from(ticketPendingReference)).toEqual([])
+    expect(await h.database.db.select().from(intakeConversation)).toEqual([])
+  })
+
+  it("links a listening conversation to every ticket that waited for an ambiguous original (G17)", async () => {
+    const h = await live()
+    const fromDana = h.graph.add(mime({ inReplyTo: "g17@example.com" }), { receivedAt: at(1) })
+    await h.round()
+    const fromRon = h.graph.add(mime({ from: "Ron <ron@example.com>", inReplyTo: "g17@example.com" }), {
+      receivedAt: at(2),
+    })
+    await h.round()
+    const one = await h.ticketOf(fromDana)
+    const two = await h.ticketOf(fromRon)
+    await h.mode("listening")
+    const original = h.graph.add(mime({ messageId: "g17@example.com", from: "Gil <gil@example.com>" }), {
+      receivedAt: at(3),
+    })
+    await h.round()
+    const conversation = (await h.messageOf(original)).conversationId ?? ""
+    expect(await h.recordOf(original)).toMatchObject({
+      outcome: "new_linked_ticket",
+      reason: "ambiguous_original",
+      conversationId: conversation,
+    })
+    const [shadow] = await h.database.db
+      .select()
+      .from(intakeConversation)
+      .where(eq(intakeConversation.id, conversation))
+    expect(shadow?.reviewFlags).toEqual(["ambiguous_original"])
+    const links = await h.database.db
+      .select()
+      .from(intakeConversationTicketLink)
+      .where(eq(intakeConversationTicketLink.conversationId, conversation))
+    expect(links.map((link) => [link.ticketId, link.reason]).sort()).toEqual(
+      [
+        [one?.id, "ambiguous_original"],
+        [two?.id, "ambiguous_original"],
+      ].sort(),
+    )
   })
 })
 

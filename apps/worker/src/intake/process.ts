@@ -19,7 +19,9 @@ import {
   intakeConversationLink,
   intakeConversationParticipant,
   intakeConversationPending,
+  intakeConversationTicketLink,
   intakeRecord,
+  intakeTicketPending,
   message,
   setting,
   supportAddress,
@@ -60,8 +62,8 @@ export const MAX_PER_RUN = 500
 /** Failed runs on one message before it is recorded for review instead of being tried for ever (review G2). */
 export const MAX_PROCESS_ATTEMPTS = 3
 /**
- * How long a reply waits for a stored message it refers to that is not processed yet (review G15). Past this, it is
- * processed anyway, so an original that waits for ever cannot hold its replies for ever.
+ * How long a reply may wait, counted from its own storing, for a stored message it refers to that is not processed yet
+ * (review G15, G16). Past this it is processed whatever arrived meanwhile, so no sender can delay it longer.
  */
 export const DEPENDENCY_WAIT_MS = 60 * 60_000
 
@@ -171,10 +173,12 @@ export class IntakeProcessor {
     let processed = 0
     while (processed + failed.length < limit) {
       const since = new Date(this.#now().getTime() - DEPENDENCY_WAIT_MS)
-      // A reply waits while a message it refers to is stored, not processed yet, and stored less than the limit ago.
-      const waitsForOriginal = sql`exists (select 1 from message o where o.state = 'stored' and o.id <> ${message.id}
-        and o.message_id_header is not null and o.created_at > ${since}
-        and o.message_id_header = any(${message.inReplyTo} || ${message.references}))`
+      // A reply waits while a message it refers to was stored strictly before it and is not processed yet, and only
+      // while the reply itself was stored less than the limit ago. Strictly earlier: two messages never wait for each
+      // other, and nothing stored later can hold it.
+      const waitsForOriginal = sql`(${message.createdAt} > ${since} and exists (select 1 from message o
+        where o.state = 'stored' and o.created_at < ${message.createdAt} and o.message_id_header is not null
+        and o.message_id_header = any(${message.inReplyTo} || ${message.references})))`
       const [next] = await this.#db
         .select({ id: message.id, attempts: message.processAttempts })
         .from(message)
@@ -405,9 +409,15 @@ export class IntakeProcessor {
     for (const entry of cc)
       if (entry.address !== msg.fromAddress && !matchSupportAddress(entry.address, rules))
         await opens.addParticipant(tx, opened, entry.address, entry.name)
-    // Links join threads of one kind; a listening conversation names the ticket it matched in its record.
-    for (const linked of links.filter((thread) => thread.kind === opens.kind))
-      await opens.link(tx, opened, linked.id, linkReason ?? "sender_not_participant")
+    // Links join threads of one kind; a listening conversation keeps every ticket it was opened beside (review G17).
+    for (const linked of links) {
+      if (linked.kind === opens.kind) await opens.link(tx, opened, linked.id, linkReason ?? "sender_not_participant")
+      else if (opens.kind === "conversation")
+        await tx
+          .insert(intakeConversationTicketLink)
+          .values({ conversationId: opened, ticketId: linked.id, reason: linkReason ?? "sender_not_participant" })
+          .onConflictDoNothing()
+    }
     await this.#keepPending(tx, opens, msg, opened)
     const firstTicket = links.find((thread) => thread.kind === "ticket")
     return finish(
@@ -500,11 +510,19 @@ export class IntakeProcessor {
       },
       async waitingFor(tx, id) {
         const rows = await tx
-          .select({ thread: ticketPendingReference.ticketId })
+          .select({ thread: ticketPendingReference.ticketId, at: ticketPendingReference.createdAt })
           .from(ticketPendingReference)
           .where(and(eq(ticketPendingReference.messageIdHeader, id), isNull(ticketPendingReference.resolvedBy)))
-          .orderBy(asc(ticketPendingReference.createdAt))
-        return rows.map((row) => row.thread)
+        // Listening also counts the references its own messages left for the ticket (shadow, review G4).
+        if (readOnly)
+          rows.push(
+            ...(await tx
+              .select({ thread: intakeTicketPending.ticketId, at: intakeTicketPending.createdAt })
+              .from(intakeTicketPending)
+              .where(and(eq(intakeTicketPending.messageIdHeader, id), isNull(intakeTicketPending.resolvedBy)))),
+          )
+        rows.sort((a, b) => a.at.getTime() - b.at.getTime())
+        return [...new Set(rows.map((row) => row.thread))]
       },
       async byReferenceCodes(tx, codes) {
         const rows = await tx
@@ -562,14 +580,33 @@ export class IntakeProcessor {
           await tx.update(ticket).set({ status: "open", lastActivityAt: now() }).where(eq(ticket.id, thread))
       },
       async keepPending(tx, thread, ids) {
-        if (!readOnly && ids.length)
+        if (!ids.length) return
+        // Listening never touches the ticket's own pending references: its are kept in the shadow table.
+        if (readOnly)
+          await tx
+            .insert(intakeTicketPending)
+            .values(ids.map((id) => ({ ticketId: thread, messageIdHeader: id })))
+            .onConflictDoNothing()
+        else
           await tx
             .insert(ticketPendingReference)
             .values(ids.map((id) => ({ ticketId: thread, messageIdHeader: id })))
             .onConflictDoNothing()
       },
       async resolvePending(tx, thread, id, by) {
-        if (readOnly) return
+        if (readOnly) {
+          await tx
+            .update(intakeTicketPending)
+            .set({ resolvedBy: by })
+            .where(
+              and(
+                eq(intakeTicketPending.ticketId, thread),
+                eq(intakeTicketPending.messageIdHeader, id),
+                isNull(intakeTicketPending.resolvedBy),
+              ),
+            )
+          return
+        }
         await tx
           .update(ticketPendingReference)
           .set({ resolvedBy: by })
