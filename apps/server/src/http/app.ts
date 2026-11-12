@@ -83,7 +83,14 @@ export function createApp(ctx: AppContext) {
     const [row] = await ctx.db.select({ id: authUser.id }).from(authUser).limit(1)
     const hasUser = row !== undefined
     const open = !hasUser && ctx.setup.isOpen()
-    return c.json({ hasUser, open, closesInSeconds: open ? Math.ceil(ctx.setup.remainingMs() / 1000) : 0 })
+    // The language the UI starts in before anyone signs in, unless the browser chose one itself.
+    const defaultLocale = await ctx.settings.get("general.defaultLocale")
+    return c.json({
+      hasUser,
+      open,
+      closesInSeconds: open ? Math.ceil(ctx.setup.remainingMs() / 1000) : 0,
+      defaultLocale,
+    })
   })
 
   const api = new Hono<Env>()
