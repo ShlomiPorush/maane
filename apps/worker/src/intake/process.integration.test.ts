@@ -12,7 +12,7 @@ import {
 } from "@maane/server/db/schema"
 import { INTAKE_PROCESS } from "@maane/server/jobs/queue"
 import { REFERENCE_CODE } from "@maane/shared"
-import { eq, sql } from "drizzle-orm"
+import { eq, inArray, sql } from "drizzle-orm"
 import { PgBoss } from "pg-boss"
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { eicar } from "../files/samples.ts"
@@ -581,8 +581,7 @@ describe("review round 2", () => {
         }),
         { receivedAt: at(2 + n) },
       )
-    attack(1)
-    attack(2)
+    const before = [attack(1), attack(2)]
     await h.sync.run()
     const reply = h.graph.add(mime({ inReplyTo: "thread@example.com" }), { receivedAt: at(10) })
     await h.sync.run()
@@ -590,19 +589,26 @@ describe("review round 2", () => {
     expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
     expect((await h.messageOf(reply)).state).toBe("stored")
     // Mallory goes on: one more pair, stored just before the clock below, every few minutes.
-    attack(3)
-    attack(4)
+    const after = [attack(3), attack(4)]
     await h.sync.run()
     const storedAt = (await h.messageOf(reply)).createdAt.getTime()
     const later = new Date(storedAt + DEPENDENCY_WAIT_MS + 60_000)
     await h.database.db
       .update(message)
       .set({ createdAt: new Date(later.getTime() - 2 * 60_000) })
-      .where(eq(message.fromAddress, "mallory@example.com"))
+      .where(inArray(message.graphId, after))
+    // The first pair stays stored strictly before the reply and still waits for the scanner: only the reply's own
+    // one-hour limit can release it.
+    for (const id of before) {
+      const row = await h.messageOf(id)
+      expect(row.state).toBe("stored")
+      expect(row.createdAt.getTime()).toBeLessThan(storedAt)
+    }
     // An hour after the reply was stored, it is processed whatever arrived meanwhile.
     const clock = new IntakeProcessor({ db: h.database.db, now: () => later })
     expect((await clock.run()).processed).toBe(1)
     expect((await h.messageOf(reply)).ticketId).toBe(opened?.id)
+    for (const id of before) expect((await h.messageOf(id)).state).toBe("stored")
   })
 
   it("keeps listening pending references of a ticket in the shadow, and matches them as live mode would (G4)", async () => {
