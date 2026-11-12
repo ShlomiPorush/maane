@@ -667,6 +667,8 @@ describe("organization dialogs", () => {
     const everyone = [
       ...Array.from({ length: 50 }, (_, i) => agent(`p${i}`, `a${String(i).padStart(3, "0")}.sam`)),
       agent("u7", "sam"),
+      // Not a match: the empty search counts one more than the search for "sam", so the test can tell them apart.
+      agent("u8", "zed"),
     ]
     auth.listUsers.mockImplementation(async ({ query }: { query: Record<string, unknown> }) => {
       const search = typeof query.searchValue === "string" ? query.searchValue : ""
@@ -691,7 +693,14 @@ describe("organization dialogs", () => {
     await vi.waitFor(() =>
       expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({ query: { searchValue: "sam", offset: 0 } }),
     )
-    await vi.waitFor(() => expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(50))
+    // The answer for "sam" is on screen (51 found, not the 52 of the empty search) and the button can load more.
+    await vi.waitFor(() => {
+      expect(dialog()?.querySelector('[data-testid="agents-more"]')?.textContent).toBe(
+        he("organization.members.more", { shown: 50, total: 51 }),
+      )
+      expect(button(he("organization.members.showMore"), dialog() as HTMLElement)?.disabled).toBe(false)
+    })
+    expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(50)
     expect(dialog()?.querySelector('input[type="radio"][value="u7"]')).toBeNull()
 
     await act(async () => button(he("organization.members.showMore"), dialog() as HTMLElement)?.click())

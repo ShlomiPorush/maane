@@ -683,7 +683,9 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
             <button
               type="button"
               className="ui-btn ui-btn-sm"
-              disabled={found.isFetchingNextPage}
+              // While a new search is on its way the list still shows the previous one: its next page is not this
+              // search's next page.
+              disabled={found.isFetchingNextPage || found.isPlaceholderData}
               onClick={() => void found.fetchNextPage()}
             >
               {found.isFetchingNextPage
