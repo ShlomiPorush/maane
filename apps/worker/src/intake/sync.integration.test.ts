@@ -8,6 +8,7 @@ import { MEGABYTE } from "@maane/shared"
 import { eq, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { eicar } from "../files/samples.ts"
+import { clamdScanner, type Scanner } from "../files/scanner.ts"
 import { sha256Of } from "../files/service.ts"
 import { graphTest } from "../jobs.ts"
 import { refusedAddress, type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
@@ -15,6 +16,7 @@ import { type IntakeHarness, startIntake } from "../testing/intake.ts"
 import { encodedWord, fromCodePoints, INVOICE, mime, SHALOM, SHALOM_OLAM } from "../testing/mime.ts"
 import { GraphGateway } from "./graph.ts"
 import { reconcileIntakeSource } from "./jobs.ts"
+import { MAX_RETRIES_PER_RUN } from "./retry.ts"
 import { IntakeSync, isRefusedValue } from "./sync.ts"
 
 let clamd: StandInClamd
@@ -43,7 +45,17 @@ const count = async (h: IntakeHarness) => (await h.database.db.select().from(mes
 
 /** Every value of every row of the tables intake writes, as text. */
 async function everythingStored(h: IntakeHarness): Promise<string> {
-  const tables = ["message", "message_part", "intake_record", "ticket", "audit_log", "stored_file"]
+  const tables = [
+    "message",
+    "message_part",
+    "intake_record",
+    "ticket",
+    "ticket_participant",
+    "intake_conversation",
+    "intake_conversation_participant",
+    "audit_log",
+    "stored_file",
+  ]
   let all = ""
   for (const table of tables) {
     const result = await h.database.pool.query(`select coalesce(json_agg(t)::text, '') as rows from ${table} t`)
@@ -206,11 +218,28 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     expect((await h.ticketOf(hostile))?.id).toBeDefined()
   })
 
+  it("processes once a message whose In-Reply-To names 70,000 IDs, and goes on", async () => {
+    const h = await start()
+    await h.organization("Example Support", [{ value: "support@example.com", isDefault: true }])
+    await h.mode("live")
+    const ids = Array.from({ length: 70_000 }, (_, i) => `<${i.toString(36)}@x>`).join(" ")
+    const flood = h.graph.add(mime({ headers: [["In-Reply-To", ids]] }), {
+      receivedAt: new Date(Date.UTC(2026, 10, 1)),
+    })
+    const next = h.graph.add(mime({ subject: "next" }), { receivedAt: new Date(Date.UTC(2026, 10, 2)) })
+    expect(await h.sync.run()).toMatchObject({ stored: 2 })
+    expect((await h.messageOf(flood)).inReplyTo).toHaveLength(50)
+    expect(await h.processor.run()).toEqual({ processed: 2, failed: 0 })
+    expect((await h.messageOf(flood)).state).toBe("processed")
+    expect((await h.ticketOf(next))?.id).toBeDefined()
+  }, 60_000)
+
   it("tells a value the database refuses from a failure worth retrying", async () => {
     expect(isRefusedValue(Object.assign(new Error("index row size"), { code: "54000" }))).toBe(true)
     expect(isRefusedValue({ cause: { code: "22P05" } })).toBe(true)
     expect(isRefusedValue(Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" }))).toBe(false)
     expect(isRefusedValue(Object.assign(new Error("terminating"), { code: "57P01" }))).toBe(false)
+    expect(isRefusedValue(Object.assign(new Error("bind message"), { code: "08P01" }))).toBe(true)
   })
 
   it("stores U+0000 and an unpaired surrogate as U+FFFD, flags them, and goes on with the next message", async () => {
@@ -238,6 +267,71 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     await h.processor.run()
     expect((await h.messageOf(cesu)).state).toBe("processed")
   })
+})
+
+describe("waiting and the raw MIME (review G6, G7)", () => {
+  /** A scanner that gives no verdict for content holding `marker` while `down` is set, the stand-in clamd otherwise. */
+  const flaky = (marker: (bytes: Uint8Array) => boolean) => {
+    const state = { down: true }
+    const scanner: Scanner = {
+      ...clamdScanner,
+      scan: async (address, bytes, deadline) =>
+        state.down && marker(bytes) ? { kind: "error" } : clamdScanner.scan(address, bytes, deadline),
+    }
+    return { state, scanner }
+  }
+
+  it("keeps the raw MIME once a part that waited scans clean, when the raw message scanned clean first", async () => {
+    const { state, scanner } = flaky((bytes) => Buffer.from(bytes).includes("WAIT-ONCE"))
+    intake = await startIntake(clamd, {}, { scanner })
+    const h = intake
+    const id = h.graph.add(
+      mime({ attachments: [{ fileName: "a.txt", contentType: "text/plain", content: Buffer.from("WAIT-ONCE\n") }] }),
+    )
+    await h.sync.run()
+    expect(await h.messageOf(id)).toMatchObject({ rawStatus: "clean", rawSha256: null })
+    expect((await h.partsOf(id))[0]?.status).toBe("waiting")
+    state.down = false
+    await h.retry.run()
+    expect((await h.partsOf(id))[0]?.status).toBe("clean")
+    expect((await h.messageOf(id)).rawSha256).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it("keeps the raw MIME once it scans clean, when the parts were decided first", async () => {
+    const { state, scanner } = flaky((bytes) => Buffer.from(bytes).includes("\r\nMIME-Version: 1.0\r\n"))
+    intake = await startIntake(clamd, {}, { scanner })
+    const h = intake
+    const id = h.graph.add(
+      mime({ attachments: [{ fileName: "b.txt", contentType: "text/plain", content: Buffer.from("fine\n") }] }),
+    )
+    await h.sync.run()
+    expect(await h.messageOf(id)).toMatchObject({ rawStatus: "waiting", rawSha256: null })
+    expect((await h.partsOf(id))[0]?.status).toBe("clean")
+    state.down = false
+    await h.retry.run()
+    expect(await h.messageOf(id)).toMatchObject({
+      rawStatus: "clean",
+      rawSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+    })
+  })
+
+  it("gives every waiting message its turn: 50 that keep failing do not block the 51st", async () => {
+    const h = await start()
+    await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
+    const failing = Array.from({ length: MAX_RETRIES_PER_RUN }, (_, i) =>
+      h.graph.add(mime({ subject: `failing ${i}` }), { receivedAt: new Date(Date.UTC(2026, 10, 1, 0, i)) }),
+    )
+    const last = h.graph.add(mime({ subject: "the 51st" }), { receivedAt: new Date(Date.UTC(2026, 10, 2)) })
+    await h.sync.run()
+    for (const id of failing) h.graph.fail(id)
+    await h.settings.update({ "scanner.address": clamd.address }, SYSTEM)
+    expect(await h.retry.run()).toMatchObject({ messages: MAX_RETRIES_PER_RUN, stillWaiting: MAX_RETRIES_PER_RUN })
+    expect((await h.messageOf(last)).subject).toBeNull()
+    expect(await h.retry.run()).toMatchObject({ decided: 1 })
+    expect((await h.messageOf(last)).subject).toBe("the 51st")
+    // The second run took the 51st first, then the failing ones again, tried longest ago first.
+    expect((await h.messageOf(failing[0] ?? "")).retryAttempts).toBe(2)
+  }, 120_000)
 })
 
 describe("stage one: Hebrew, encodings, and parts", () => {
@@ -353,6 +447,65 @@ describe("stage one: Hebrew, encodings, and parts", () => {
     })
     expect((await h.partsOf(gone))[0]).toMatchObject({ status: "unavailable", unavailableReason: "graph_404" })
     expect(await h.retry.run()).toMatchObject({ messages: 0 })
+  })
+})
+
+describe("text fields scanned like files (review G1)", () => {
+  it("keeps a message whose text, header, or HTML carries EICAR, stores no copy of it, and writes one audit row each", async () => {
+    const h = await start()
+    const bad = eicar().toString("latin1")
+    const cases = {
+      text: h.graph.add(mime({ text: { content: `Hello,\n${bad}\nDana` } })),
+      subject: h.graph.add(mime({ subject: bad })),
+      header: h.graph.add(mime({ headers: [["X-Anything", bad]] })),
+      title: h.graph.add(mime({ html: { content: `<p title="${bad}">hello</p>` } })),
+      node: h.graph.add(mime({ text: { content: "plain" }, html: { content: `<p>${bad}</p>` } })),
+    }
+    const valid = h.graph.add(mime({ subject: "after the blocked fields", text: { content: "fine" } }))
+    expect(await h.sync.run()).toMatchObject({ status: "done", stored: 6 })
+    const expected = { text: "text", subject: "headers", header: "headers", title: "html", node: "html" } as const
+    for (const [name, id] of Object.entries(cases)) {
+      const stored = await h.messageOf(id)
+      const field = expected[name as keyof typeof expected]
+      expect(stored.content, name).toBe("parsed")
+      expect(stored.reviewFlags, name).toContain("blocked_content")
+      expect((stored.fieldScans as Record<string, { status: string; signature: string }>)[field], name).toEqual({
+        status: "infected",
+        signature: "Eicar-Test-Signature",
+        blockedBy: null,
+      })
+      expect(stored.rawSha256, name).toBeNull()
+    }
+    expect((await h.messageOf(cases.text)).textBody).toBeNull()
+    expect(await h.messageOf(cases.subject)).toMatchObject({ subject: null, headers: [] })
+    expect((await h.messageOf(cases.title)).htmlBody).toBeNull()
+    // Without a text part, the text comes from the sanitized HTML; an attribute is not text, so it is clean and kept.
+    expect((await h.messageOf(cases.title)).textBody).toBe("hello")
+    expect(await h.messageOf(cases.node)).toMatchObject({ htmlBody: null, textBody: "plain" })
+    expect(await h.messageOf(valid)).toMatchObject({ subject: "after the blocked fields", reviewFlags: [] })
+    const audits = await h.database.db.select().from(auditLog).where(eq(auditLog.action, "message.content_blocked"))
+    expect(audits).toHaveLength(5)
+    // Processing goes on, in listening and in live mode.
+    await h.organization("Example Support", [{ value: "support@example.com", isDefault: true }])
+    await h.processor.run()
+    const everything = await everythingStored(h)
+    expect(everything).not.toContain("EICAR-STANDARD-ANTIVIRUS-TEST-FILE")
+    for (const file of await filesUnder(h.dir)) expect(file.includes("EICAR-STANDARD-ANTIVIRUS-TEST-FILE")).toBe(false)
+  })
+
+  it("waits to store and process text fields while the scanner is down, then stores them", async () => {
+    const h = await start()
+    await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
+    const id = h.graph.add(mime({ subject: "later", text: { content: "body later" } }))
+    await h.sync.run()
+    expect(await h.messageOf(id)).toMatchObject({ subject: null, textBody: null, headers: [] })
+    expect(((await h.messageOf(id)).fieldScans as Record<string, { status: string }>).text?.status).toBe("waiting")
+    expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
+    await h.settings.update({ "scanner.address": clamd.address }, SYSTEM)
+    expect(await h.retry.run()).toMatchObject({ decided: 1 })
+    expect(await h.messageOf(id)).toMatchObject({ subject: "later", textBody: "body later" })
+    expect((await h.messageOf(id)).rawSha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(await h.processor.run()).toEqual({ processed: 1, failed: 0 })
   })
 })
 

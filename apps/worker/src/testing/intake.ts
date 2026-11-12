@@ -17,7 +17,7 @@ import { Settings } from "@maane/server/settings/service"
 import { createTestDatabase, testKey } from "@maane/server/testing/db"
 import { type IntakeMode, MEGABYTE, type SettingKey } from "@maane/shared"
 import { asc, eq } from "drizzle-orm"
-import { clamdScanner } from "../files/scanner.ts"
+import { clamdScanner, type Scanner } from "../files/scanner.ts"
 import { FileService } from "../files/service.ts"
 import { FileStore } from "../files/store.ts"
 import { GraphGateway } from "../intake/graph.ts"
@@ -60,7 +60,11 @@ export interface IntakeHarness {
   close(): Promise<void>
 }
 
-export async function startIntake(clamd: StandInClamd, overrides: Partial<Record<SettingKey, string>> = {}) {
+export async function startIntake(
+  clamd: StandInClamd,
+  overrides: Partial<Record<SettingKey, string>> = {},
+  options: { scanner?: Scanner } = {},
+) {
   const database = await createTestDatabase()
   const graph = await startStandInGraph()
   const dir = join(await mkdtemp(join(tmpdir(), "maane-intake-")), "files")
@@ -82,7 +86,7 @@ export async function startIntake(clamd: StandInClamd, overrides: Partial<Record
   ] as const)
     if (overrides[key] === undefined) changes[key] = value
   await settings.update(changes, SYSTEM)
-  const files = new FileService({ db: database.db, settings, scanner: clamdScanner, store })
+  const files = new FileService({ db: database.db, settings, scanner: options.scanner ?? clamdScanner, store })
   const gateway = new GraphGateway(graph.endpoints)
   const sync = new IntakeSync({ db: database.db, settings, files, graph: gateway })
   const processor = new IntakeProcessor({ db: database.db })

@@ -32,6 +32,8 @@ export type PartStatus = (typeof PART_STATUSES)[number]
  * - `reused_message_id`: another message has the same Message-ID with other content.
  * - `no_default_address`: no support address matched and no default exists, so it opened no ticket.
  * - `part_too_large`: a part was over files.maxBytes and was not scanned or kept.
+ * - `blocked_content`: a stored text field (the text, the HTML, or the header values) scanned infected or blocked
+ *   and was not stored.
  * - `store_failed`: the database refused a value of the message (stage one kept its Graph metadata only), or of its
  *   processing (stage two recorded it without a ticket).
  */
@@ -44,6 +46,7 @@ export const MESSAGE_FLAGS = [
   "no_default_address",
   "part_too_large",
   "store_failed",
+  "blocked_content",
 ] as const
 export type MessageFlag = (typeof MESSAGE_FLAGS)[number]
 
@@ -139,4 +142,19 @@ export interface GraphTestResult {
 export interface GraphTestView {
   state: "queued" | "running" | "done" | "failed"
   result: GraphTestResult | null
+}
+
+/**
+ * The text fields stage one stores and scans like files before it stores them (plan 2.3, review G1): the text body,
+ * the sanitized HTML, and the header values Maane keeps (subject, names, every header line, part file names), as one
+ * block. A field the scanner flags is not stored; one that cannot be scanned follows the unavailable policy.
+ */
+export const TEXT_FIELDS = ["text", "html", "headers"] as const
+export type TextField = (typeof TEXT_FIELDS)[number]
+
+/** The scan of one text field, kept on the message. */
+export interface FieldScan {
+  status: PartStatus
+  signature: string | null
+  blockedBy: string | null
 }

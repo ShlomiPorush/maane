@@ -133,6 +133,7 @@
       "organizationNameInvalid": "Give the organization a name of 1 to {nameMax} characters.",
       "organizationNameTaken": "Another organization has this name. Choose another one.",
       "organizationInUse": "This organization still has support addresses or agents. Remove them first.",
+      "organizationHasMail": "This organization has mail history (tickets or intake records), so Maane keeps it. It cannot be deleted; you can rename it.",
       "memberNotAgent": "Only agents can be added. Admins see every organization already.",
       "memberExists": "This agent is already in the organization.",
       "memberNotFound": "This agent is no longer in the organization. Reload the page.",
@@ -567,6 +568,9 @@
       },
       "file": {
         "blocked": "File blocked"
+      },
+      "message": {
+        "content_blocked": "Message content blocked"
       }
     }
   },

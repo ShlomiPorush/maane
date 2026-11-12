@@ -38,6 +38,7 @@ export {
   type StoredStatus,
 } from "./files.ts"
 export {
+  type FieldScan,
   GRAPH_FOLDERS,
   GRAPH_PROBLEMS,
   type GraphFolder,
@@ -61,6 +62,8 @@ export {
   type PartStatus,
   REFERENCE_ALPHABET,
   REFERENCE_CODE,
+  TEXT_FIELDS,
+  type TextField,
   TICKET_FLAGS,
   TICKET_STATUSES,
   type TicketFlag,

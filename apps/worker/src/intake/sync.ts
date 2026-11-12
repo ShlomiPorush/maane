@@ -12,6 +12,7 @@ import { errorFacts, log } from "@maane/server/log"
 import { databaseError } from "@maane/server/organizations/refusal"
 import type { Settings } from "@maane/server/settings/service"
 import {
+  type FieldScan,
   GRAPH_FOLDERS,
   type GraphFolder,
   type MessageContent,
@@ -19,10 +20,23 @@ import {
   type PartStatus,
   STORED_STATUSES,
   type StoredStatus,
+  type TextField,
 } from "@maane/shared"
 import { and, eq } from "drizzle-orm"
 import { auditBlockedPart, type FileService, FileTooLargeError, type ScanOutcome, sha256Of } from "../files/service.ts"
 import type { Tx } from "../files/types.ts"
+import {
+  auditBlockedFields,
+  columnsOf,
+  contentOf,
+  fieldTexts,
+  type GraphMeta,
+  partNamesOf,
+  refused,
+  type MessageContent as StoredContent,
+  scanFields,
+  storable,
+} from "./content.ts"
 import {
   type DeltaItem,
   type GraphConfig,
@@ -44,7 +58,7 @@ export class SourceChangedError extends Error {
  * limit (class 54, such as an index entry too large). Retrying cannot help, so the message becomes a record for review.
  * Every other failure (the database or the disk unavailable) fails the round, and the message is fetched again.
  */
-export const isRefusedValue = (error: unknown) => /^(22|54)/.test(databaseError(error)?.code ?? "")
+export const isRefusedValue = (error: unknown) => /^(22|54|08P01)/.test(databaseError(error)?.code ?? "")
 
 /** The pages one folder may take in one run; the cursor keeps the place for the next run. */
 export const MAX_PAGES_PER_RUN = 100
@@ -77,7 +91,7 @@ type PartScan =
 const isStored = (status: PartStatus): status is StoredStatus => (STORED_STATUSES as readonly string[]).includes(status)
 
 /** Graph's metadata of a message, as the record keeps it. */
-function metadataOf(item: DeltaItem, folder: GraphFolder) {
+function metadataOf(item: DeltaItem, folder: GraphFolder): GraphMeta {
   return {
     id: item.id,
     folder,
@@ -220,6 +234,9 @@ export class IntakeSync {
     } catch {
       return this.#storeRecord(source, folder, item, meta, "unparsed", fetched.bytes.byteLength)
     }
+    // The text fields are scanned like files before anything is stored (review G1).
+    const content = contentOf(parsed, meta)
+    const fields = await scanFields(this.#files, fieldTexts(content))
     const raw = await this.#files.scan(fetched.bytes, null)
     const parts: PartScan[] = []
     for (const part of parsed.parts) {
@@ -231,7 +248,7 @@ export class IntakeSync {
       }
     }
     try {
-      return await this.#storeParsed(source, folder, item, meta, fetched.bytes, parsed, raw, parts)
+      return await this.#storeParsed(source, folder, item, fetched.bytes, parsed, content, fields, raw, parts)
     } catch (error) {
       if (!isRefusedValue(error)) throw error
       log.warn("the database refused a value of a message; it is recorded for review", errorFacts(error))
@@ -239,24 +256,48 @@ export class IntakeSync {
     }
   }
 
-  /** A message stage one could not read in full: only Graph's metadata, flagged for review. */
+  /**
+   * A message stage one could not read in full: only Graph's metadata, flagged for review. Graph's subject and sender
+   * name are scanned like the header block of a parsed message and kept only when the scan allows it.
+   */
   async #storeRecord(
     source: IntakeSource,
     folder: GraphFolder,
     item: DeltaItem,
-    meta: ReturnType<typeof metadataOf>,
+    meta: GraphMeta,
     content: Exclude<MessageContent, "parsed">,
     size: number | null,
     reason?: MessageFlag,
   ): Promise<boolean> {
     const flag: MessageFlag = reason ?? (content === "unparsed" ? "parse_failed" : content)
     const fixed = wellFormed({
-      graph: meta,
+      graph: {
+        ...meta,
+        internetMessageId: meta.internetMessageId?.slice(0, 1000) ?? null,
+        from: meta.from ? { address: meta.from.address?.slice(0, 254) ?? null, name: meta.from.name } : null,
+      },
       subject: meta.subject,
-      fromAddress: meta.from?.address?.toLowerCase() ?? null,
+      fromAddress: meta.from?.address?.toLowerCase().slice(0, 254) ?? null,
       fromName: meta.from?.name ?? null,
     })
-    const flags: MessageFlag[] = fixed.changed ? [flag, "invalid_characters"] : [flag]
+    const block = [fixed.value.subject, fixed.value.fromName].filter(Boolean).join("\n")
+    const fields = block ? await scanFields(this.#files, { headers: block }) : {}
+    const ok = storable(fields.headers)
+    const flags: MessageFlag[] = [flag]
+    if (fixed.changed) flags.push("invalid_characters")
+    if (refused(fields.headers)) flags.push("blocked_content")
+    const values = ok
+      ? fixed.value
+      : {
+          ...fixed.value,
+          subject: null,
+          fromName: null,
+          graph: {
+            ...fixed.value.graph,
+            subject: null,
+            from: fixed.value.graph.from ? { ...fixed.value.graph.from, name: null } : null,
+          },
+        }
     return this.#db.transaction(async (tx) => {
       if (!(await holdSourceIfCurrent(tx, source.id))) throw new SourceChangedError()
       const [row] = await tx
@@ -268,12 +309,16 @@ export class IntakeSync {
           receivedAt: this.#receivedAt(item),
           content,
           size,
-          ...fixed.value,
+          ...values,
+          fieldScans: fields,
           reviewFlags: flags,
         })
         .onConflictDoNothing({ target: [message.sourceId, message.graphId] })
         .returning({ id: message.id })
-      if (row) log.warn("a message was recorded for review without its content", { reason: flag })
+      if (row) {
+        await auditBlockedFields(tx, row.id, {}, fields)
+        log.warn("a message was recorded for review without its content", { reason: flag })
+      }
       return row !== undefined
     })
   }
@@ -287,39 +332,23 @@ export class IntakeSync {
     source: IntakeSource,
     folder: GraphFolder,
     item: DeltaItem,
-    meta: ReturnType<typeof metadataOf>,
     raw: Buffer,
     parsed: ParsedMessage,
+    content: StoredContent,
+    fields: Partial<Record<TextField, FieldScan>>,
     rawScan: ScanOutcome,
     parts: PartScan[],
   ): Promise<boolean> {
-    // Every string headed for the database, made well formed in one place (P21).
-    const fixed = wellFormed({
-      graph: meta,
-      messageIdHeader: parsed.messageId,
-      inReplyTo: parsed.inReplyTo,
-      references: parsed.references,
-      fromAddress: parsed.from?.address ?? null,
-      fromName: parsed.from?.name ?? null,
-      toAddresses: parsed.to,
-      ccAddresses: parsed.cc,
-      subject: parsed.subject,
-      headers: parsed.headers,
-      textBody: parsed.text,
-      htmlBody: parsed.html,
-      reportOriginalMessageId: parsed.reportOriginalMessageId,
-      parts: parts.map(({ part }) => ({
-        fileName: part.fileName,
-        declaredType: part.declaredType,
-        contentId: part.contentId,
-      })),
-    })
-    const { parts: partText, ...row } = fixed.value
+    const columns = columnsOf(content, fields)
+    const names = partNamesOf(content, fields)
     const flags: MessageFlag[] = []
-    if (fixed.changed) flags.push("invalid_characters")
+    if (content.invalidCharacters) flags.push("invalid_characters")
     if (parts.some((scan) => "tooLarge" in scan)) flags.push("part_too_large")
+    if (Object.values(fields).some((scan) => refused(scan))) flags.push("blocked_content")
     const everyPartClean = parts.every((scan) => "outcome" in scan && scan.outcome.status === "clean")
-    const keepRaw = rawScan.status === "clean" && everyPartClean
+    // The raw MIME holds every field and part: kept only when it and all of them scanned clean.
+    const keepRaw =
+      rawScan.status === "clean" && everyPartClean && Object.values(fields).every((scan) => scan?.status === "clean")
 
     return this.#db.transaction(async (tx) => {
       if (!(await holdSourceIfCurrent(tx, source.id))) throw new SourceChangedError()
@@ -332,8 +361,7 @@ export class IntakeSync {
           receivedAt: this.#receivedAt(item),
           content: "parsed",
           size: raw.byteLength,
-          ...row,
-          sentAt: parsed.date,
+          ...columns,
           contentHash: parsed.contentHash,
           rawStatus: rawScan.status,
           reviewFlags: flags,
@@ -341,8 +369,9 @@ export class IntakeSync {
         .onConflictDoNothing({ target: [message.sourceId, message.graphId] })
         .returning({ id: message.id })
       if (!stored) return false
+      await auditBlockedFields(tx, stored.id, {}, fields)
       for (const [position, scan] of parts.entries()) {
-        await this.#storePart(tx, stored.id, scan, partText[position] ?? null)
+        await this.#storePart(tx, stored.id, scan, names[position] ?? null)
       }
       if (keepRaw) {
         await this.#files.storeIn(tx, raw, rawScan)

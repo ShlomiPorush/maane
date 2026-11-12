@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm"
 import pg from "pg"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { type Actor, SYSTEM } from "../audit.ts"
-import { auditLog, organizationMember, setting, supportAddress } from "../db/schema.ts"
+import { auditLog, intakeConversation, organizationMember, setting, supportAddress, ticket } from "../db/schema.ts"
 import { createSettingsCipher } from "../settings/crypto.ts"
 import { Settings } from "../settings/service.ts"
 import { createTestApp } from "../testing/app.ts"
@@ -127,6 +127,24 @@ describe("organizations", () => {
     expect((await admin.call("DELETE", `${BASE}/${id}`)).json).toMatchObject({ addresses: 0, members: 1 })
     expect((await admin.call("DELETE", `${BASE}/${id}/members/${agent.id}`)).status).toBe(200)
     expect((await admin.call("DELETE", `${BASE}/${id}`)).status).toBe(200)
+  })
+
+  it("refuses to delete an organization with mail history, and says so", async () => {
+    const { b: admin } = await firstAdmin()
+    const id = await createOrganization(admin, "With mail")
+    // A ticket of the organization (no address, no member left).
+    await database.db
+      .insert(ticket)
+      .values({ referenceCode: "ABCD-EFGH", organizationId: id, supportAddress: "help@example.com" })
+    const before = (await actions()).length
+    const refused = await admin.call("DELETE", `${BASE}/${id}`)
+    expect(refused.status).toBe(409)
+    expect(refused.json).toEqual({ error: "organization_has_mail" })
+    expect((await actions()).length).toBe(before)
+    // A listening conversation keeps another one too.
+    const other = await createOrganization(admin, "Listened")
+    await database.db.insert(intakeConversation).values({ organizationId: other, supportAddress: "a@example.com" })
+    expect((await admin.call("DELETE", `${BASE}/${other}`)).json).toEqual({ error: "organization_has_mail" })
   })
 
   it("answers 404 to an id that names nothing, also one that is not a UUID", async () => {

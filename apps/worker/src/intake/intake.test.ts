@@ -11,7 +11,8 @@ import {
   SHALOM_OLAM,
   windows1255,
 } from "../testing/mime.ts"
-import { classify, contentTypeOf } from "./classify.ts"
+import { classify } from "./classify.ts"
+import { contentOf, headerBlock, storedContentType } from "./content.ts"
 import { describeGraphError, isExpiredDelta } from "./graph.ts"
 import { MAX_REFERENCES, MESSAGE_ID_MAX, messageIds, parseMessage } from "./parse.ts"
 import { sanitizeMailHtml, textFromHtml } from "./sanitize.ts"
@@ -20,15 +21,15 @@ import { newReferenceCode, referenceCodesIn, referencedIds, ticketNumbersIn } fr
 
 const lines = (...headers: string[]) =>
   headers.map((line) => ({ key: line.slice(0, line.indexOf(":")).toLowerCase(), line }))
-const plain = { value: "text/plain", params: {} }
+const plain = { value: "text/plain", reportType: null }
 
 describe("classification (RFC 3834, RFC 3464)", () => {
   it("treats each sign of automated mail as automated", () => {
-    const cases: [string[], { value: string; params: Record<string, string> }, string][] = [
+    const cases: [string[], { value: string; reportType: string | null }, string][] = [
       [["Auto-Submitted: auto-replied"], plain, "auto_submitted"],
       [["Auto-Submitted: auto-generated; owner-email=x@example.com"], plain, "auto_submitted"],
-      [[], { value: "multipart/report", params: { "report-type": "delivery-status" } }, "delivery_report"],
-      [[], { value: "multipart/report", params: { "report-type": "disposition-notification" } }, "disposition_report"],
+      [[], { value: "multipart/report", reportType: "delivery-status" }, "delivery_report"],
+      [[], { value: "multipart/report", reportType: "disposition-notification" }, "disposition_report"],
       [["Precedence: bulk"], plain, "precedence"],
       [["Precedence: List"], plain, "precedence"],
       [["Precedence: junk"], plain, "precedence"],
@@ -59,8 +60,7 @@ describe("classification (RFC 3834, RFC 3464)", () => {
       })
     // A report of another kind is not a delivery or disposition report.
     expect(
-      classify({ headers: [], contentType: { value: "multipart/report", params: { "report-type": "x" } }, from: null })
-        .automated,
+      classify({ headers: [], contentType: { value: "multipart/report", reportType: "x" }, from: null }).automated,
     ).toBe(false)
   })
 
@@ -77,11 +77,23 @@ describe("classification (RFC 3834, RFC 3464)", () => {
     ).toMatchObject({ automated: true, possiblyAutomated: false })
   })
 
-  it("reads the content type of stored header lines", () => {
-    expect(
-      contentTypeOf(lines('Content-Type: multipart/REPORT; report-type="Delivery-Status";\r\n\tboundary="x"')),
-    ).toEqual({ value: "multipart/report", params: { "report-type": "delivery-status", boundary: "x" } })
-    expect(contentTypeOf([])).toEqual(plain)
+  it("classifies by mailparser's parsed content type, also with a comment after the report type", async () => {
+    for (const type of ["delivery-status (returned mail)", '"Delivery-Status"', "delivery-status; charset=x"]) {
+      const parsed = await parseMessage(
+        Buffer.from(
+          `From: MAILER-DAEMON@example.com\r\nContent-Type: multipart/REPORT; report-type=${type}; boundary=B\r\n\r\n` +
+            "--B\r\nContent-Type: text/plain\r\n\r\nfailed\r\n--B--\r\n",
+          "latin1",
+        ),
+      )
+      const contentType = storedContentType(parsed.contentType)
+      expect(contentType, type).toEqual({ value: "multipart/report", reportType: "delivery-status" })
+      expect(classify({ headers: [], contentType, from: "mailer-daemon@example.com" }).signs).toEqual([
+        "delivery_report",
+      ])
+    }
+    // A media type that is not a plain token pair is stored as octet-stream.
+    expect(storedContentType({ value: "text/<b>", params: {} }).value).toBe("application/octet-stream")
   })
 })
 
@@ -109,8 +121,14 @@ describe("threading hints and the reference code", () => {
     expect(ticketNumbersIn("[#0] #12 [12] [#x]")).toEqual([])
   })
 
-  it("tries In-Reply-To first, then References from the parent back to the root", () => {
+  it("tries In-Reply-To first, then References from the parent back to the root, at most 50", () => {
     expect(referencedIds(["c@x"], ["a@x", "b@x", "c@x"])).toEqual(["c@x", "b@x", "a@x"])
+    const many = referencedIds(
+      Array.from({ length: 70 }, (_, i) => `i${i}@x`),
+      Array.from({ length: 70 }, (_, i) => `r${i}@x`),
+    )
+    expect(many).toHaveLength(50)
+    expect(many[0]).toBe("i0@x")
     expect(messageIds("<a@x> <b@x>\r\n <c@x>")).toEqual(["a@x", "b@x", "c@x"])
     expect(messageIds(["<a@x>", "<a@x>"])).toEqual(["a@x"])
     expect(messageIds("bare@x")).toEqual(["bare@x"])
@@ -269,6 +287,55 @@ describe("parsing", () => {
     expect(parsed.references.at(-1)).toBe(`r${MAX_REFERENCES + 19}@example.com`)
     expect(parsed.cc.map((entry) => entry.address)).toEqual(["ok@example.com"])
     expect((await parseMessage(mime())).date?.toISOString()).toBe("2026-11-12T08:00:00.000Z")
+  })
+
+  it("treats an unparsable Date as no date, never the time of parsing", async () => {
+    const raw = Buffer.from("From: dana@example.com\r\nDate: not a date at all\r\nSubject: x\r\n\r\nhi\r\n", "latin1")
+    expect((await parseMessage(raw)).date).toBeNull()
+  })
+
+  it("finds a report's original Message-ID in an inline 7bit message/rfc822 part", async () => {
+    const parsed = await parseMessage(
+      mime({
+        from: "MAILER-DAEMON@example.com",
+        report: {
+          type: "delivery-status",
+          parts: [
+            { contentType: "text/plain", body: "Delivery failed." },
+            { contentType: "message/delivery-status", body: "Reporting-MTA: dns; mx.example.com" },
+            {
+              contentType: "message/rfc822\r\nContent-Disposition: inline\r\nContent-Transfer-Encoding: 7bit",
+              body: "Message-ID: <sent-7@maane.example.com>\r\nSubject: hello\r\n\r\nThe original.",
+            },
+          ],
+        },
+      }),
+    )
+    expect(parsed.reportOriginalMessageId).toBe("sent-7@maane.example.com")
+    // The returned message stays a part (scanned and kept like a file), not text of the report.
+    expect(parsed.text).not.toContain("The original.")
+  })
+
+  it("collects the header values Maane keeps into one block for the scanner", async () => {
+    const parsed = await parseMessage(
+      mime({
+        subject: "Order",
+        from: "Dana <dana@example.com>",
+        headers: [["X-Anything", "value"]],
+        attachments: [{ fileName: "a.txt", contentType: "text/plain", content: Buffer.from("a") }],
+      }),
+    )
+    const content = contentOf(parsed, {
+      id: "g",
+      folder: "inbox",
+      receivedDateTime: null,
+      internetMessageId: null,
+      subject: "Graph subject",
+      from: { address: "dana@example.com", name: "Graph name" },
+    })
+    const block = headerBlock(content.headers)
+    for (const value of ["Order", "Dana", "X-Anything: value", "a.txt", "Graph subject", "Graph name"])
+      expect(block).toContain(value)
   })
 
   it("gives the same content hash to the same message and another to other content", async () => {

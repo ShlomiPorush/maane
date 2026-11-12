@@ -440,6 +440,21 @@ export const message = pgTable(
     rawSha256: text("raw_sha256").references(() => storedFile.sha256, { onDelete: "restrict" }),
     /** A delivery or disposition report's original Message-ID, for phase 3 to link to the outgoing message. */
     reportOriginalMessageId: text("report_original_message_id"),
+    /** The top-level content type as mailparser parsed it, bounded: `{ value, reportType }`. */
+    contentType: jsonb("content_type"),
+    /**
+     * The scan of each stored text field (`text`, `html`, `headers`: the header values Maane keeps), as
+     * `{ status, signature, blockedBy }`. A field that scanned infected or blocked is not stored; one that waits for
+     * the scanner is stored once a retry decides; processing waits while a field waits.
+     */
+    fieldScans: jsonb("field_scans").notNull().default(sql`'{}'::jsonb`),
+    /** Listening: the shadow conversation the message belongs to (live mode uses tickets). */
+    conversationId: uuid("conversation_id").references(() => intakeConversation.id, { onDelete: "restrict" }),
+    /** Processing runs that failed on this message; after a few it is recorded for review instead. */
+    processAttempts: integer("process_attempts").notNull().default(0),
+    /** Fetches of this message again for what waits for the scanner, and the last one. */
+    retryAttempts: integer("retry_attempts").notNull().default(0),
+    retryAt: at("retry_at"),
     /** `@maane/shared` MESSAGE_FLAGS. */
     reviewFlags: text("review_flags").array().notNull().default(sql`'{}'::text[]`),
     /** `customer` or `automated`, set by processing. */
@@ -550,8 +565,14 @@ export const intakeRecord = pgTable(
     ticketId: uuid("ticket_id").references(() => ticket.id, { onDelete: "restrict" }),
     /** The ticket it matched (live) or would have matched (listening). */
     matchedTicketId: uuid("matched_ticket_id").references(() => ticket.id, { onDelete: "restrict" }),
-    /** Listening: the earlier message whose conversation it would have joined. */
+    /** Listening: the earlier message whose conversation it would have joined (unused since conversations). */
     matchedMessageId: uuid("matched_message_id").references(() => message.id, { onDelete: "restrict" }),
+    /** Listening: the shadow conversation the message opened or joined. */
+    conversationId: uuid("conversation_id").references(() => intakeConversation.id, { onDelete: "restrict" }),
+    /** Listening: the conversation it matched. */
+    matchedConversationId: uuid("matched_conversation_id").references(() => intakeConversation.id, {
+      onDelete: "restrict",
+    }),
     /** `@maane/shared` MATCH_LAYERS. */
     matchLayer: text("match_layer"),
     /** A short reason in the code's words (`sender_not_participant`, `auto_submitted`, ...). */
@@ -565,5 +586,69 @@ export const intakeRecord = pgTable(
       "intake_record_outcome",
       sql`${t.outcome} in ('copy', 'automated', 'unreadable', 'no_address', 'new_ticket', 'joined', 'new_linked_ticket')`,
     ),
+  ],
+)
+
+/**
+ * Listening mode's shadow of a ticket: no number, no reference code, no status. Processing keeps it with the same code
+ * path as tickets (participants, links, pending references), so a listening record says exactly what live mode would
+ * have decided.
+ */
+export const intakeConversation = pgTable(
+  "intake_conversation",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "restrict" }),
+    supportAddress: text("support_address").notNull(),
+    /** `@maane/shared` TICKET_FLAGS. */
+    reviewFlags: text("review_flags").array().notNull().default(sql`'{}'::text[]`),
+    createdAt: createdAt(),
+  },
+  (t) => [index("intake_conversation_organization_idx").on(t.organizationId)],
+)
+
+export const intakeConversationParticipant = pgTable(
+  "intake_conversation_participant",
+  {
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => intakeConversation.id, { onDelete: "restrict" }),
+    address: text("address").notNull(),
+    name: text("name"),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.conversationId, t.address] })],
+)
+
+export const intakeConversationLink = pgTable(
+  "intake_conversation_link",
+  {
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => intakeConversation.id, { onDelete: "restrict" }),
+    linkedConversationId: uuid("linked_conversation_id")
+      .notNull()
+      .references(() => intakeConversation.id, { onDelete: "restrict" }),
+    reason: text("reason").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.conversationId, t.linkedConversationId] })],
+)
+
+export const intakeConversationPending = pgTable(
+  "intake_conversation_pending",
+  {
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => intakeConversation.id, { onDelete: "restrict" }),
+    messageIdHeader: text("message_id_header").notNull(),
+    resolvedBy: uuid("resolved_by").references(() => message.id, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.conversationId, t.messageIdHeader] }),
+    index("intake_conversation_pending_message_id_idx").on(t.messageIdHeader),
   ],
 )

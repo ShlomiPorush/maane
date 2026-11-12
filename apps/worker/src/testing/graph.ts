@@ -26,6 +26,7 @@ interface Stored {
   removedSeq: number | null
   /** $value answers 404 while the message still shows in the delta query. */
   vanished: boolean
+  failing: boolean
 }
 
 interface Snapshot {
@@ -57,6 +58,8 @@ export interface StandInGraph {
   remove(id: string): void
   /** $value answers 404, while the delta query still lists the message. */
   vanish(id: string): void
+  /** $value answers 500 until further notice (a failure that is not final). */
+  fail(id: string): void
   /** Every delta and skip token issued so far answers 410 SyncStateNotFound. */
   expireTokens(): void
   /** The next `count` Graph requests answer 429 with Retry-After: 1. */
@@ -256,6 +259,7 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
         hold.reached()
         await hold.released
       }
+      if (message?.failing) return graphError(res, 500, "InternalServerError", "Something went wrong.")
       if (!message || message.mailbox !== box || message.removedSeq !== null || message.vanished)
         return graphError(res, 404, "ErrorItemNotFound", "The specified object was not found in the store.")
       res.writeHead(200, { "content-type": "message/rfc822" })
@@ -292,6 +296,7 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
         addedSeq: seq,
         removedSeq: null,
         vanished: false,
+        failing: false,
       })
       return id
     },
@@ -305,6 +310,11 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
       const message = messages.get(id)
       if (!message) throw new Error("no such message")
       message.vanished = true
+    },
+    fail(id) {
+      const message = messages.get(id)
+      if (!message) throw new Error("no such message")
+      message.failing = true
     },
     expireTokens() {
       generation++

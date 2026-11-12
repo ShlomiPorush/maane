@@ -13,7 +13,15 @@ import {
 import { and, asc, count, desc, eq, sql } from "drizzle-orm"
 import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
-import { authUser, organization, organizationMember, supportAddress } from "../db/schema.ts"
+import {
+  authUser,
+  intakeConversation,
+  intakeRecord,
+  organization,
+  organizationMember,
+  supportAddress,
+  ticket,
+} from "../db/schema.ts"
 import { intakeModeIn, lockIntakeConfig } from "./intake.ts"
 import { databaseError, Refusal } from "./refusal.ts"
 
@@ -184,7 +192,11 @@ export class Organizations {
     }
   }
 
-  /** Refused while the organization has an address or a member (later also a ticket: its foreign key restricts). */
+  /**
+   * Refused while the organization has an address or a member (`organization_in_use`), and for good once it has mail
+   * history (`organization_has_mail`): tickets, intake records, or listening conversations keep it, so history is
+   * never lost. Their foreign keys restrict too.
+   */
   async delete(id: string, acting: Acting): Promise<void> {
     try {
       await this.db.transaction(async (tx) => {
@@ -204,6 +216,7 @@ export class Organizations {
           .where(eq(organizationMember.organizationId, id))
         if ((addresses?.n ?? 0) > 0 || (members?.n ?? 0) > 0)
           throw new Refusal("organization_in_use", 409, { addresses: addresses?.n ?? 0, members: members?.n ?? 0 })
+        if (await hasMail(tx, id)) throw new Refusal("organization_has_mail", 409)
         await tx.delete(organization).where(eq(organization.id, id))
         await writeAudit(tx, acting.actor, {
           action: "organization.delete",
@@ -214,8 +227,8 @@ export class Organizations {
         })
       })
     } catch (error) {
-      // Anything that refers to the organization and was not counted above (a ticket, from phase 2.3 on).
-      if (databaseError(error)?.code === "23503") throw new Refusal("organization_in_use", 409)
+      // Mail history that arrived after the check above (its foreign key restricts).
+      if (databaseError(error)?.code === "23503") throw new Refusal("organization_has_mail", 409)
       throw error
     }
   }
@@ -431,4 +444,17 @@ async function addressOf(tx: Tx, id: string, addressId: string) {
 
 function nameTaken(error: unknown): Refusal | null {
   return databaseError(error)?.code === "23505" ? new Refusal("organization_name_taken", 409, { field: "name" }) : null
+}
+
+/** Whether anything of the mail history refers to the organization: a ticket, an intake record, a conversation. */
+async function hasMail(tx: Pick<Db, "select">, id: string): Promise<boolean> {
+  for (const [table, column] of [
+    [ticket, ticket.organizationId],
+    [intakeRecord, intakeRecord.organizationId],
+    [intakeConversation, intakeConversation.organizationId],
+  ] as const) {
+    const rows = await tx.select({ id: sql`1` }).from(table).where(eq(column, id)).limit(1)
+    if (rows.length > 0) return true
+  }
+  return false
 }

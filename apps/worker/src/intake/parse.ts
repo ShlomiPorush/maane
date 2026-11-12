@@ -94,37 +94,57 @@ function contentTypeOf(value: HeaderValue | undefined): ParsedMessage["contentTy
   return { value: "text/plain", params: {} }
 }
 
-/** The original Message-ID a report names: from the returned headers or message, or an MDN's Original-Message-ID. */
-function reportOriginal(type: ParsedMessage["contentType"], attachments: Attachment[]): string | null {
+/**
+ * The original Message-ID a report names (RFC 3464, RFC 8098): the returned headers or message (`text/rfc822-headers`,
+ * `message/rfc822`, which mailparser keeps as attachments with its documented `ignoreEmbedded` option), or a
+ * disposition notification's `Original-Message-ID`, each read by mailparser's own header parser.
+ */
+async function reportOriginal(type: ParsedMessage["contentType"], attachments: Attachment[]): Promise<string | null> {
   if (type.value !== "multipart/report") return null
   for (const part of attachments) {
     const declared = part.contentType.toLowerCase()
-    const head =
-      part.content
-        .subarray(0, 64 * 1024)
-        .toString("latin1")
-        .split(/\r?\n\r?\n/)[0] ?? ""
-    const unfolded = head.replace(/\r?\n[ \t]+/g, " ")
-    const field =
-      declared === "message/disposition-notification"
-        ? /^original-message-id:\s*(.*)$/im.exec(unfolded)
-        : declared === "text/rfc822-headers" || declared === "message/rfc822"
-          ? /^message-id:\s*(.*)$/im.exec(unfolded)
-          : null
-    const id = field?.[1] ? messageIds(field[1])[0] : undefined
+    if (!["text/rfc822-headers", "message/rfc822", "message/disposition-notification"].includes(declared)) continue
+    const nested = await simpleParser(part.content, { ...OPTIONS, ignoreEmbedded: true }).catch(() => null)
+    if (!nested) continue
+    const named =
+      declared === "message/disposition-notification" ? nested.headers.get("original-message-id") : nested.messageId
+    const id = typeof named === "string" ? messageIds(named)[0] : undefined
     if (id) return id
   }
   return null
+}
+
+/** simpleParser's options: no data: URLs for inline images, no text from unsanitized HTML, no links in text. */
+const OPTIONS = { skipImageLinks: true, skipHtmlToText: true, skipTextLinks: true } as const
+
+/** A header's raw value from mailparser's headerLines (the text after the first colon, unfolded), or null. */
+function rawHeader(lines: readonly { key: string; line: string }[], name: string): string | null {
+  const line = lines.find((header) => header.key === name)?.line
+  if (line === undefined) return null
+  const colon = line.indexOf(":")
+  return (colon >= 0 ? line.slice(colon + 1) : "").replace(/\r?\n[ \t]+/g, " ").trim()
+}
+
+/**
+ * The message's own Date: mailparser parses the header with `new Date(value)` and, when that fails, uses the time of
+ * parsing. Maane takes mailparser's date only when the raw header (its documented headerLines) parses the same way,
+ * so a missing or unparsable Date is no date, and two copies of one message keep equal dates.
+ */
+function dateOf(lines: readonly { key: string; line: string }[], parsed: Date | undefined): Date | null {
+  const value = rawHeader(lines, "date")
+  if (value === null || Number.isNaN(new Date(value).getTime())) return null
+  return parsed && !Number.isNaN(parsed.getTime()) ? parsed : null
 }
 
 const sha256 = (data: string | Uint8Array) => createHash("sha256").update(data).digest("hex")
 
 /** Parses a raw message. Throws when mailparser cannot (the caller records the message for review). */
 export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
+  // ignoreEmbedded: an embedded message (a forward, a returned message in a report) stays an attachment, scanned and
+  // kept like any other part, instead of being flattened into the text.
   const mail = await simpleParser(Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength), {
-    skipImageLinks: true,
-    skipHtmlToText: true,
-    skipTextLinks: true,
+    ...OPTIONS,
+    ignoreEmbedded: true,
   })
   const contentType = contentTypeOf(mail.headers.get("content-type"))
   const decodedText = typeof mail.text === "string" ? mail.text : null
@@ -146,13 +166,12 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
   const from = addresses(mail.from)[0] ?? null
   return {
     messageId: messageIds(mail.messageId)[0] ?? null,
-    inReplyTo: messageIds(mail.inReplyTo),
+    inReplyTo: messageIds(mail.inReplyTo).slice(0, MAX_REFERENCES),
     references: messageIds(mail.references).slice(-MAX_REFERENCES),
     from,
     to: addresses(mail.to),
     cc: addresses(mail.cc),
-    // Only the message's own Date header: without one there is no date (never the time of parsing).
-    date: mail.headers.has("date") && mail.date && !Number.isNaN(mail.date.getTime()) ? mail.date : null,
+    date: dateOf(mail.headerLines, mail.date),
     subject: typeof mail.subject === "string" ? mail.subject : null,
     headers: mail.headerLines.map((header) => ({ key: header.key, line: header.line })),
     contentType,
@@ -160,6 +179,6 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
     html,
     parts,
     contentHash,
-    reportOriginalMessageId: reportOriginal(contentType, mail.attachments),
+    reportOriginalMessageId: await reportOriginal(contentType, mail.attachments),
   }
 }

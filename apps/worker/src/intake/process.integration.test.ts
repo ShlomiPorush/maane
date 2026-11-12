@@ -143,6 +143,17 @@ describe("tickets in live mode", () => {
     expect(await h.recordOf(copy)).toMatchObject({ outcome: "copy", matchedTicketId: original.ticketId })
     expect(await h.messageOf(reused)).toMatchObject({ duplicateOf: null, reviewFlags: ["reused_message_id"] })
     expect((await h.messageOf(otherDate)).duplicateOf).toBeNull()
+    // Two copies with a Date mailparser cannot parse: no date on either, so the second is a copy.
+    const malformed = Buffer.from(
+      mime({ messageId: "baddate@example.com" })
+        .toString("latin1")
+        .replace(/^Date: .*$/m, "Date: someday soon"),
+      "latin1",
+    )
+    const malformedIds = [
+      h.graph.add(malformed, { receivedAt: at(9) }),
+      h.graph.add(Buffer.from(malformed), { receivedAt: at(10) }),
+    ]
     // Two copies without a Date header: equal dates, so the second is a copy.
     const undated = mime({ messageId: "undated@example.com", date: null })
     const undatedIds = [
@@ -157,6 +168,9 @@ describe("tickets in live mode", () => {
     const [firstUndated, secondUndated] = await Promise.all(undatedIds.map((id) => h.messageOf(id)))
     expect(firstUndated?.sentAt).toBeNull()
     expect(secondUndated?.duplicateOf).toBe(firstUndated?.id)
+    const [firstMalformed, secondMalformed] = await Promise.all(malformedIds.map((id) => h.messageOf(id)))
+    expect(firstMalformed?.sentAt).toBeNull()
+    expect(secondMalformed?.duplicateOf).toBe(firstMalformed?.id)
   })
 
   it("never opens, joins, or reopens a ticket for automated mail, and flags a bare MAILER-DAEMON for review", async () => {
@@ -248,6 +262,27 @@ describe("missing originals", () => {
     }
   })
 
+  it("keeps waiting for the real original when a stranger reuses its Message-ID", async () => {
+    const h = await live()
+    const reply = h.graph.add(mime({ inReplyTo: "real@example.com" }), { receivedAt: at(5) })
+    await h.round()
+    const danas = await h.ticketOf(reply)
+    // Mallory sends a message carrying the Message-ID Dana's ticket waits for.
+    const forged = h.graph.add(mime({ messageId: "real@example.com", from: "Mallory <mallory@example.com>" }), {
+      receivedAt: at(6),
+    })
+    await h.round()
+    expect((await h.ticketOf(forged))?.id).not.toBe(danas?.id)
+    expect((await h.ticketOf(forged))?.reviewFlags).toEqual(["sender_not_participant"])
+    // Dana's real original arrives later and still joins her ticket.
+    const original = h.graph.add(mime({ messageId: "real@example.com", text: { content: "the real one" } }), {
+      receivedAt: at(7),
+    })
+    await h.round()
+    expect((await h.ticketOf(original))?.id).toBe(danas?.id)
+    expect(await h.recordOf(original)).toMatchObject({ outcome: "joined", matchLayer: "original" })
+  })
+
   it("opens its own ticket for an original two tickets wait for, linked to both and flagged", async () => {
     const h = await live()
     const fromDana = h.graph.add(mime({ inReplyTo: "shared@example.com" }), { receivedAt: at(5) })
@@ -296,9 +331,13 @@ describe("listening mode", () => {
       organizationId: org,
       ticketId: null,
     })
+    const conversation = (await h.messageOf(original)).conversationId
+    expect(conversation).not.toBeNull()
+    expect(await h.recordOf(original)).toMatchObject({ conversationId: conversation })
     expect(await h.recordOf(reply)).toMatchObject({
       outcome: "joined",
-      matchedMessageId: (await h.messageOf(original)).id,
+      conversationId: conversation,
+      matchedConversationId: conversation,
       matchLayer: "header",
     })
     expect(await h.recordOf(stranger)).toMatchObject({ outcome: "new_linked_ticket", reason: "sender_not_participant" })
@@ -307,6 +346,58 @@ describe("listening mode", () => {
     await h.mode("live")
     await h.processor.run()
     expect(await h.tickets()).toEqual([])
+  })
+
+  /** Listening mode with a default address, no tickets. */
+  async function listening() {
+    intake = await startIntake(clamd)
+    await intake.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
+    return intake
+  }
+
+  it("puts two replies to one missing original in one conversation, as live mode would", async () => {
+    const h = await listening()
+    const first = h.graph.add(mime({ inReplyTo: "lost@example.com" }), { receivedAt: at(1) })
+    const second = h.graph.add(mime({ inReplyTo: "lost@example.com" }), { receivedAt: at(2) })
+    await h.round()
+    const conversation = (await h.messageOf(first)).conversationId
+    expect(await h.recordOf(first)).toMatchObject({ outcome: "new_ticket", conversationId: conversation })
+    expect(await h.recordOf(second)).toMatchObject({ outcome: "joined", conversationId: conversation })
+    const original = h.graph.add(mime({ messageId: "lost@example.com" }), { receivedAt: at(0) })
+    await h.round()
+    expect(await h.recordOf(original)).toMatchObject({
+      outcome: "joined",
+      matchLayer: "original",
+      conversationId: conversation,
+    })
+  })
+
+  it("treats a Message-ID in two conversations as ambiguous, as live mode would", async () => {
+    const h = await listening()
+    h.graph.add(mime({ messageId: "twice@example.com", text: { content: "one" } }), { receivedAt: at(1) })
+    h.graph.add(mime({ messageId: "twice@example.com", from: "Ron <ron@example.com>", text: { content: "two" } }), {
+      receivedAt: at(2),
+    })
+    await h.round()
+    const reply = h.graph.add(mime({ inReplyTo: "twice@example.com" }), { receivedAt: at(3) })
+    await h.round()
+    expect(await h.recordOf(reply)).toMatchObject({ outcome: "new_ticket", matchedConversationId: null })
+  })
+
+  it("counts everyone of the conversation as a participant, not only the sender of the message replied to", async () => {
+    const h = await listening()
+    const opened = h.graph.add(mime({ messageId: "o@example.com", cc: "Ron <ron@example.com>" }), { receivedAt: at(1) })
+    const ron = h.graph.add(
+      mime({ messageId: "r@example.com", from: "Ron <ron@example.com>", inReplyTo: "o@example.com" }),
+      {
+        receivedAt: at(2),
+      },
+    )
+    const dana = h.graph.add(mime({ inReplyTo: "r@example.com" }), { receivedAt: at(3) })
+    await h.round()
+    const conversation = (await h.messageOf(opened)).conversationId
+    expect(await h.recordOf(ron)).toMatchObject({ outcome: "joined", conversationId: conversation })
+    expect(await h.recordOf(dana)).toMatchObject({ outcome: "joined", conversationId: conversation })
   })
 
   it("records a message with no support address and no default for review", async () => {

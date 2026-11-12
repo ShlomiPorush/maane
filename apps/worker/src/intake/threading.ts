@@ -32,10 +32,13 @@ export function ticketNumbersIn(subject: string | null): number[] {
   return [...new Set(numbers.filter((n) => Number.isSafeInteger(n) && n > 0))]
 }
 
+/** The most Message-IDs one message may refer to (review G2): every query over them stays small. */
+export const MAX_REFERENCED = 50
+
 /**
  * The Message-IDs a message refers to, the most direct first: In-Reply-To, then References from the last (the parent)
- * to the first (the root), each once.
+ * to the first (the root), each once, at most MAX_REFERENCED.
  */
 export function referencedIds(inReplyTo: readonly string[], references: readonly string[]): string[] {
-  return [...new Set([...inReplyTo, ...[...references].reverse()])]
+  return [...new Set([...inReplyTo, ...[...references].reverse()])].slice(0, MAX_REFERENCED)
 }

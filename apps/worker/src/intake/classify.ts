@@ -18,8 +18,8 @@ export type AutomatedSign = (typeof AUTOMATED_SIGNS)[number]
 export interface ClassifyInput {
   /** Every header line as received (`Key: value`, possibly folded). */
   headers: { key: string; line: string }[]
-  /** The top-level content type and its parameters, lower case. */
-  contentType: { value: string; params: Record<string, string> }
+  /** The top-level content type as mailparser parsed it, stored bounded (content.ts). */
+  contentType: { value: string; reportType: string | null }
   /** The From address, lower case. */
   from: string | null
 }
@@ -43,24 +43,6 @@ function values(headers: ClassifyInput["headers"], name: string): string[] {
 
 const has = (headers: ClassifyInput["headers"], name: string) => values(headers, name).length > 0
 
-/** The top-level Content-Type of stored header lines: its type and parameters, lower case (text/plain without one). */
-export function contentTypeOf(headers: ClassifyInput["headers"]): ClassifyInput["contentType"] {
-  const [first] = values(headers, "content-type")
-  if (!first) return { value: "text/plain", params: {} }
-  const [type, ...rest] = first.split(";")
-  const params: Record<string, string> = {}
-  for (const param of rest) {
-    const equals = param.indexOf("=")
-    if (equals <= 0) continue
-    params[param.slice(0, equals).trim().toLowerCase()] = param
-      .slice(equals + 1)
-      .trim()
-      .replace(/^"(.*)"$/, "$1")
-      .toLowerCase()
-  }
-  return { value: (type ?? "").trim().toLowerCase(), params }
-}
-
 export function classify(input: ClassifyInput): Classification {
   const signs: AutomatedSign[] = []
   // RFC 3834 5.1: any value but "no" (its keyword is case-insensitive; parameters follow a semicolon).
@@ -68,7 +50,7 @@ export function classify(input: ClassifyInput): Classification {
   if (autoSubmitted.some((value) => (value.split(";")[0] ?? "").trim().toLowerCase() !== "no"))
     signs.push("auto_submitted")
   if (input.contentType.value === "multipart/report") {
-    const kind = input.contentType.params["report-type"]
+    const kind = input.contentType.reportType
     if (kind === "delivery-status") signs.push("delivery_report")
     else if (kind === "disposition-notification") signs.push("disposition_report")
   }

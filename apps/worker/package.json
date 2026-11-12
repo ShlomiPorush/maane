@@ -27,6 +27,7 @@
     "@types/mailparser": "3.9.0",
     "@types/sanitize-html": "2.16.2",
     "esbuild": "0.28.2",
+    "iconv-lite": "0.7.3",
     "selfsigned": "5.5.0"
   }
 }

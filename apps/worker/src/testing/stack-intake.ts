@@ -122,6 +122,24 @@ try {
     `an EICAR attachment: ${bad?.status ?? "missing"} ${bad?.signature ?? ""}, raw MIME not kept`.trim(),
   )
 
+  // Text fields are scanned like files (review G1): EICAR as a whole text body is blocked by the real ClamAV. Inside
+  // the header block it follows other values; what the real scanner does with that is reported, not required.
+  const textId = graph.add(mime({ to: address, subject: `Text ${run}`, text: { content: eicar().toString("latin1") } }))
+  const subjectId = graph.add(mime({ to: address, subject: eicar().toString("latin1") }))
+  await round()
+  const scanOf = (row: Awaited<ReturnType<typeof stored>>, field: string) =>
+    (row?.fieldScans as Record<string, { status: string; signature: string | null }> | undefined)?.[field]
+  const textRow = await stored(textId)
+  check(
+    textRow?.textBody === null && scanOf(textRow, "text")?.status === "infected",
+    `EICAR as the text body: ${scanOf(textRow, "text")?.status ?? "no scan"} ${scanOf(textRow, "text")?.signature ?? ""}, not stored`.trim(),
+  )
+  const subjectRow = await stored(subjectId)
+  console.log(
+    `    info: EICAR as the subject, inside the header block: ${scanOf(subjectRow, "headers")?.status ?? "no scan"}` +
+      ` (subject stored: ${subjectRow?.subject === null ? "no" : "yes"})`,
+  )
+
   await settings.update({ "intake.mode": "listening" }, SYSTEM)
   const listeningId = graph.add(mime({ to: address, subject: `Listening ${run}` }))
   await round()

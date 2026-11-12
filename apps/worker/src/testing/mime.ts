@@ -3,6 +3,7 @@
 // RFC 2231 file names). Addresses use example.com.
 
 import { randomBytes } from "node:crypto"
+import iconv from "iconv-lite"
 
 /** Text from code points (Hebrew letters are U+05D0 to U+05EA). */
 export const fromCodePoints = (...points: number[]) => String.fromCodePoint(...points)
@@ -12,20 +13,8 @@ export const SHALOM = fromCodePoints(0x5e9, 0x5dc, 0x5d5, 0x5dd)
 export const SHALOM_OLAM = `${SHALOM} ${fromCodePoints(0x5e2, 0x5d5, 0x5dc, 0x5dd)}`
 export const INVOICE = fromCodePoints(0x5d7, 0x5e9, 0x5d1, 0x5d5, 0x5e0, 0x5d9, 0x5ea)
 
-/**
- * Windows-1255 for ASCII and the 27 Hebrew letters, which the code page maps in order: U+05D0 to U+05EA become 0xE0 to
- * 0xFA. Anything else is refused, so a fixture cannot hold a character this does not map.
- */
-export function windows1255(text: string): Buffer {
-  const bytes: number[] = []
-  for (const char of text) {
-    const point = char.codePointAt(0) ?? 0
-    if (point < 0x80) bytes.push(point)
-    else if (point >= 0x5d0 && point <= 0x5ea) bytes.push(point - 0x5d0 + 0xe0)
-    else throw new Error(`windows1255: U+${point.toString(16)} is not mapped here`)
-  }
-  return Buffer.from(bytes)
-}
+/** Windows-1255 bytes of a text, encoded by iconv-lite (a devDependency of this package). */
+export const windows1255 = (text: string): Buffer => iconv.encode(text, "windows-1255")
 
 /** Quoted-printable (RFC 2045) of bytes, CRLF line ends kept as hard breaks, soft breaks under 76 characters. */
 export function quotedPrintable(bytes: Buffer): string {

@@ -322,6 +322,9 @@ importers:
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
+      iconv-lite:
+        specifier: 0.7.3
+        version: 0.7.3
       selfsigned:
         specifier: 5.5.0
         version: 5.5.0
