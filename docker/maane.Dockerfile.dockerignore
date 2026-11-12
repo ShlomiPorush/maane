@@ -9,8 +9,12 @@
 docs
 scripts
 e2e
-.env
-.env.*
+# Environment files at any depth, as .gitignore ignores them: the real ones hold secrets and must never enter the
+# build context, an image layer, or the build cache. The examples are not needed in the image either.
+**/.env
+**/.env.*
+**/*.env
+**/*.env.*
 docker-compose*.yml
 data
 postgres-data
