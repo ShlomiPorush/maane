@@ -34,11 +34,39 @@ function fontLicences(): Plugin {
   }
 }
 
+/**
+ * pdf.js's own image decoders for JBIG2 and CCITT (scans, faxes) and JPEG 2000, in their JavaScript form (the files
+ * pdfjs-dist ships for use without WebAssembly), served from Maane's origin under PDF_DECODERS, the documented
+ * `wasmUrl` of the preview (src/pages/tickets/pdf.ts). With them the UI's policy needs no 'wasm-unsafe-eval'.
+ */
+const PDF_DECODERS = "pdfjs/"
+const DECODER_FILES = [
+  "jbig2_nowasm_fallback.js",
+  "openjpeg_nowasm_fallback.js",
+  "LICENSE_JBIG2",
+  "LICENSE_PDFJS_JBIG2",
+  "LICENSE_OPENJPEG",
+  "LICENSE_PDFJS_OPENJPEG",
+]
+
+function pdfDecoders(): Plugin {
+  return {
+    name: "maane-pdf-decoders",
+    apply: "build",
+    generateBundle() {
+      const dir = join(dirname(require.resolve("pdfjs-dist/package.json")), "wasm")
+      for (const file of DECODER_FILES) {
+        this.emitFile({ type: "asset", fileName: `${PDF_DECODERS}${file}`, source: readFileSync(join(dir, file)) })
+      }
+    },
+  }
+}
+
 export default defineConfig({
   root: here("."),
   publicDir: here("public"),
   envDir: false,
-  plugins: [react(), fontLicences()],
+  plugins: [react(), fontLicences(), pdfDecoders()],
   build: {
     outDir: here("dist"),
     emptyOutDir: true,

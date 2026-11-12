@@ -39,26 +39,118 @@ export function png(width = 48, height = 32, rgb: [number, number, number] = [31
   ])
 }
 
-/** A one-page PDF (A6) that shows one line of ASCII text in Helvetica, with a correct cross-reference table. */
+/** A PDF from its objects, numbered from 1 (the first is the catalog), with a correct cross-reference table. */
+function pdfFile(objects: (string | Buffer)[]): Buffer {
+  const chunks: Buffer[] = [Buffer.from("%PDF-1.4\n", "latin1")]
+  let length = chunks[0]?.length ?? 0
+  const offsets: number[] = []
+  const add = (chunk: Buffer) => {
+    chunks.push(chunk)
+    length += chunk.length
+  }
+  objects.forEach((object, index) => {
+    offsets.push(length)
+    add(Buffer.from(`${index + 1} 0 obj\n`, "latin1"))
+    add(typeof object === "string" ? Buffer.from(object, "latin1") : object)
+    add(Buffer.from("\nendobj\n", "latin1"))
+  })
+  const xref = length
+  let tail = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  for (const offset of offsets) tail += `${String(offset).padStart(10, "0")} 00000 n \n`
+  tail += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  add(Buffer.from(tail, "latin1"))
+  return Buffer.concat(chunks)
+}
+
+/** A stream object: its dictionary entries, then its bytes. */
+const stream = (entries: string, data: Buffer) =>
+  Buffer.concat([
+    Buffer.from(`<< ${entries} /Length ${data.length} >>\nstream\n`, "latin1"),
+    data,
+    Buffer.from("\nendstream", "latin1"),
+  ])
+
+/** A one-page PDF (A6) that shows one line of ASCII text in Helvetica. */
 export function pdf(text = "Maane preview"): Buffer {
   const safe = text.replace(/[^\x20-\x7e]/g, "?").replace(/[\\()]/g, (char) => `\\${char}`)
-  const stream = `BT /F1 18 Tf 24 330 Td (${safe}) Tj ET\n0 0 1 RG 4 w 12 12 273 395 re S\n`
-  const objects = [
+  const content = `BT /F1 18 Tf 24 330 Td (${safe}) Tj ET\n0 0 1 RG 4 w 12 12 273 395 re S\n`
+  return pdfFile([
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 297 420] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
-    `<< /Length ${Buffer.byteLength(stream, "latin1")} >>\nstream\n${stream}endstream`,
+    stream("", Buffer.from(content, "latin1")),
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-  ]
-  let out = "%PDF-1.4\n"
-  const offsets: number[] = []
-  objects.forEach((object, index) => {
-    offsets.push(Buffer.byteLength(out, "latin1"))
-    out += `${index + 1} 0 obj\n${object}\nendobj\n`
-  })
-  const xref = Buffer.byteLength(out, "latin1")
-  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
-  for (const offset of offsets) out += `${String(offset).padStart(10, "0")} 00000 n \n`
-  out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
-  return Buffer.from(out, "latin1")
+  ])
+}
+
+/** Bits as bytes, padded with zeros to a whole byte. */
+function bitsToBytes(bits: string): Buffer {
+  const padded = bits.padEnd(Math.ceil(bits.length / 8) * 8, "0")
+  return Buffer.from(
+    Array.from({ length: padded.length / 8 }, (_, i) => Number.parseInt(padded.slice(i * 8, i * 8 + 8), 2)),
+  )
+}
+
+/** The side of the square test image, and its black band: columns 8 to 23 of each of its 32 rows. */
+const SIDE = 32
+// ITU-T T.4 terminating codes: white runs of 8, black runs of 16.
+const WHITE_8 = "10011"
+const BLACK_16 = "0000010111"
+
+/** The image as CCITT Group 3 one-dimensional data (T.4, K = 0, no end-of-line codes): every row the same band. */
+function ccittRows(): Buffer {
+  return bitsToBytes(`${WHITE_8}${BLACK_16}${WHITE_8}`.repeat(SIDE))
+}
+
+/**
+ * The image as a JBIG2 embedded stream (T.88 with no file header, as PDF's JBIG2Decode reads it): a page information
+ * segment, one immediate generic region coded with MMR (T.6, the first row in horizontal mode against an imagined white
+ * row, every other row three vertical-zero codes, then the end-of-facsimile-block), and the end of the page.
+ */
+function jbig2Page(): Buffer {
+  const u32 = (value: number) => {
+    const bytes = Buffer.alloc(4)
+    bytes.writeUInt32BE(value)
+    return bytes
+  }
+  const segment = (number: number, type: number, data: Buffer) =>
+    Buffer.concat([u32(number), Buffer.from([type, 0x00, 0x01]), u32(data.length), data])
+  const firstRow = `001${WHITE_8}${BLACK_16}1`
+  const eofb = "000000000001".repeat(2)
+  const mmr = bitsToBytes(firstRow + "111".repeat(SIDE - 1) + eofb)
+  const pageInfo = Buffer.concat([u32(SIDE), u32(SIDE), u32(0), u32(0), Buffer.from([0x00, 0x00, 0x00])])
+  const region = Buffer.concat([u32(SIDE), u32(SIDE), u32(0), u32(0), Buffer.from([0x00]), Buffer.from([0x01]), mmr])
+  return Buffer.concat([segment(0, 48, pageInfo), segment(1, 38, region), segment(2, 49, Buffer.alloc(0))])
+}
+
+/**
+ * A one-page PDF whose only mark is a 32 by 32 one-bit image with a black band, drawn large in the middle of the
+ * page, encoded as a fax (CCITT) or a scan (JBIG2) usually is; "broken" is a JPEG 2000 image of bytes no decoder reads,
+ * beside a blue frame, so a preview can draw only part of the page.
+ */
+export function scannedPdf(kind: "ccitt" | "jbig2" | "broken"): Buffer {
+  const image =
+    kind === "ccitt"
+      ? stream(
+          `/Type /XObject /Subtype /Image /Width ${SIDE} /Height ${SIDE} /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K 0 /Columns ${SIDE} /Rows ${SIDE} /BlackIs1 false >>`,
+          ccittRows(),
+        )
+      : kind === "jbig2"
+        ? stream(
+            `/Type /XObject /Subtype /Image /Width ${SIDE} /Height ${SIDE} /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode`,
+            jbig2Page(),
+          )
+        : stream(
+            `/Type /XObject /Subtype /Image /Width ${SIDE} /Height ${SIDE} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /JPXDecode`,
+            Buffer.from("not a JPEG 2000 codestream at all", "latin1"),
+          )
+  const frame = kind === "broken" ? "0 0 1 RG 4 w 12 12 176 176 re S\n" : ""
+  const content = `${frame}q 120 0 0 120 40 40 cm /Im1 Do Q\n`
+  return pdfFile([
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >>",
+    stream("", Buffer.from(content, "latin1")),
+    image,
+  ])
 }

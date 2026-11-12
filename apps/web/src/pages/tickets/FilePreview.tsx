@@ -1,6 +1,7 @@
 // A file's preview in the shared dialog (requirements 3.2): an image as an <img> of its preview address, a PDF drawn
-// by pdf.js on a canvas page by page, a text as plain text (each line with its own direction). The server serves a
-// preview only for a clean file of one of these types, read from its content; anything else never opens here.
+// by pdf.js on a canvas page by page (with a note when part of a page cannot be drawn), a text as plain text (each line
+// with its own direction). The server serves a preview only for a clean file of one of these types, read from its
+// content; anything else never opens here.
 
 import { type AttachmentView, TEXT_PREVIEW_MAX_BYTES } from "@maane/shared"
 import { ChevronLeft, ChevronRight, Download } from "lucide-react"
@@ -10,7 +11,7 @@ import { downloadUrl, previewUrl } from "../../api/endpoints.ts"
 import { errorText } from "../../api/errors.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { Dialog } from "../../ui/Dialog.tsx"
-import { Loading } from "../../ui/states.tsx"
+import { Banner, Loading } from "../../ui/states.tsx"
 
 export function FilePreview({ file, onClose }: { file: AttachmentView; onClose: () => void }) {
   const { t } = useI18n()
@@ -70,34 +71,40 @@ function PreviewError({ text }: { text: string }) {
   )
 }
 
+type Pdf = import("pdfjs-dist").PDFDocumentProxy
+
 type PdfState =
   | { status: "loading" }
   | { status: "failed"; error: string }
-  | { status: "ready"; document: import("pdfjs-dist").PDFDocumentProxy; pages: number }
+  | { status: "ready"; document: Pdf; pages: number }
 
 function PdfPreview({ id }: { id: string }) {
   const { t } = useI18n()
   const canvas = useRef<HTMLCanvasElement>(null)
   const [state, setState] = useState<PdfState>({ status: "loading" })
   const [page, setPage] = useState(1)
+  // Pages pdf.js could not draw in full: they show what it could, and a note says part is missing.
+  const [partial, setPartial] = useState<ReadonlySet<number>>(new Set())
 
   useEffect(() => {
     let gone = false
-    let opened: import("pdfjs-dist").PDFDocumentProxy | null = null
+    const opened: Promise<Pdf>[] = []
     ;(async () => {
       try {
         const data = await (await requestFile(previewUrl(id))).arrayBuffer()
         const { openPdf } = await import("./pdf.ts")
-        opened = await openPdf(data)
-        if (gone) return void opened.loadingTask.destroy()
-        setState({ status: "ready", document: opened, pages: opened.numPages })
+        const loading = openPdf(data)
+        opened.push(loading)
+        const document = await loading
+        if (gone) return
+        setState({ status: "ready", document, pages: document.numPages })
       } catch (error) {
         if (!gone) setState({ status: "failed", error: errorText(t, error) })
       }
     })()
     return () => {
       gone = true
-      void opened?.loadingTask.destroy()
+      for (const document of opened) void document.then((pdf) => pdf.loadingTask.destroy()).catch(() => undefined)
     }
   }, [id, t])
 
@@ -106,25 +113,33 @@ function PdfPreview({ id }: { id: string }) {
     const target = canvas.current
     let task: import("pdfjs-dist").RenderTask | null = null
     let gone = false
+    const draw = async (document: Pdf) => {
+      const pdfPage = await document.getPage(page)
+      if (gone) return
+      // Fit the page to the dialog's width, drawn at the screen's pixel density.
+      const width = Math.max(240, target.parentElement?.clientWidth ?? 800)
+      const base = pdfPage.getViewport({ scale: 1 })
+      const scale = Math.min(2, width / base.width)
+      const ratio = window.devicePixelRatio || 1
+      const viewport = pdfPage.getViewport({ scale: scale * ratio })
+      target.width = Math.floor(viewport.width)
+      target.height = Math.floor(viewport.height)
+      target.style.width = `${Math.floor(viewport.width / ratio)}px`
+      task = pdfPage.render({ canvas: target, viewport })
+      await task.promise
+      return pdfPage
+    }
+    const cancelled = (error: unknown) => (error as { name?: string }).name === "RenderingCancelledException"
     ;(async () => {
       try {
-        const pdfPage = await state.document.getPage(page)
-        if (gone) return
-        // Fit the page to the dialog's width, drawn at the screen's pixel density.
-        const width = Math.max(240, target.parentElement?.clientWidth ?? 800)
-        const base = pdfPage.getViewport({ scale: 1 })
-        const scale = Math.min(2, width / base.width)
-        const ratio = window.devicePixelRatio || 1
-        const viewport = pdfPage.getViewport({ scale: scale * ratio })
-        target.width = Math.floor(viewport.width)
-        target.height = Math.floor(viewport.height)
-        target.style.width = `${Math.floor(viewport.width / ratio)}px`
-        task = pdfPage.render({ canvas: target, viewport })
-        await task.promise
-        if (!gone) target.dataset.rendered = String(page)
+        const drawn = await draw(state.document)
+        if (gone || !drawn) return
+        target.dataset.rendered = String(page)
+        // An image pdf.js could not decode leaves part of the page out: say so.
+        const { missingImages } = await import("./pdf.ts")
+        if (!gone && (await missingImages(drawn)) > 0) setPartial((pages) => new Set(pages).add(page))
       } catch (error) {
-        if (!gone && (error as { name?: string }).name !== "RenderingCancelledException")
-          setState({ status: "failed", error: errorText(t, error) })
+        if (!gone && !cancelled(error)) setState({ status: "failed", error: errorText(t, error) })
       }
     })()
     return () => {
@@ -164,6 +179,13 @@ function PdfPreview({ id }: { id: string }) {
       ) : (
         <span className="ui-pdf-page">{t("ticket.pdfPage", { page, pages: state.pages })}</span>
       )}
+      {partial.has(page) ? (
+        <div className="ui-pdf-partial" data-testid="pdf-partial">
+          <Banner tone="warn" title={t("ticket.pdfPartial")}>
+            {t("ticket.pdfPartialHint")}
+          </Banner>
+        </div>
+      ) : null}
       <div className="ui-pdf-page-frame">
         <canvas ref={canvas} className="ui-pdf-canvas" data-testid="pdf-canvas" />
       </div>

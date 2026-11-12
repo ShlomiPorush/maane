@@ -14,7 +14,7 @@ import {
 } from "@maane/server/db/schema"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
-import { pdf, png } from "@maane/server/testing/files"
+import { pdf, png, scannedPdf } from "@maane/server/testing/files"
 import { REFERENCE_CODE } from "@maane/shared"
 import { asc, eq } from "drizzle-orm"
 import { eicar } from "../files/samples.ts"
@@ -25,6 +25,9 @@ import { GraphGateway } from "../intake/graph.ts"
 import { reconcileIntakeSource } from "../intake/jobs.ts"
 import { IntakeProcessor } from "../intake/process.ts"
 import { IntakeSync } from "../intake/sync.ts"
+// Printed by Chromium with IBM Plex Mono (SIL Open Font License) embedded as a TrueType subset: a PDF whose font pdf.js
+// loads itself.
+import embeddedFontPdf from "./embedded-font.pdf"
 import { startStandInGraph } from "./graph.ts"
 import { encodedWord, INVOICE, mime, SHALOM_OLAM } from "./mime.ts"
 
@@ -53,6 +56,7 @@ export const FIXTURES = {
   blockedFile: "Blocked attachment",
   blockedText: "Blocked text",
   betaSubject: "Question for Beta",
+  scanned: "Scanned documents",
 } as const
 
 const config = loadConfig()
@@ -194,10 +198,24 @@ try {
       text: { content: "I am away this week." },
     }),
   )
+  // Scans and faxes (JBIG2, CCITT), a PDF with an embedded font, and one whose image no decoder reads.
+  const scannedId = graph.add(
+    mime({
+      to: alpha.address,
+      subject: FIXTURES.scanned,
+      text: { content: "The signed pages, scanned." },
+      attachments: [
+        { fileName: "scan-jbig2.pdf", contentType: "application/pdf", content: scannedPdf("jbig2") },
+        { fileName: "fax-ccitt.pdf", contentType: "application/pdf", content: scannedPdf("ccitt") },
+        { fileName: "embedded-font.pdf", contentType: "application/pdf", content: Buffer.from(embeddedFontPdf) },
+        { fileName: "broken-image.pdf", contentType: "application/pdf", content: scannedPdf("broken") },
+      ],
+    }),
+  )
   const first = await round()
   check(
-    first.status === "done" && first.stored === 6,
-    `stage one stored ${first.stored} of 6 messages (${first.status})`,
+    first.status === "done" && first.stored === 7,
+    `stage one stored ${first.stored} of 7 messages (${first.status})`,
   )
 
   const live = await stored(englishId)
@@ -252,6 +270,13 @@ try {
   console.log(
     `    info: EICAR as the subject, inside the header block: ${scanOf(subjectRow, "headers")?.status ?? "no scan"}` +
       ` (subject stored: ${subjectRow?.subject === null ? "no" : "yes"})`,
+  )
+
+  const scannedParts = await partsOf(await stored(scannedId))
+  check(
+    scannedParts.length === 4 &&
+      scannedParts.every(({ part, detectedType }) => part.status === "clean" && detectedType === "application/pdf"),
+    `scanned PDFs: ${scannedParts.map(({ part, detectedType }) => `${part.status} ${detectedType}`).join(", ")}`,
   )
 
   const betaRow = await stored(betaId)

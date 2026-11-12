@@ -21,6 +21,7 @@ const BLOCKED_FILE = "Blocked attachment"
 const BLOCKED_TEXT = "Blocked text"
 const BETA_SUBJECT = "Question for Beta"
 const BETA = "Example Beta"
+const SCANNED = "Scanned documents"
 
 const AGENT = "agent3"
 const agentPassword = randomBytes(18).toString("base64url")
@@ -81,7 +82,7 @@ test.describe("desktop", () => {
     await decoded(frame(page).locator('img[alt="logo"]'))
     await expect(frame(page).locator('img[alt="banner"]')).toHaveCount(0)
     await page.getByRole("button", { name: he("ticket.showImages"), exact: true }).click()
-    await expect(page.locator("iframe.ui-mail-frame").first()).toHaveAttribute("src", /\?images=1$/)
+    await expect(page.locator("iframe.ui-mail-frame").first()).toHaveAttribute("src", /[?&]images=1$/)
     await expect(frame(page).locator('img[alt="banner"]')).toHaveCount(1)
     await expect(page.getByRole("button", { name: he("ticket.hideImages"), exact: true })).toBeVisible()
 
@@ -147,6 +148,48 @@ test.describe("desktop", () => {
     await expect(notice).toContainText(he("scan.status.infected"))
     await expect(notice.locator('bdi[dir="ltr"]')).toContainText(/Eicar/i)
     await expect(frame(page).getByText("The formatted version of this message is fine.")).toBeVisible()
+    expect(violations).toEqual([])
+  })
+
+  test("PDF previews draw scans, faxes, and embedded fonts, and say when part of a page cannot be drawn", async ({
+    page,
+  }) => {
+    const violations = watchPolicy(page)
+    await signIn(page)
+    await openTicket(page, SCANNED)
+    /** Opens a file's PDF preview, waits until its page is drawn, and counts the page's dark pixels. */
+    const drawn = async (fileName: string) => {
+      await page
+        .locator(`[data-file="${fileName}"]`)
+        .getByRole("button", { name: he("ticket.preview") })
+        .click()
+      const dialog = page.getByRole("dialog")
+      const canvas = dialog.locator('canvas[data-rendered="1"]')
+      await expect(canvas).toBeVisible({ timeout: 20_000 })
+      const dark = await canvas.evaluate((element: HTMLCanvasElement) => {
+        const context = element.getContext("2d")
+        if (!context) return -1
+        const { data } = context.getImageData(0, 0, element.width, element.height)
+        let count = 0
+        for (let i = 0; i < data.length; i += 4)
+          if ((data[i] ?? 255) < 90 && (data[i + 1] ?? 255) < 90 && (data[i + 2] ?? 255) < 90) count++
+        return count
+      })
+      return { dialog, dark }
+    }
+    // The images of a scan (JBIG2) and a fax (CCITT): pdf.js decodes them with its own decoders, served from Maane's
+    // origin, and draws their black band.
+    for (const fileName of ["scan-jbig2.pdf", "fax-ccitt.pdf", "embedded-font.pdf"]) {
+      const { dialog, dark } = await drawn(fileName)
+      expect(dark, fileName).toBeGreaterThan(1000)
+      await expect(dialog.getByTestId("pdf-partial")).toHaveCount(0)
+      await page.keyboard.press("Escape")
+      await expect(dialog).toHaveCount(0)
+    }
+    // An image no decoder reads: the page is drawn without it, and the preview says so.
+    const { dialog } = await drawn("broken-image.pdf")
+    await expect(dialog.getByTestId("pdf-partial")).toContainText(he("ticket.pdfPartial"))
+    await page.keyboard.press("Escape")
     expect(violations).toEqual([])
   })
 
