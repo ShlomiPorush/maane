@@ -47,8 +47,8 @@ import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
 import type { Settings } from "../settings/service.ts"
 import { wellFormedText } from "../text.ts"
-import { belongsTo, supportRules } from "./rules.ts"
 import { buildReply, htmlToText, newMessageId, type ReplyAttachment, replySubject, storedBody } from "./mail.ts"
+import { belongsTo, supportRules } from "./rules.ts"
 
 /** The user a request acts for. */
 export type ReplyUser = { id: string; role: string; actor: Actor; ipAddress: string | null }

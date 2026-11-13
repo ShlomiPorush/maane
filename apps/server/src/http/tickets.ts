@@ -124,7 +124,7 @@ export function ticketRoutes(db: Db, filesDir: string, replies: Replies): Hono<A
     const remoteImages = c.req.query("images") === "1"
     const body = await tickets.body(await scopeOf(c), c.req.param("id"), remoteImages)
     if (!body) return notFound(c)
-    const document = body.kind === "html" ? htmlDocument(body.html, body.text) : textDocument(body.text)
+    const document = body.kind === "html" ? htmlDocument(body.html, body.dir) : textDocument(body.text)
     c.set("security", bodyHeaders(remoteImages))
     return c.html(document)
   })
