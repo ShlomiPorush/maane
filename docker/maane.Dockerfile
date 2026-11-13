@@ -14,13 +14,12 @@ COPY apps apps
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @maane/server --filter @maane/worker --filter @maane/web run build
 # sharp (the email's images) is a native module, so the server bundle leaves it out (--external:sharp, as sharp
-# documents for bundlers) and the image gets it as installed above: sharp, its dependencies, and its prebuilt
-# libvips for this platform, copied out of pnpm's store without links.
-RUN mkdir -p /runtime/node_modules \
-  && cd node_modules/.pnpm/sharp@[0-9]*/node_modules \
-  && cp -r -L sharp detect-libc semver @img /runtime/node_modules/
+# documents for bundlers). pnpm's documented deploy writes the server's production dependencies from the lockfile,
+# sharp with its prebuilt libvips for this platform among them, into a directory of their own.
+RUN pnpm --filter @maane/server deploy --prod /runtime
 
-# The bundles need no node_modules but sharp's. Runs as node on a read-only root file system; only /tmp is written.
+# The bundles need no node_modules but sharp, from the deploy. Runs as node on a read-only root file system; only
+# /tmp is written.
 FROM node:26.13.1-bookworm-slim
 ARG VERSION=dev
 ENV NODE_ENV=production \
