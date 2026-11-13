@@ -13,6 +13,7 @@ import type { Db } from "../db/client.ts"
 import { errorFacts, log } from "../log.ts"
 import { htmlDocument, textDocument } from "../mail/body.ts"
 import { visibleOrganizations } from "../organizations/scope.ts"
+import type { Replies } from "../replies/service.ts"
 import { CursorError, type FileAccess, Tickets } from "../tickets/service.ts"
 import type { ApiEnv } from "./request.ts"
 
@@ -75,7 +76,7 @@ export function safeFileName(name: string | null): string {
   return cleaned === "" || cleaned === "." || cleaned === ".." ? "file" : cleaned
 }
 
-export function ticketRoutes(db: Db, filesDir: string): Hono<ApiEnv> {
+export function ticketRoutes(db: Db, filesDir: string, replies: Replies): Hono<ApiEnv> {
   const tickets = new Tickets(db, filesDir)
   const routes = new Hono<ApiEnv>()
   const scopeOf = (c: Context<ApiEnv>) => visibleOrganizations(db, c.get("user"))
@@ -107,8 +108,16 @@ export function ticketRoutes(db: Db, filesDir: string): Hono<ApiEnv> {
     const text = c.req.param("number")
     const number = NUMBER.test(text) ? Number(text) : Number.NaN
     if (!Number.isSafeInteger(number)) return notFound(c)
-    const view = await tickets.view(await scopeOf(c), number)
-    return view ? c.json(view) : notFound(c)
+    const found = await tickets.view(await scopeOf(c), number)
+    if (!found) return notFound(c)
+    const { ticketId, organizationSignature, ...view } = found
+    const compose = await replies.compose(
+      c.get("user").id,
+      { id: ticketId, organizationId: view.ticket.organization.id, supportAddress: view.ticket.supportAddress },
+      view.ticket.organization.name,
+      organizationSignature,
+    )
+    return c.json({ ...view, compose })
   })
 
   routes.get("/messages/:id/body", async (c) => {

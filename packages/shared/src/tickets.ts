@@ -2,6 +2,7 @@
 // UI share: which detected types preview and how, and the shapes the API answers with.
 
 import type { IntakeOutcome, MatchLayer, MessageContent, PartStatus, TextField, TicketStatus } from "./intake.ts"
+import type { ComposeView, DeliveryView, MessageDirection } from "./replies.ts"
 
 /**
  * How a file previews, by the type read from its content (never the declared one): images, PDF (pdf.js), and text
@@ -90,6 +91,12 @@ export interface FieldNotice {
 
 export interface MessageView {
   id: string
+  /** Incoming mail, an agent's reply, or an internal note. */
+  direction: MessageDirection
+  /** A reply or a note: the agent who wrote it, by their display name. */
+  author: { id: string; name: string } | null
+  /** A reply: where sending is, per recipient. */
+  delivery: DeliveryView | null
   receivedAt: string
   sentAt: string | null
   from: MailAddress | null
@@ -126,6 +133,8 @@ export interface TicketView {
   /** Tickets this one is linked to, either way, that the user may see. */
   links: { number: number; reason: string }[]
   messages: MessageView[]
+  /** What the composer starts from. */
+  compose: ComposeView
 }
 
 /** A row of the intake log: what processing did (live) or would have done (listening) with one message. */

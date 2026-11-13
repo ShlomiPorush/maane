@@ -12,10 +12,15 @@ import {
   type IntakeEntry,
   type IntakeLog,
   type MailAddress,
+  type MessageDirection,
   type MessageView,
+  type OutboxState,
   PART_STATUSES,
   type PartStatus,
+  type Provider,
   previewKind,
+  type RecipientState,
+  type SendProblem,
   STORED_STATUSES,
   TEXT_FIELDS,
   type TextField,
@@ -28,11 +33,14 @@ import { and, asc, type Column, desc, eq, inArray, or, type SQL, sql } from "dri
 import { alias } from "drizzle-orm/pg-core"
 import type { Db } from "../db/client.ts"
 import {
+  authUser,
   intakeConversation,
   intakeRecord,
   message,
   messagePart,
   organization,
+  outbox,
+  outboxRecipient,
   storedFile,
   ticket,
   ticketLink,
@@ -273,10 +281,16 @@ export class Tickets {
       .orderBy(asc(sql`lower(${organization.name})`))
   }
 
-  /** One ticket by its number, with its messages, files, participants, and links; null outside the scope. */
-  async view(scope: OrganizationScope, number: number): Promise<TicketView | null> {
+  /**
+   * One ticket by its number, with its messages, files, participants, and links; null outside the scope. The route adds
+   * what the composer starts from.
+   */
+  async view(
+    scope: OrganizationScope,
+    number: number,
+  ): Promise<(Omit<TicketView, "compose"> & { ticketId: string; organizationSignature: string }) | null> {
     const [row] = await this.db
-      .select({ ticket, organizationName: organization.name })
+      .select({ ticket, organizationName: organization.name, signature: organization.signature })
       .from(ticket)
       .innerJoin(organization, eq(organization.id, ticket.organizationId))
       .where(and(eq(ticket.number, number), inScope(scope, ticket.organizationId)))
@@ -306,6 +320,28 @@ export class Tickets {
       .from(ticketParticipant)
       .where(eq(ticketParticipant.ticketId, t.id))
       .orderBy(asc(ticketParticipant.createdAt), asc(ticketParticipant.address))
+    // Replies and notes: their authors' display names, and where each reply's sending is, per recipient.
+    const authorIds = [...new Set(messages.flatMap((m) => (m.authorUserId ? [m.authorUserId] : [])))]
+    const authors = authorIds.length
+      ? await this.db
+          .select({ id: authUser.id, name: authUser.name, username: authUser.username })
+          .from(authUser)
+          .where(inArray(authUser.id, authorIds))
+      : []
+    const replyIds = messages.filter((m) => m.direction === "out").map((m) => m.id)
+    const outboxes = replyIds.length
+      ? await this.db
+          .select({ messageId: outbox.messageId, state: outbox.state, problem: outbox.problem })
+          .from(outbox)
+          .where(inArray(outbox.messageId, replyIds))
+      : []
+    const recipients = replyIds.length
+      ? await this.db
+          .select()
+          .from(outboxRecipient)
+          .where(inArray(outboxRecipient.messageId, replyIds))
+          .orderBy(asc(outboxRecipient.position))
+      : []
     const other = alias(ticket, "other")
     const links = await this.db
       .select({ number: other.number, reason: ticketLink.reason })
@@ -325,6 +361,25 @@ export class Tickets {
       )
       .orderBy(asc(other.number))
 
+    const authorOf = new Map(authors.map((a) => [a.id, { id: a.id, name: a.name || a.username || a.id }]))
+    const deliveryOf = (id: string): MessageView["delivery"] => {
+      const sent = outboxes.find((o) => o.messageId === id)
+      if (!sent) return null
+      return {
+        state: sent.state as OutboxState,
+        problem: sent.problem as SendProblem | null,
+        recipients: recipients
+          .filter((r) => r.messageId === id)
+          .map((r) => ({
+            address: r.address,
+            name: r.name,
+            kind: r.kind === "cc" ? "cc" : "to",
+            state: r.state as RecipientState,
+            provider: r.provider as Provider | null,
+            marked: r.markedBy !== null,
+          })),
+      }
+    }
     const views: MessageView[] = messages.map((m) => {
       const attachments: AttachmentView[] = parts
         .filter(({ part }) => part.messageId === m.id)
@@ -350,6 +405,9 @@ export class Tickets {
       const text = m.textBody !== null && m.textBody !== "" ? m.textBody : null
       return {
         id: m.id,
+        direction: m.direction as MessageDirection,
+        author: m.authorUserId ? (authorOf.get(m.authorUserId) ?? null) : null,
+        delivery: m.direction === "out" ? deliveryOf(m.id) : null,
         receivedAt: m.receivedAt.toISOString(),
         sentAt: m.sentAt?.toISOString() ?? null,
         from: senderOf(m),
@@ -385,6 +443,8 @@ export class Tickets {
       participants,
       links,
       messages: views,
+      ticketId: t.id,
+      organizationSignature: row.signature,
     }
   }
 

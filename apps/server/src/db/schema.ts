@@ -4,6 +4,7 @@ import {
   bigserial,
   boolean,
   check,
+  customType,
   index,
   integer,
   jsonb,
@@ -17,6 +18,8 @@ import {
 } from "drizzle-orm/pg-core"
 
 const at = (name: string) => timestamp(name, { withTimezone: true })
+/** Bytes, as Drizzle documents a column type it does not ship (customType). */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" })
 const createdAt = () => at("created_at").notNull().defaultNow()
 
 // --- Better Auth (core, username, twoFactor, admin), in the shape its Drizzle adapter documents ---
@@ -165,11 +168,14 @@ export const organization = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     /** Trimmed, 1 to 80 characters, unique without regard to case. */
     name: text("name").notNull(),
+    /** Plain text at the end of every reply sent for this organization (phase 3.1); empty for none. */
+    signature: text("signature").notNull().default(""),
     createdAt: createdAt(),
   },
   (t) => [
     uniqueIndex("organization_name_unique").on(sql`lower(${t.name})`),
     check("organization_name_form", sql`${t.name} = btrim(${t.name}) and char_length(${t.name}) between 1 and 80`),
+    check("organization_signature_length", sql`char_length(${t.signature}) <= 2000`),
   ],
 )
 
@@ -389,29 +395,32 @@ export const ticketLink = pgTable(
 )
 
 /**
- * One message as Graph delivered it. Stage one stores it (`stored`) with its parts, the files that may be kept, and
- * its raw MIME only when the raw message and every part scanned clean; stage two processes it once (`processed`).
- * Every text is well formed (U+0000 and unpaired surrogates replaced by U+FFFD, flagged for review); the HTML is the
- * sanitized HTML, never the sender's.
+ * One message of a ticket. Incoming (`in`): as Graph delivered it. Stage one stores it (`stored`) with its parts, the
+ * files that may be kept, and its raw MIME only when the raw message and every part scanned clean; stage two processes
+ * it once (`processed`). Every text is well formed (U+0000 and unpaired surrogates replaced by U+FFFD, flagged for
+ * review); the HTML is the sanitized HTML, never the sender's. An agent's reply (`out`, with its outbox row) and an
+ * internal note (`note`, never sent) are written processed, with their author and the submission ID of the composer
+ * that sent them, and only the columns of intake that apply (phase 3.1).
  */
 export const message = pgTable(
   "message",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    sourceId: uuid("source_id")
-      .notNull()
-      .references(() => intakeSource.id, { onDelete: "restrict" }),
-    /** Graph's immutable ID. */
-    graphId: text("graph_id").notNull(),
-    folder: text("folder").notNull(),
-    /** Graph's receivedDateTime: processing goes oldest first by it. */
+    /** `@maane/shared` MESSAGE_DIRECTIONS: `in` from intake, `out` a reply, `note` an internal note. */
+    direction: text("direction").notNull().default("in"),
+    /** Incoming only: the intake source. */
+    sourceId: uuid("source_id").references(() => intakeSource.id, { onDelete: "restrict" }),
+    /** Graph's immutable ID (incoming only). */
+    graphId: text("graph_id"),
+    folder: text("folder"),
+    /** Graph's receivedDateTime: processing goes oldest first by it. A reply or a note: when it was written. */
     receivedAt: at("received_at").notNull(),
     /** `@maane/shared` MESSAGE_STATES. */
     state: text("state").notNull().default("stored"),
     /** `@maane/shared` MESSAGE_CONTENTS. */
     content: text("content").notNull(),
-    /** What Graph said about it in the delta query (subject, sender, Message-ID, times). */
-    graph: jsonb("graph").notNull(),
+    /** What Graph said about it in the delta query (subject, sender, Message-ID, times). Incoming only. */
+    graph: jsonb("graph"),
     /** The size of the raw MIME in bytes, when it was read. */
     size: bigint("size", { mode: "number" }),
     /** Message-ID without its angle brackets. */
@@ -471,6 +480,10 @@ export const message = pgTable(
     /** The earlier message this one is a copy of. */
     duplicateOf: uuid("duplicate_of"),
     processedAt: at("processed_at"),
+    /** A reply or a note: the agent who wrote it. Users are never deleted, only banned. */
+    authorUserId: text("author_user_id").references(() => authUser.id, { onDelete: "restrict" }),
+    /** A reply or a note: the composer's ID for one click, so a repeated request finds this message again. */
+    submissionId: uuid("submission_id"),
     createdAt: createdAt(),
   },
   (t) => [
@@ -478,9 +491,19 @@ export const message = pgTable(
     index("message_state_received_idx").on(t.state, t.receivedAt),
     index("message_message_id_idx").on(t.messageIdHeader),
     index("message_ticket_idx").on(t.ticketId),
+    uniqueIndex("message_submission").on(t.authorUserId, t.submissionId).where(sql`${t.submissionId} is not null`),
     check("message_state", sql`${t.state} in ('stored', 'processed')`),
     check("message_content", sql`${t.content} in ('parsed', 'unavailable', 'unparsed', 'too_large')`),
     check("message_folder", sql`${t.folder} in ('inbox', 'junkemail')`),
+    check("message_direction", sql`${t.direction} in ('in', 'out', 'note')`),
+    check(
+      "message_incoming",
+      sql`${t.direction} <> 'in' or (${t.sourceId} is not null and ${t.graphId} is not null and ${t.folder} is not null and ${t.graph} is not null)`,
+    ),
+    check(
+      "message_written",
+      sql`${t.direction} = 'in' or (${t.authorUserId} is not null and ${t.submissionId} is not null and ${t.ticketId} is not null and ${t.state} = 'processed')`,
+    ),
   ],
 )
 
@@ -696,4 +719,107 @@ export const intakeConversationTicketLink = pgTable(
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.conversationId, t.ticketId] })],
+)
+
+// --- Replies that send (phase 3.1) ---
+
+/**
+ * An outgoing message: the MIME built once when the agent sent it (so a resend sends the same bytes), its own
+ * Message-ID and From address, and where sending is (`@maane/shared` OUTBOX_STATES, which follow its recipients).
+ * `problem` says why nothing was sent when a check at send time refused it (`@maane/shared` SEND_PROBLEMS).
+ */
+export const outbox = pgTable(
+  "outbox",
+  {
+    messageId: uuid("message_id")
+      .primaryKey()
+      .references(() => message.id, { onDelete: "restrict" }),
+    mime: bytea("mime").notNull(),
+    /** Without angle brackets, as message.message_id_header. */
+    messageIdHeader: text("message_id_header").notNull().unique(),
+    /** In lower case: a support address of the ticket's organization when it was written and when it is sent. */
+    fromAddress: text("from_address").notNull(),
+    state: text("state").notNull().default("pending"),
+    problem: text("problem"),
+    /** Send attempts started: each tries the first provider, then the failover for what the first did not take. */
+    attempts: integer("attempts").notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("outbox_state_idx").on(t.state),
+    check("outbox_state", sql`${t.state} in ('pending', 'sending', 'accepted', 'failed', 'unknown')`),
+  ],
+)
+
+/**
+ * One recipient (To or Cc) of an outgoing message and what a provider said about it (`@maane/shared`
+ * RECIPIENT_STATES). An `unknown` recipient is never sent to again by itself: the agent sends again or marks it sent.
+ */
+export const outboxRecipient = pgTable(
+  "outbox_recipient",
+  {
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => outbox.messageId, { onDelete: "restrict" }),
+    /** In lower case. */
+    address: text("address").notNull(),
+    name: text("name"),
+    /** `to` or `cc`. */
+    kind: text("kind").notNull(),
+    position: integer("position").notNull(),
+    state: text("state").notNull().default("pending"),
+    /** `smtp2go` or `failover`: the provider of the last answer about this recipient. */
+    provider: text("provider"),
+    /** The provider's reply, bounded: the final reply (with the provider's queue ID) once accepted, else the refusal. */
+    response: text("response"),
+    /** The agent who marked an unknown recipient as sent. */
+    markedBy: text("marked_by").references(() => authUser.id, { onDelete: "restrict" }),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.messageId, t.address] }),
+    check("outbox_recipient_kind", sql`${t.kind} in ('to', 'cc')`),
+    check("outbox_recipient_state", sql`${t.state} in ('pending', 'accepted', 'refused', 'unknown')`),
+    check("outbox_recipient_provider", sql`${t.provider} is null or ${t.provider} in ('smtp2go', 'failover')`),
+  ],
+)
+
+/**
+ * A file an agent uploaded in the composer. The server keeps its bytes here only until the worker scanned it (the
+ * server never calls the scanner or writes the file store); the worker then stores what may be kept through the file
+ * service and clears `content`. Only its uploader may attach it.
+ */
+export const upload = pgTable(
+  "upload",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "restrict" }),
+    fileName: text("file_name").notNull(),
+    declaredType: text("declared_type"),
+    size: bigint("size", { mode: "number" }).notNull(),
+    /** The bytes, until the scan decided. */
+    content: bytea("content"),
+    /** `@maane/shared` UPLOAD_STATUSES. */
+    status: text("status").notNull().default("scanning"),
+    signature: text("signature"),
+    blockedBy: text("blocked_by"),
+    storedSha256: text("stored_sha256").references(() => storedFile.sha256, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+    scannedAt: at("scanned_at"),
+  },
+  (t) => [
+    index("upload_user_idx").on(t.userId),
+    check(
+      "upload_status",
+      sql`${t.status} in ('scanning', 'clean', 'not_fully_scanned', 'not_scanned', 'infected', 'blocked_type', 'too_large', 'scanner_unavailable')`,
+    ),
+    check("upload_content", sql`(${t.content} is null) = (${t.status} <> 'scanning')`),
+    check(
+      "upload_stored",
+      sql`(${t.storedSha256} is not null) = (${t.status} in ('clean', 'not_fully_scanned', 'not_scanned'))`,
+    ),
+  ],
 )

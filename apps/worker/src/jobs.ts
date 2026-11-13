@@ -1,15 +1,20 @@
 import { writeFile } from "node:fs/promises"
+import type { Db } from "@maane/server/db/client"
 import {
   FILES_SWEEP,
   GRAPH_TEST,
   INTAKE_FILES_RETRY,
   INTAKE_PROCESS,
   INTAKE_SYNC,
+  QUEUE_OPTIONS,
   SCANNER_SELF_TEST,
+  SEND_REPLY,
+  SMTP_TEST,
+  UPLOAD_SCAN,
 } from "@maane/server/jobs/queue"
 import { errorFacts, log } from "@maane/server/log"
 import type { Settings } from "@maane/server/settings/service"
-import type { GraphTestResult } from "@maane/shared"
+import { type GraphTestResult, PROVIDERS, type Provider } from "@maane/shared"
 import type { PgBoss } from "pg-boss"
 import { selfTestView } from "./files/self-test.ts"
 import type { FileService } from "./files/service.ts"
@@ -18,6 +23,10 @@ import { type LockPool, runExclusive } from "./intake/jobs.ts"
 import type { IntakeProcessor } from "./intake/process.ts"
 import type { WaitingFiles } from "./intake/retry.ts"
 import type { IntakeSync } from "./intake/sync.ts"
+import { type ReplySender, sendReplyJob } from "./send/sender.ts"
+import type { SmtpTimeouts } from "./send/smtp.ts"
+import { smtpTest } from "./send/test.ts"
+import { scanUpload } from "./send/uploads.ts"
 
 /** The file the worker's health check reads: the time of the last heartbeat job, in milliseconds. */
 export const HEARTBEAT_FILE = process.env.MAANE_HEARTBEAT_FILE || "/tmp/maane-worker-heartbeat"
@@ -32,6 +41,16 @@ export interface JobOptions {
   files?: FileService
   /** Graph intake; without it (tests of other jobs) the intake jobs are not registered. */
   intake?: IntakeJobs
+  /** Replies (plan 3.1): sending, the composer's uploads, and the SMTP connection tests. Needs `files`. */
+  send?: SendJobs
+}
+
+export interface SendJobs {
+  db: Db
+  settings: Settings
+  sender: ReplySender
+  /** The connection tests' timeouts (tests make them short). */
+  timeouts?: SmtpTimeouts
 }
 
 export interface IntakeJobs {
@@ -86,6 +105,26 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
   await boss.work(FILES_SWEEP, async () => files.sweep())
   // The self-test on start: scans trust no scanner until it passed.
   await boss.send(SCANNER_SELF_TEST, {})
+
+  const send = options.send
+  if (send) {
+    await boss.createQueue(SEND_REPLY, QUEUE_OPTIONS[SEND_REPLY])
+    await boss.createQueue(UPLOAD_SCAN, QUEUE_OPTIONS[UPLOAD_SCAN])
+    await boss.createQueue(SMTP_TEST)
+    await boss.work<{ messageId?: unknown }>(SEND_REPLY, async ([job]) => {
+      const id = job?.data.messageId
+      if (typeof id === "string") return { state: await sendReplyJob(send.sender, id) }
+    })
+    await boss.work<{ uploadId?: unknown }>(UPLOAD_SCAN, async ([job]) => {
+      const id = job?.data.uploadId
+      if (typeof id === "string") return { status: await scanUpload(send.db, files, id) }
+    })
+    await boss.work<{ provider?: unknown }>(SMTP_TEST, async ([job]) => {
+      const provider = job?.data.provider
+      if ((PROVIDERS as readonly unknown[]).includes(provider))
+        return smtpTest(send.settings, provider as Provider, send.timeouts)
+    })
+  }
 
   const intake = options.intake
   if (!intake) return

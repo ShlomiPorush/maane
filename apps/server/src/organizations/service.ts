@@ -9,6 +9,7 @@ import {
   parseExactAddress,
   parseSupportAddress,
   resolveSupportAddress,
+  SIGNATURE_MAX,
 } from "@maane/shared"
 import { and, asc, count, desc, eq, sql } from "drizzle-orm"
 import { type Actor, writeAudit } from "../audit.ts"
@@ -22,6 +23,7 @@ import {
   supportAddress,
   ticket,
 } from "../db/schema.ts"
+import { wellFormedText } from "../text.ts"
 import { intakeModeIn, lockIntakeConfig } from "./intake.ts"
 import { databaseError, Refusal } from "./refusal.ts"
 
@@ -109,12 +111,17 @@ export class Organizations {
 
   /** One organization with its addresses (the default first, then exact, then patterns) and its members. */
   async get(id: string): Promise<{
-    organization: { id: string; name: string; createdAt: Date }
+    organization: { id: string; name: string; signature: string; createdAt: Date }
     addresses: AddressRow[]
     members: MemberRow[]
   }> {
     const [found] = await this.db
-      .select({ id: organization.id, name: organization.name, createdAt: organization.createdAt })
+      .select({
+        id: organization.id,
+        name: organization.name,
+        signature: organization.signature,
+        createdAt: organization.createdAt,
+      })
       .from(organization)
       .where(eq(organization.id, id))
     if (!found) throw new Refusal("organization_not_found", 404)
@@ -190,6 +197,32 @@ export class Organizations {
     } catch (error) {
       throw nameTaken(error) ?? error
     }
+  }
+
+  /**
+   * The signature at the end of the organization's replies (plan 3.1): plain text of at most SIGNATURE_MAX characters,
+   * kept as written (only line breaks normalized), empty for none.
+   */
+  async setSignature(id: string, text: unknown, acting: Acting): Promise<void> {
+    const signature = typeof text === "string" ? wellFormedText(text.replace(/\r\n?/g, "\n")).value.trimEnd() : null
+    if (signature === null || [...signature].length > SIGNATURE_MAX)
+      throw new Refusal("signature_invalid", 400, { max: SIGNATURE_MAX })
+    await this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ signature: organization.signature })
+        .from(organization)
+        .where(eq(organization.id, id))
+        .for("update")
+      if (!current) throw new Refusal("organization_not_found", 404)
+      if (current.signature === signature) return
+      await tx.update(organization).set({ signature }).where(eq(organization.id, id))
+      await writeAudit(tx, acting.actor, {
+        action: "organization.signature",
+        entityType: "organization",
+        entityId: id,
+        ipAddress: acting.ipAddress,
+      })
+    })
   }
 
   /**

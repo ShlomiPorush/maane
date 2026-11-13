@@ -139,6 +139,35 @@ const graphText = (valid: (text: string) => boolean) => z.string().refine((text)
 /** The longest application secret Maane stores; Entra's are about 40 characters. */
 export const GRAPH_SECRET_MAX = 1024
 
+/** How the failover server is reached: STARTTLS, required, or TLS from the first byte. Never plain. */
+export const SMTP_SECURITIES = ["starttls", "tls"] as const
+export type SmtpSecurity = (typeof SMTP_SECURITIES)[number]
+/** SMTP2GO's ports that speak TLS from the first byte; every other port gets STARTTLS, required. */
+export const SMTP_TLS_PORTS: readonly number[] = [465, 8465, 443]
+
+/** A host name or an IP address, as an SMTP server's address. */
+export function isHostName(text: string): boolean {
+  return (
+    text.length <= 253 &&
+    (new RegExp(`^${HOST_LABEL}(?:\\.${HOST_LABEL})*$`).test(text) || /^[0-9A-Fa-f:.]{2,45}$/.test(text))
+  )
+}
+
+/** An SMTP setting's text: empty while it is not set, else what `valid` accepts. */
+const smtpText = (valid: (text: string) => boolean) => z.string().refine((text) => text === "" || valid(text))
+const smtpPort = z.number().int().min(1).max(65535)
+/** An SMTP user name: one line of at most 255 characters, or empty. */
+const smtpUser = z
+  .string()
+  .max(255)
+  .regex(/^[^\r\n]*$/)
+/** A password or key of an outside service: one line, without white space at either end. */
+const secretText = z
+  .string()
+  .min(1)
+  .max(GRAPH_SECRET_MAX)
+  .regex(/^\S(?:[^\r\n]*\S)?$/)
+
 export const SETTINGS = {
   "general.defaultLocale": define({
     schema: z.enum(LOCALES),
@@ -240,6 +269,89 @@ export const SETTINGS = {
     defaultValue: "",
     secret: false,
     env: "MAANE_GRAPH_MAILBOX",
+    fromEnv: (text) => text.trim(),
+  }),
+  // Sending (plan 3.1): SMTP to SMTP2GO first, then the failover server, both with TLS required. SMTP2GO uses TLS from
+  // the first byte on its TLS ports (SMTP_TLS_PORTS) and STARTTLS, required, on every other; the failover names its own.
+  "smtp2go.host": define({
+    schema: smtpText(isHostName),
+    defaultValue: "mail.smtp2go.com",
+    secret: false,
+    env: "MAANE_SMTP2GO_HOST",
+    fromEnv: (text) => text.trim(),
+  }),
+  "smtp2go.port": define({
+    schema: smtpPort,
+    defaultValue: 587,
+    secret: false,
+    env: "MAANE_SMTP2GO_PORT",
+    fromEnv: (text) => Number(text),
+  }),
+  "smtp2go.user": define({
+    schema: smtpUser,
+    defaultValue: "",
+    secret: false,
+    env: "MAANE_SMTP2GO_USER",
+    fromEnv: (text) => text.trim(),
+  }),
+  /** The SMTP user's password: stored encrypted, never returned. A variable that reads as an example is refused. */
+  "smtp2go.password": define({
+    schema: secretText,
+    defaultValue: "",
+    secret: true,
+    env: "MAANE_SMTP2GO_PASSWORD",
+    fromEnv: (text) => text.trim(),
+  }),
+  /** SMTP2GO's API key, for delivery status only (phase 3.3): stored encrypted, never returned. */
+  "smtp2go.apiKey": define({
+    schema: secretText,
+    defaultValue: "",
+    secret: true,
+    env: "MAANE_SMTP2GO_API_KEY",
+    fromEnv: (text) => text.trim(),
+  }),
+  "failover.host": define({
+    schema: smtpText(isHostName),
+    defaultValue: "",
+    secret: false,
+    env: "MAANE_FAILOVER_HOST",
+    fromEnv: (text) => text.trim(),
+  }),
+  "failover.port": define({
+    schema: smtpPort,
+    defaultValue: 587,
+    secret: false,
+    env: "MAANE_FAILOVER_PORT",
+    fromEnv: (text) => Number(text),
+  }),
+  /** STARTTLS, required, or TLS from the first byte. Never plain. */
+  "failover.security": define({
+    schema: z.enum(SMTP_SECURITIES),
+    defaultValue: "starttls" as SmtpSecurity,
+    secret: false,
+    env: "MAANE_FAILOVER_SECURITY",
+    fromEnv: (text) => text.trim().toLowerCase(),
+  }),
+  "failover.user": define({
+    schema: smtpUser,
+    defaultValue: "",
+    secret: false,
+    env: "MAANE_FAILOVER_USER",
+    fromEnv: (text) => text.trim(),
+  }),
+  "failover.password": define({
+    schema: secretText,
+    defaultValue: "",
+    secret: true,
+    env: "MAANE_FAILOVER_PASSWORD",
+    fromEnv: (text) => text.trim(),
+  }),
+  /** The envelope sender of mail sent through the failover: an address in the owner's domain that reaches intake. */
+  "mail.bounceAddress": define({
+    schema: smtpText(isMailbox),
+    defaultValue: "",
+    secret: false,
+    env: "MAANE_BOUNCE_ADDRESS",
     fromEnv: (text) => text.trim(),
   }),
 } as const

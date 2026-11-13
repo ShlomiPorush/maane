@@ -2,25 +2,33 @@ import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { serveStatic } from "@hono/node-server/serve-static"
 import {
+  AGENT_NAME_MAX,
   GRAPH_PROBLEMS,
   type GraphTestView,
+  PROVIDERS,
   SCANNER_CHECKS,
   type ScannerStatusView,
   type ScannerTestView,
+  SMTP_PROBLEMS,
+  type SmtpTestView,
 } from "@maane/shared"
+import { APIError } from "better-auth/api"
 import { desc, eq, lt, sql } from "drizzle-orm"
 import { Hono } from "hono"
 import { z } from "zod"
+import { writeAudit } from "../audit.ts"
 import type { Auth } from "../auth/auth.ts"
 import type { SetupWindow } from "../auth/setup-window.ts"
 import type { Db } from "../db/client.ts"
 import { auditLog, authUser, scannerCheck } from "../db/schema.ts"
-import { GRAPH_TEST, type JobQueue, SCANNER_SELF_TEST } from "../jobs/queue.ts"
+import { GRAPH_TEST, type JobQueue, SCANNER_SELF_TEST, SMTP_TEST } from "../jobs/queue.ts"
 import { errorFacts, log } from "../log.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { Organizations } from "../organizations/service.ts"
+import { Replies } from "../replies/service.ts"
 import { type Settings, SettingsError } from "../settings/service.ts"
 import { organizationRoutes } from "./organizations.ts"
+import { replyRoutes } from "./replies.ts"
 import { type ApiEnv, type AppUser, clientIp } from "./request.ts"
 import { ticketRoutes } from "./tickets.ts"
 
@@ -61,6 +69,38 @@ const graphTestOutput = z.object({
   status: z.number().int().nullable(),
   mailbox: z.string(),
   checkedAt: z.string(),
+})
+
+/** The output the worker's SMTP connection test returns, read back with its shape checked. */
+const smtpTestOutput = z.object({
+  provider: z.enum(PROVIDERS),
+  ok: z.boolean(),
+  problem: z.enum(SMTP_PROBLEMS).nullable(),
+  code: z.string().nullable(),
+  response: z.string().nullable(),
+  checkedAt: z.string(),
+})
+
+/** Control characters and the characters that reorder text: a display name shows in the From line of every reply. */
+const hiddenPoint = (code: number) =>
+  code < 0x20 ||
+  (code >= 0x7f && code <= 0x9f) ||
+  code === 0x61c ||
+  code === 0x200e ||
+  code === 0x200f ||
+  (code >= 0x202a && code <= 0x202e) ||
+  (code >= 0x2066 && code <= 0x2069)
+const HIDDEN = { test: (text: string) => [...text].some((char) => hiddenPoint(char.codePointAt(0) ?? 0)) }
+
+/** An agent's display name (plan 3.1): trimmed, 1 to AGENT_NAME_MAX characters, nothing hidden. */
+const AgentName = z.object({
+  name: z
+    .string()
+    .transform((text) => text.trim())
+    .refine((text) => {
+      const length = [...text].length
+      return length >= 1 && length <= AGENT_NAME_MAX && !HIDDEN.test(text) && text.isWellFormed()
+    }),
 })
 
 /** pg-boss's job states, as the Settings page shows a connection test. */
@@ -259,6 +299,57 @@ export function createApp(ctx: AppContext) {
     return c.json(view)
   })
 
+  // The SMTP connection tests (plan 3.1): the worker connects and logs in to one provider with the saved settings
+  // (nodemailer's transporter.verify()) and reports success or what failed. It sends nothing.
+  api.post("/settings/smtp/:provider/test", adminOnly, async (c) => {
+    const provider = c.req.param("provider")
+    if (!(PROVIDERS as readonly string[]).includes(provider)) return c.json({ error: "not_found" }, 404)
+    const id = await ctx.jobs.send(SMTP_TEST, { provider })
+    return c.json({ id }, 202)
+  })
+
+  api.get("/settings/smtp/test/:id", adminOnly, async (c) => {
+    const id = c.req.param("id")
+    const job = JOB_ID.test(id) ? await ctx.jobs.job(SMTP_TEST, id) : null
+    if (!job) return c.json({ error: "not_found" }, 404)
+    const state = TEST_STATES[job.state] ?? "failed"
+    const output = state === "done" ? smtpTestOutput.safeParse(job.output) : null
+    const view: SmtpTestView = {
+      state: output && !output.success ? "failed" : state,
+      result: output?.success ? output.data : null,
+    }
+    return c.json(view)
+  })
+
+  // An agent's display name, which every reply's From line carries (plan 3.1). Better Auth's documented server API
+  // updates it, with the admin's own session and the name only; its HTTP route /admin/update-user stays closed.
+  api.put("/admin/users/:id/name", adminOnly, async (c) => {
+    const userId = c.req.param("id")
+    const parsed = AgentName.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success || userId.length === 0 || userId.length > 200) return c.json({ error: "name_invalid" }, 400)
+    try {
+      await ctx.auth().api.adminUpdateUser({
+        body: { userId, data: { name: parsed.data.name } },
+        headers: cookieOnly(c.req.raw.headers),
+      })
+    } catch (error) {
+      if (error instanceof APIError) {
+        if (error.statusCode === 404) return c.json({ error: "not_found" }, 404)
+        if (error.statusCode === 403 || error.statusCode === 401) return c.json({ error: "forbidden" }, 403)
+        return c.json({ error: "name_invalid" }, 400)
+      }
+      throw error
+    }
+    await writeAudit(ctx.db, c.get("actor"), {
+      action: "user.rename",
+      entityType: "user",
+      entityId: userId,
+      details: { name: parsed.data.name },
+      ipAddress: clientIp(c.req.raw),
+    })
+    return c.json({ ok: true })
+  })
+
   api.get("/audit", adminOnly, async (c) => {
     const before = Number(c.req.query("before") ?? 0)
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 50) || 50, 1), 200)
@@ -272,7 +363,9 @@ export function createApp(ctx: AppContext) {
   })
 
   api.route("/admin/organizations", organizationRoutes(new Organizations(ctx.db)))
-  api.route("/", ticketRoutes(ctx.db, ctx.filesDir))
+  const replies = new Replies(ctx.db, ctx.settings, ctx.jobs, ctx.filesDir)
+  api.route("/", ticketRoutes(ctx.db, ctx.filesDir, replies))
+  api.route("/", replyRoutes(ctx.db, ctx.settings, replies))
 
   app.route("/api/v1", api)
   app.all("/api/*", (c) => c.json({ error: "not_found" }, 404))

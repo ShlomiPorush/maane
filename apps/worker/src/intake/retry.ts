@@ -62,7 +62,7 @@ export class WaitingFiles {
 
   async run(limit = MAX_RETRIES_PER_RUN): Promise<RetrySummary> {
     const summary: RetrySummary = { messages: 0, decided: 0, unavailable: 0, stillWaiting: 0 }
-    const waiting = await this.#db
+    const rows = await this.#db
       .select({ id: message.id, graphId: message.graphId, mailbox: intakeSource.mailbox, content: message.content })
       .from(message)
       .innerJoin(intakeSource, eq(intakeSource.id, message.sourceId))
@@ -81,6 +81,8 @@ export class WaitingFiles {
       // Tried longest ago first (never tried first), then the oldest mail.
       .orderBy(sql`${message.retryAt} asc nulls first`, asc(message.receivedAt))
       .limit(limit)
+    // Only intake's own messages have a source and a Graph ID (the inner join leaves out replies and notes).
+    const waiting = rows.flatMap((row) => (row.graphId === null ? [] : [{ ...row, graphId: row.graphId }]))
     if (waiting.length === 0) return summary
     const config = await graphConfig(this.#settings)
     if (!config) return { ...summary, stillWaiting: waiting.length }
@@ -214,8 +216,8 @@ export class WaitingFiles {
     const parts = await this.#db.select().from(messagePart).where(eq(messagePart.messageId, messageId))
     const graph = (current.graph ?? {}) as Partial<GraphMeta> & { from?: { address?: string | null } | null }
     const content = contentOf(parsed, {
-      id: current.graphId,
-      folder: current.folder,
+      id: current.graphId ?? "",
+      folder: current.folder ?? "inbox",
       receivedDateTime: graph.receivedDateTime ?? null,
       internetMessageId: graph.internetMessageId ?? null,
       subject: null,

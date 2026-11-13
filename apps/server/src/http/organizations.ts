@@ -13,6 +13,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const NameBody = z.object({ name: z.string() })
 const MemberBody = z.object({ userId: z.string() })
+const SignatureBody = z.object({ signature: z.string() })
 const AddressBody = z.object({ kind: z.enum(ADDRESS_KINDS), value: z.string() })
 
 type Handler = (c: Context<ApiEnv>) => Promise<Response>
@@ -81,6 +82,17 @@ export function organizationRoutes(organizations: Organizations): Hono<ApiEnv> {
       const id = idParam(c, "id", "organization_not_found")
       const { name } = await body(c, NameBody)
       await organizations.rename(id, name, acting(c))
+      return c.json({ ok: true })
+    }),
+  )
+
+  // The signature of the organization's replies (plan 3.1).
+  routes.put(
+    "/:id/signature",
+    refusals(async (c) => {
+      const id = idParam(c, "id", "organization_not_found")
+      const { signature } = await body(c, SignatureBody)
+      await organizations.setSignature(id, signature, acting(c))
       return c.json({ ok: true })
     }),
   )

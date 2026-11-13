@@ -864,5 +864,8 @@
       "loadingMore": "Loading more agents",
       "moreFailed": "Could not load more agents."
     }
+  },
+  "mail": {
+    "reference": "Ref"
   }
 }
