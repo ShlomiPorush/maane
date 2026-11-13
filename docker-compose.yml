@@ -1,7 +1,8 @@
 # Production deployment. Runs the image the release workflow publishes to GHCR and ClamAV's published image; nothing is
 # built here. Behind Traefik on the external "traefik" network, so no port is published. Three files sit next to this
 # one, as docs/deployment.md describes; none is ever committed:
-#   .env          VERSION and DOMAIN, the only values Compose interpolates; neither is a secret (contract: .env.example).
+#   .env          VERSION, DOMAIN, LINK_DOMAIN, and GEOIP_DIR, the only values Compose interpolates; none is a secret
+#                 (contract: .env.example).
 #   postgres.env  PostgreSQL's own variables, read only by postgres (contract: docker/env/postgres.env.example).
 #   app.env       the server's and the worker's secrets and overrides (contract: docker/env/app.env.example).
 # The secrets reach the containers only through env_file, so `docker compose config --no-env-resolution` shows none.
@@ -36,6 +37,14 @@ x-app: &app
 services:
   server:
     <<: *app
+    environment:
+      MAANE_PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in .env}
+      # The GeoLite2 City and ASN files that locate a click (plan 3.4), read only; each file is optional.
+      MAANE_GEOIP_DIR: /geoip
+    volumes:
+      - ./data:/data
+      # Your updater's folder of GeoLite2-City.mmdb and GeoLite2-ASN.mmdb (GEOIP_DIR in .env), never written by Maane.
+      - ${GEOIP_DIR:-./geoip}:/geoip:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,6 +61,12 @@ services:
       - "traefik.http.routers.maane.tls=true"
       - "traefik.http.routers.maane.service=maane"
       - "traefik.http.routers.maane.middlewares=default@file"
+      # Tracked links and download links on the link domain (LINK_DOMAIN in .env, by default DOMAIN): only /l/ and /f/.
+      - "traefik.http.routers.maane-links.entrypoints=https"
+      - "traefik.http.routers.maane-links.rule=Host(`${LINK_DOMAIN:-${DOMAIN}}`) && (PathPrefix(`/l/`) || PathPrefix(`/f/`))"
+      - "traefik.http.routers.maane-links.tls=true"
+      - "traefik.http.routers.maane-links.service=maane"
+      - "traefik.http.routers.maane-links.middlewares=default@file"
     healthcheck:
       test: ["CMD", "node", "dist/server/healthcheck.js"]
       interval: 10s
