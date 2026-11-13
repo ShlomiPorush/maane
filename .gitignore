@@ -32,3 +32,6 @@ test-results/
 *.log
 .DS_Store
 Thumbs.db
+
+# The local project status map (an agent tool's output, never public)
+.project-map/
