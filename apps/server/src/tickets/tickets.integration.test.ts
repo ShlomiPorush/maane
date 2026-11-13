@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { PART_STATUSES, REFERENCE_ALPHABET, STORED_STATUSES, userEmail } from "@maane/shared"
 import { parse as parseDisposition } from "content-disposition"
+import { eq } from "drizzle-orm"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   intakeConversation,
@@ -467,6 +468,31 @@ describe("message bodies", () => {
 
     const view = (await admin.call("GET", `/api/v1/tickets/${t.number}`)).json
     expect(view.messages[0]).toMatchObject({ id: m, body: "html", remoteImages: 1 })
+  })
+
+  it("sets each paragraph's direction on the server: an image alone in Hebrew mail is right to left (plan 3.2)", async () => {
+    const admin = await firstAdmin()
+    const t = await newTicket(await newOrganization("Alpha"))
+    const html = sanitizeMailHtml(
+      `<p>${SHALOM}</p><p><img src="cid:logo@example.com" alt="logo"></p><p dir="auto">An English line.</p>`,
+    )
+    const m = await newMessage(t.id, { htmlBody: html, textBody: null })
+    const logo = png(8, 8)
+    await pngPart(m, {
+      kind: "inline",
+      contentId: "logo@example.com",
+      storedSha256: await storeFile(logo, "image/png"),
+    })
+    const body = await (await admin.get(`/api/v1/messages/${m}/body`)).text()
+    expect(body).toContain('<body dir="rtl">')
+    expect(body).toContain(`<p dir="rtl">${SHALOM}</p>`)
+    expect(body).toContain(`<p dir="rtl"><img alt="logo" src="data:image/png;base64,${logo.toString("base64")}" /></p>`)
+    expect(body).toContain('<p dir="ltr">An English line.</p>')
+    expect(body).not.toContain('dir="auto"')
+    expect(body).not.toContain("unicode-bidi")
+    // Stored content is not changed: it is a render pass.
+    const [stored] = await db().select({ htmlBody: message.htmlBody }).from(message).where(eq(message.id, m))
+    expect(stored?.htmlBody).toBe(html)
   })
 
   it("serves links that open in a new tab cut off from Maane, and no link of another scheme", async () => {

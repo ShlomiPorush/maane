@@ -1,13 +1,23 @@
 import { randomUUID } from "node:crypto"
 import { SYSTEM } from "@maane/server/audit"
-import { auditLog, message, outbox, outboxRecipient, supportAddress, upload } from "@maane/server/db/schema"
+import {
+  auditLog,
+  message,
+  messagePart,
+  outbox,
+  outboxRecipient,
+  storedFile,
+  supportAddress,
+  upload,
+} from "@maane/server/db/schema"
 import { type JobQueue, openJobQueue, SEND_REPLY, UPLOAD_SCAN } from "@maane/server/jobs/queue"
 import { Organizations } from "@maane/server/organizations/service"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
 import { createTestApp } from "@maane/server/testing/app"
 import { nextIp, TestBrowser, testPassword } from "@maane/server/testing/browser"
-import { MESSAGES, type SettingKey, type TicketView, userEmail } from "@maane/shared"
+import { pdf, png } from "@maane/server/testing/files"
+import { MESSAGE_MAX_BYTES, MESSAGES, type SettingKey, type TicketView, userEmail } from "@maane/shared"
 import { and, eq } from "drizzle-orm"
 import { simpleParser } from "mailparser"
 import { PgBoss } from "pg-boss"
@@ -214,13 +224,20 @@ describe("a reply, end to end", () => {
     expect(parsed.subject).toBe(`Re: A question [#${ticket.number}]`)
     expect(parsed.inReplyTo).toBe(`<${ticket.messageId}>`)
     expect(parsed.from?.value).toEqual([{ address: SUPPORT, name: "first.admin (Example Support)" }])
-    const reference = `${MESSAGES.he.mail.reference}: ${ticket.referenceCode}`
-    expect(parsed.text?.startsWith(reference)).toBe(true)
+    // The header line, then the reference code isolated left to right (U+2066 ... U+2069).
+    const [header, reference] = (parsed.text ?? "").split(/\r?\n/)
+    expect(header).toBe(MESSAGES.he.mail.header)
+    expect(reference).toBe(
+      `${MESSAGES.he.mail.reference}: ${fromCodePoints(0x2066)}${ticket.referenceCode}${fromCodePoints(0x2069)}`,
+    )
     expect(parsed.text).toContain(`${SHALOM}, ${TODA}`)
     expect(parsed.text).toContain("The English paragraph.")
     expect(parsed.html).toContain(`<span dir="ltr">${ticket.referenceCode}</span>`)
-    expect(parsed.html).toContain('<p dir="auto">The English paragraph.</p>')
-    expect(parsed.html).toMatch(/<html dir="rtl">/)
+    // The direction of each paragraph, set by the server.
+    expect(parsed.html).toContain(`<p dir="rtl">${SHALOM}, ${TODA}</p>`)
+    expect(parsed.html).toContain('<p dir="ltr">The English paragraph.</p>')
+    expect(parsed.html).not.toContain('dir="auto"')
+    expect(parsed.html).toMatch(/<html dir="rtl" lang="he">/)
     expect(parsed.attachments.map((a) => [a.filename, a.content.toString()])).toEqual([
       ["notes.txt", "The notes of the meeting.\n"],
     ])
@@ -244,6 +261,118 @@ describe("a reply, end to end", () => {
     expect(after.ticket.status).toBe("open")
     const [recipient] = await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id))
     expect(recipient?.response).toContain(`OK id=${sent.queueId}`)
+  })
+
+  it("quotes the ticket's public history in the layout: newest first, never a note or a reply nobody accepted", async () => {
+    const admin = await firstAdmin()
+    // A Hebrew customer message with a large inline screenshot.
+    const graphId = h.graph.add(
+      mime({
+        messageId: `${randomUUID()}@mail.example.com`,
+        subject: "A screenshot",
+        from: "Dana Customer <dana@example.com>",
+        to: SUPPORT,
+        // The screenshot named percent-encoded (RFC 2392), as some clients write it; the photo over one image's limit.
+        html: {
+          content: `<p>${SHALOM}</p><p><img src="cid:shot%40mail.example.com" alt="shot"></p><p><img src="cid:big@mail.example.com"></p>`,
+        },
+        attachments: [
+          {
+            fileName: "shot.png",
+            contentType: "image/png",
+            content: png(2400, 600),
+            inline: true,
+            contentId: "shot@mail.example.com",
+          },
+          {
+            fileName: "big.png",
+            contentType: "image/png",
+            content: png(64, 64, [200, 40, 40]),
+            inline: true,
+            contentId: "big@mail.example.com",
+          },
+          { fileName: "invoice.pdf", contentType: "application/pdf", content: pdf() },
+        ],
+      }),
+    )
+    await h.round()
+    const found = await h.ticketOf(graphId)
+    if (!found) throw new Error("no ticket")
+    // The photo as if it were 6 MB: decided from its stored size, shown by name, never read.
+    const [big] = await h.database.db
+      .select({ sha256: messagePart.storedSha256 })
+      .from(messagePart)
+      .where(eq(messagePart.contentId, "big@mail.example.com"))
+    await h.database.db
+      .update(storedFile)
+      .set({ size: 6 * 1024 * 1024 })
+      .where(eq(storedFile.sha256, big?.sha256 ?? ""))
+    const post = async (values: Record<string, unknown>) => {
+      const written = await admin.call("POST", `/api/v1/tickets/${found.number}/messages`, reply(values))
+      expect(written.status, JSON.stringify(written.json)).toBe(201)
+      return written.json.id as string
+    }
+    await post({ kind: "note", html: "<p>An internal note for the team.</p>" })
+    const refused = await post({
+      to: [{ address: "refuse.nobody@example.com", name: null }],
+      html: "<p>Nobody got this.</p>",
+    })
+    expect(await sender({ "failover.host": "" }).send(refused)).toBe("failed")
+    expect(await sender().send(await post({ html: "<p>The first answer.</p>" }))).toBe("accepted")
+    expect(await sender().send(await post({ html: `<p dir="auto">${TODA}</p>` }))).toBe("accepted")
+
+    const sent = smtp2go.received.at(-1)
+    if (!sent) throw new Error("nothing reached the stand-in")
+    const parsed = await simpleParser(sent.raw, { skipImageLinks: true })
+    const html = parsed.html || ""
+    const quote = html.indexOf('<blockquote type="cite"')
+    expect(html.indexOf(found.referenceCode)).toBeLessThan(html.indexOf('class="email-avatar"'))
+    expect(html.indexOf(`<p dir="rtl">${TODA}</p>`)).toBeLessThan(quote)
+    // Newest first: the accepted reply, then the customer's message.
+    expect(html.indexOf("The first answer.")).toBeGreaterThan(quote)
+    expect(html.indexOf(`<p dir="rtl">${SHALOM}</p>`)).toBeGreaterThan(html.indexOf("The first answer."))
+    expect(html).not.toContain("An internal note")
+    expect(html).not.toContain("Nobody got this.")
+    expect(html).not.toContain('dir="auto"')
+    expect(html).toContain('<span dir="ltr">invoice.pdf</span>')
+    expect(html).toContain("<span>[big.png]</span>")
+    // The screenshot, downscaled and embedded, shown no wider than the history's column; an image alone stays right to left.
+    const image =
+      /<p dir="rtl"><img alt="shot" src="cid:([^"]+)" width="586" height="147" style="width:586px;max-width:100%;height:auto;border:0" \/><\/p>/.exec(
+        html,
+      )
+    expect(image, html).not.toBeNull()
+    const embedded = parsed.attachments.find((file) => file.cid === image?.[1])
+    expect(embedded).toMatchObject({ contentType: "image/png", contentDisposition: "inline" })
+    expect(parsed.attachments.map((file) => file.filename)).toEqual(["shot.png"])
+    const text = parsed.text ?? ""
+    expect(text).toContain("> first.admin (Example Support) | ")
+    expect(text).toContain("> The first answer.")
+    expect(text).not.toContain("internal note")
+  })
+
+  it("refuses a reply whose own files are larger than the provider takes, before anything is written", async () => {
+    const admin = await firstAdmin()
+    const graphId = h.graph.add(
+      mime({
+        subject: "A large file",
+        text: { content: "See the file." },
+        attachments: [{ fileName: "video.bin", contentType: "application/octet-stream", content: Buffer.from("x") }],
+      }),
+    )
+    await h.round()
+    const found = await h.ticketOf(graphId)
+    if (!found) throw new Error("no ticket")
+    const part = (await view(admin, found.number)).messages[0]?.attachments[0]
+    if (!part) throw new Error("no part")
+    // The stored file as the provider would see it: larger than its limit once encoded. No byte is read for this.
+    await h.database.db.update(storedFile).set({ size: MESSAGE_MAX_BYTES })
+    const before = (await h.database.db.select({ id: message.id }).from(message)).length
+    const answer = await admin.call("POST", `/api/v1/tickets/${found.number}/messages`, reply({ parts: [part.id] }))
+    expect(answer.status).toBe(400)
+    expect(answer.json).toEqual({ error: "message_too_large", max: MESSAGE_MAX_BYTES })
+    expect((await h.database.db.select({ id: message.id }).from(message)).length).toBe(before)
+    expect(await boss.fetch(SEND_REPLY)).toEqual([])
   })
 
   it("writes one message for one click, however often the request is repeated", async () => {

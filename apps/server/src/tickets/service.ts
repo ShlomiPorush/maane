@@ -47,6 +47,7 @@ import {
   ticketParticipant,
 } from "../db/schema.ts"
 import { storedFilePath } from "../files/paths.ts"
+import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
 import { renderMailHtml } from "../mail/html.ts"
 import type { OrganizationScope } from "../organizations/scope.ts"
 
@@ -453,7 +454,7 @@ export class Tickets {
     scope: OrganizationScope,
     messageId: string,
     remoteImages: boolean,
-  ): Promise<{ kind: "html"; html: string; text: string | null } | { kind: "text"; text: string } | null> {
+  ): Promise<{ kind: "html"; html: string; dir: Direction } | { kind: "text"; text: string } | null> {
     if (!UUID.test(messageId)) return null
     const [row] = await this.db
       .select({ htmlBody: message.htmlBody, textBody: message.textBody })
@@ -489,8 +490,11 @@ export class Tickets {
       total += bytes.length
       urls.set(part.contentId, `data:${part.detectedType};base64,${bytes.toString("base64")}`)
     }
-    const rendered = renderMailHtml(row.htmlBody, { remoteImages, inline: (id) => urls.get(id) ?? null })
-    return { kind: "html", html: rendered.html, text }
+    // The direction of each paragraph first, then the allow list once more, last.
+    const dir = messageDirection(text, row.htmlBody, "ltr")
+    const directed = directBlocks(row.htmlBody, dir)
+    const rendered = renderMailHtml(directed, { remoteImages, inline: (id) => urls.get(id) ?? null })
+    return { kind: "html", html: rendered.html, dir }
   }
 
   /** An attachment or inline part of a ticket's message in the scope, or null. */

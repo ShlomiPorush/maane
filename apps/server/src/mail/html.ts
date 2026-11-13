@@ -10,6 +10,7 @@
 // images, as an https URL. Every other image is removed with its tag, so the document never asks for anything remote
 // until the agent allows it; the route's Content Security Policy blocks the rest.
 
+import { DomUtils, parseDocument } from "htmlparser2"
 import sanitizeHtml from "sanitize-html"
 
 /** The schemes a link or an image may use. Everything else, `data:` first, is dropped with its attribute. */
@@ -181,4 +182,62 @@ export function renderMailHtml(stored: string, options: RenderOptions): Rendered
     exclusiveFilter: (frame) => frame.tag === "img" && !frame.attribs.src,
   })
   return { html, remoteImages }
+}
+
+/** An image of the email: its new content ID and the size it is shown at, or only its name. */
+export type EmailImage = { cid: string; width: number; height: number } | { name: string }
+
+/**
+ * Stored (sanitized) HTML made ready for a customer's email (plan 3.2), through the same allow list: an image is kept
+ * only as an embedded part (`cid:`) that the email carries, with its size as attributes and as a style no wider than
+ * the column (Outlook for Windows ignores max-width), or shows only its name; every other image (remote ones too) is
+ * removed with its tag. A link keeps an https, http, or mailto address and its underline, inline with !important so
+ * the rule that gives the links a mail client adds the text's look leaves it alone (`html-email`).
+ */
+export function renderEmailHtml(stored: string, image: (contentId: string) => EmailImage | null): string {
+  return sanitizeHtml(stored, {
+    ...OPTIONS,
+    allowedSchemesByTag: { img: ["cid"], a: [...LINK_SCHEMES] },
+    transformTags: {
+      img: (tagName, attribs) => {
+        const { src, width: _width, height: _height, style: _style, ...rest } = attribs
+        const id = src !== undefined && schemeOf(src) === "cid" ? contentIdOf(src) : null
+        const found = id === null ? null : image(id)
+        // An image the email does not carry becomes a tag the allow list does not know, so it goes (the documented
+        // discard of disallowed tags); an image in only its name becomes that text.
+        if (found === null) return { tagName: "maane-dropped", attribs: {} }
+        if ("name" in found) return { tagName: "span", attribs: {}, text: `[${found.name}]` }
+        return {
+          tagName,
+          attribs: {
+            ...rest,
+            src: `cid:${found.cid}`,
+            width: String(found.width),
+            height: String(found.height),
+            style: `width:${found.width}px;max-width:100%;height:auto;border:0`,
+          },
+        }
+      },
+      a: (tagName, attribs) => {
+        const { href, ...rest } = attribs
+        const scheme = href === undefined ? null : schemeOf(href)
+        if (href === undefined || scheme === null || !LINK_SCHEMES.has(scheme)) return { tagName, attribs: rest }
+        return { tagName, attribs: { ...rest, href, style: "text-decoration:underline !important" } }
+      },
+    },
+  })
+}
+
+/**
+ * The content IDs the images of stored HTML refer to by `cid:`, decoded as the render passes decode them (RFC 2392:
+ * `cid:shot%40example.com` names the part `<shot@example.com>`).
+ */
+export function contentIdsIn(html: string): Set<string> {
+  const ids = new Set<string>()
+  for (const image of DomUtils.getElementsByTagName("img", parseDocument(html).children)) {
+    const src = image.attribs.src
+    const id = src !== undefined && schemeOf(src) === "cid" ? contentIdOf(src) : null
+    if (id) ids.add(id)
+  }
+  return ids
 }

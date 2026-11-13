@@ -7,7 +7,7 @@
     "./*": "./src/*.ts"
   },
   "scripts": {
-    "build": "esbuild src/index.ts src/healthcheck.ts --bundle --platform=node --target=node26 --format=esm --packages=bundle --outdir=dist/server --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "build": "esbuild src/index.ts src/healthcheck.ts --bundle --platform=node --target=node26 --format=esm --packages=bundle --external:sharp --outdir=dist/server --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
@@ -22,17 +22,21 @@
     "drizzle-orm": "0.45.4",
     "hono": "4.13.17",
     "html-to-text": "10.0.1",
+    "htmlparser2": "12.0.0",
     "nodemailer": "10.3.1",
     "pg": "8.23.1",
     "pg-boss": "12.38.1",
     "sanitize-html": "2.18.1",
+    "sharp": "0.35.5",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/html-to-text": "9.0.4",
+    "@types/mailparser": "3.9.0",
     "@types/pg": "8.23.1",
     "@types/sanitize-html": "2.16.2",
     "drizzle-kit": "0.31.11",
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "mailparser": "3.14.1"
   }
 }

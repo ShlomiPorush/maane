@@ -81,17 +81,13 @@ describe("links in a served body", () => {
 })
 
 describe("body documents", () => {
-  it("makes Hebrew HTML without dir right to left, from the message's first strong character", () => {
-    const document = htmlDocument(`<p>${SHALOM} hello</p>`, null)
+  it("frames directed HTML in the message's direction, with no CSS that guesses directions", () => {
+    const document = htmlDocument(`<p dir="rtl">${SHALOM} hello</p>`, "rtl")
+    expect(document).toContain('<html dir="rtl">')
     expect(document).toContain('<body dir="rtl">')
-    expect(htmlDocument("<p>hello</p>", `${SHALOM}`)).toContain('<body dir="rtl">')
-    expect(htmlDocument("<p>hello</p>", null)).toContain('<body dir="ltr">')
-    // Each block without the sender's direction takes its own: an English paragraph inside a Hebrew message.
-    expect(document).toContain(
-      ":not([dir],[style*=direction]):not(body [dir] *,body [style*=direction] *){unicode-bidi:plaintext}",
-    )
+    expect(htmlDocument("<p>hello</p>", "ltr")).toContain('<body dir="ltr">')
+    expect(document).not.toContain("unicode-bidi")
     expect(document).not.toContain("text-align")
-    expect(textDocument("hello")).not.toContain("unicode-bidi:plaintext")
   })
 
   it("writes text escaped, line by line, each line with its own direction", () => {
@@ -99,7 +95,8 @@ describe("body documents", () => {
     expect(document).toContain('<body dir="rtl">')
     expect(document).toContain(`<div dir="rtl">${SHALOM}</div>`)
     expect(document).toContain('<div dir="ltr">hello &lt;b&gt;&amp;&lt;/b&gt;</div>')
-    expect(document).toContain("<div></div><div>2026-11-12</div>")
+    // A line without a letter takes the document's direction.
+    expect(document).toContain('<div dir="rtl"></div><div dir="rtl">2026-11-12</div>')
     expect(document).not.toContain("<b>")
   })
 })

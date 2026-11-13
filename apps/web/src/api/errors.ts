@@ -3,7 +3,14 @@
 // map here, through one table, to a locale key: short, truthful, and saying what to do next. The server's own
 // English message is never shown. A code the table does not know falls back by its HTTP status.
 
-import { ORGANIZATION_NAME_MAX, PASSWORD_MAX, PASSWORD_MIN, USERNAME_MAX, USERNAME_MIN } from "@maane/shared"
+import {
+  MESSAGE_MAX_MB,
+  ORGANIZATION_NAME_MAX,
+  PASSWORD_MAX,
+  PASSWORD_MIN,
+  USERNAME_MAX,
+  USERNAME_MIN,
+} from "@maane/shared"
 import { AuthCallError, type AuthError } from "./auth.ts"
 import { ApiError } from "./client.ts"
 
@@ -42,6 +49,8 @@ export const ERROR_TEXT: Record<string, string> = {
   recipients_too_many: "errors.code.recipientsTooMany",
   reply_empty: "errors.code.replyEmpty",
   attachment_invalid: "errors.code.attachmentInvalid",
+  message_too_large: "errors.code.messageTooLarge",
+  reply_too_long: "errors.code.replyTooLong",
   file_too_large: "errors.code.fileTooLarge",
   reply_not_retryable: "errors.code.replyNotRetryable",
   reply_not_unknown: "errors.code.replyNotUnknown",
@@ -105,10 +114,11 @@ export const ADDRESS_EXAMPLES = {
   patternExample: "support-*@example.com",
 }
 
-/** The numbers and examples some sentences name (password, username, and organization name lengths). */
+/** The numbers and examples some sentences name (lengths, and the largest message the mail provider takes). */
 export const ERROR_VARS = {
   ...ADDRESS_EXAMPLES,
   nameMax: ORGANIZATION_NAME_MAX,
+  messageMaxMb: MESSAGE_MAX_MB,
   passwordMin: PASSWORD_MIN,
   passwordMax: PASSWORD_MAX,
   usernameMin: USERNAME_MIN,

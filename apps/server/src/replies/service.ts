@@ -8,7 +8,7 @@
 // attached, and the server reads their bytes itself. The From address must belong to the ticket's organization, and
 // the send point refuses a reply while intake listens (the worker checks both again when it sends).
 
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import {
   ADDRESS_MAX,
@@ -16,8 +16,8 @@ import {
   ATTACHMENTS_MAX,
   type ComposeView,
   type MailAddress,
+  MESSAGE_MAX_BYTES,
   MESSAGES,
-  matchSupportAddress,
   outboxStateOf,
   parseExactAddress,
   RECIPIENTS_MAX,
@@ -25,7 +25,7 @@ import {
   STORED_STATUSES,
   type UploadView,
 } from "@maane/shared"
-import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
+import { and, asc, desc, eq, exists, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import { z } from "zod"
 import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
@@ -37,19 +37,31 @@ import {
   outbox,
   outboxRecipient,
   storedFile,
-  supportAddress,
   ticket,
   ticketParticipant,
   upload,
 } from "../db/schema.ts"
 import { storedFilePath } from "../files/paths.ts"
 import { type JobQueue, SEND_REPLY, transactionWithJobs, UPLOAD_SCAN } from "../jobs/queue.ts"
-import { sanitizeMailHtml } from "../mail/html.ts"
+import { contentIdsIn, sanitizeMailHtml } from "../mail/html.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
 import type { Settings } from "../settings/service.ts"
 import { wellFormedText } from "../text.ts"
-import { buildReply, htmlToText, newMessageId, type ReplyAttachment, replySubject, storedBody } from "./mail.ts"
+import { EMBEDDABLE_TYPES, imagesToRead, prepareImage } from "./images.ts"
+import type { Entry, EntryImage } from "./layout.ts"
+import {
+  buildReply,
+  GMAIL_HTML_BUDGET,
+  htmlToText,
+  MessageTooLarge,
+  newMessageId,
+  type ReplyAttachment,
+  ReplyTooLong,
+  replySubject,
+  storedBody,
+} from "./mail.ts"
+import { belongsTo, supportRules } from "./rules.ts"
 
 /** The user a request acts for. */
 export type ReplyUser = { id: string; role: string; actor: Actor; ipAddress: string | null }
@@ -71,26 +83,6 @@ export type ReplyBodyInput = z.infer<typeof ReplyBody>
 
 /** The longest file name an upload keeps, in characters. */
 export const UPLOAD_NAME_MAX = 200
-
-type Rule = { kind: "exact" | "pattern"; value: string; isDefault: boolean; organizationId: string }
-
-/** Whether an address belongs to an organization by the shared matcher (exact first, then patterns). */
-export function belongsTo(address: string, rules: readonly Rule[], organizationId: string): boolean {
-  const match = matchSupportAddress(address, rules)
-  return match !== null && match.rule.organizationId === organizationId
-}
-
-/** Every support address, as the shared matcher reads them. */
-export async function supportRules(db: Pick<Db, "select">): Promise<Rule[]> {
-  return (await db
-    .select({
-      kind: supportAddress.kind,
-      value: supportAddress.value,
-      isDefault: supportAddress.isDefault,
-      organizationId: supportAddress.organizationId,
-    })
-    .from(supportAddress)) as Rule[]
-}
 
 /** A display name for a header or a list: one line, well formed, trimmed, bounded. */
 function cleanName(name: string | null): string | null {
@@ -128,6 +120,13 @@ function recipients(to: MailAddress[], cc: MailAddress[]): { to: MailAddress[]; 
   if (parsedTo.length + parsedCc.length > RECIPIENTS_MAX) throw new Refusal("recipients_too_many", 400)
   return { to: parsedTo, cc: parsedCc }
 }
+
+/** The bytes files take in a message as base64 (four characters for every three bytes), without line breaks. */
+export const encodedSize = (files: readonly { size: number }[]) =>
+  files.reduce((sum, file) => sum + Math.ceil(file.size / 3) * 4, 0)
+
+/** The statuses of a stored part (STORED_STATUSES): a file the history names. */
+const STORED = new Set<string>(STORED_STATUSES)
 
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex")
 
@@ -240,10 +239,20 @@ export class Replies {
       const messageId = newMessageId(from)
       const subject = replySubject(t.subject, t.number)
       const references = parent ? [...parent.references.slice(-20), parent.id] : []
+      // The reply's own files alone, as base64, already over the provider's limit: refused at once, before any byte is
+      // read or any message built (plan 3.2). The built message is checked again below.
+      if (encodedSize(files) > MESSAGE_MAX_BYTES)
+        throw new Refusal("message_too_large", 400, { max: MESSAGE_MAX_BYTES })
       const attachments: ReplyAttachment[] = []
       for (const file of files) attachments.push({ ...file, content: await this.#bytes(file.sha256) })
+      const authorName = await this.#agentName(user.id)
+      // What the history's images may take: the provider's limit as raw bytes (base64 adds a third), less the reply's
+      // own files and a margin for the rest of the message.
+      const imageBudget =
+        Math.floor((MESSAGE_MAX_BYTES * 3) / 4) - files.reduce((sum, file) => sum + file.size, 0) - 1_000_000
+      const history = await this.#history(t.id, found.organizationName, from, Math.max(0, imageBudget))
       const mime = await buildReply({
-        from: { address: from, name: `${await this.#agentName(user.id)} (${found.organizationName})` },
+        from: { address: from, name: `${authorName} (${found.organizationName})` },
         to: people.to,
         cc: people.cc,
         subject,
@@ -251,13 +260,21 @@ export class Replies {
         inReplyTo: parent?.id ?? null,
         references,
         date: now,
-        referenceLabel: MESSAGES[locale].mail.reference,
+        words: MESSAGES[locale].mail,
+        lang: locale,
         referenceCode: t.referenceCode,
-        html,
-        text,
-        signature: found.signature,
+        authorName,
+        // The reply as the ticket view keeps it: the agent's text and the organization's signature.
+        html: body.html,
+        text: body.text,
         fallbackDirection: locale === "he" ? "rtl" : "ltr",
         attachments,
+        history,
+      }).catch((error: unknown) => {
+        // Refused before anything is written or queued (plan 3.2).
+        if (error instanceof MessageTooLarge) throw new Refusal("message_too_large", 400, { max: MESSAGE_MAX_BYTES })
+        if (error instanceof ReplyTooLong) throw new Refusal("reply_too_long", 400, { max: GMAIL_HTML_BUDGET })
+        throw error
       })
       built = { mime, messageId, subject, inReplyTo: parent?.id ?? null, references }
     }
@@ -351,6 +368,114 @@ export class Replies {
       .from(message)
       .where(and(eq(message.authorUserId, userId), eq(message.submissionId, submissionId)))
     return row ?? null
+  }
+
+  /**
+   * The public history a reply quotes, newest first (requirements 4.1): the ticket's incoming messages and its replies
+   * that at least one recipient accepted, never an internal note; each with its files' names and the images its HTML
+   * embeds. An image is embedded only as the ticket view shows one: a part of the same message that scanned clean, its
+   * stored file clean, with an image type, within the same sizes; prepared (downscaled) with sharp, with a new content
+   * ID in the From address's domain. Every other image of the stored HTML is left out when the email is drawn.
+   */
+  async #history(ticketId: string, organizationName: string, from: string, imageBudget: number): Promise<Entry[]> {
+    const accepted = this.db
+      .select({ one: sql`1` })
+      .from(outboxRecipient)
+      .where(and(eq(outboxRecipient.messageId, message.id), eq(outboxRecipient.state, "accepted")))
+    const rows = await this.db
+      .select({
+        id: message.id,
+        direction: message.direction,
+        receivedAt: message.receivedAt,
+        fromAddress: message.fromAddress,
+        fromName: message.fromName,
+        authorUserId: message.authorUserId,
+        html: message.htmlBody,
+        text: message.textBody,
+      })
+      .from(message)
+      .where(
+        and(
+          eq(message.ticketId, ticketId),
+          eq(message.content, "parsed"),
+          isNull(message.duplicateOf),
+          or(eq(message.direction, "in"), and(eq(message.direction, "out"), exists(accepted))),
+        ),
+      )
+      .orderBy(desc(message.receivedAt), desc(message.createdAt))
+    if (rows.length === 0) return []
+    const parts = await this.db
+      .select({
+        messageId: messagePart.messageId,
+        kind: messagePart.kind,
+        fileName: messagePart.fileName,
+        contentId: messagePart.contentId,
+        status: messagePart.status,
+        sha256: storedFile.sha256,
+        size: storedFile.size,
+        detectedType: storedFile.detectedType,
+        storedStatus: storedFile.scanStatus,
+      })
+      .from(messagePart)
+      .leftJoin(storedFile, eq(storedFile.sha256, messagePart.storedSha256))
+      .where(
+        inArray(
+          messagePart.messageId,
+          rows.map((row) => row.id),
+        ),
+      )
+      .orderBy(asc(messagePart.index))
+    const names = new Map<string, string>()
+    for (const row of rows)
+      if (row.authorUserId && !names.has(row.authorUserId))
+        names.set(row.authorUserId, await this.#agentName(row.authorUserId))
+    const domain = from.slice(from.lastIndexOf("@") + 1)
+
+    // The images each message's HTML refers to (by its decoded content ID) that may be embedded: a part of the same
+    // message, inline, clean as a part and as a stored file, with an image type read from the content. Which of them
+    // are read is decided from their stored sizes first (imagesToRead); the others show by their names, unread.
+    const candidates = rows.flatMap((row, index) => {
+      const referenced = row.html ? contentIdsIn(row.html) : new Set<string>()
+      const seen = new Set<string>()
+      return parts.flatMap((part) => {
+        const id = part.contentId
+        if (part.messageId !== row.id || part.kind !== "inline" || !id || !part.sha256 || seen.has(id)) return []
+        if (!referenced.has(id) || part.status !== "clean" || part.storedStatus !== "clean") return []
+        if (!EMBEDDABLE_TYPES.includes(part.detectedType as never)) return []
+        seen.add(id)
+        return [{ message: index, size: part.size ?? 0, id, sha256: part.sha256, type: part.detectedType ?? "", part }]
+      })
+    })
+    const read = imagesToRead(candidates, imageBudget)
+
+    const entries: Entry[] = rows.map((row) => {
+      const own = parts.filter((part) => part.messageId === row.id)
+      const files = own
+        .filter((part) => part.kind === "attachment" && part.sha256 && STORED.has(part.status))
+        .map((part) => cleanFileName(part.fileName ?? "file"))
+      const agent = row.authorUserId ? (names.get(row.authorUserId) ?? row.authorUserId) : null
+      const customer = row.fromName?.trim() || row.fromAddress || "?"
+      return {
+        name: agent ? `${agent} (${organizationName})` : customer,
+        initialsOf: agent ?? customer,
+        at: row.receivedAt,
+        html: row.html !== null && row.html !== "" ? row.html : null,
+        text: row.text !== null && row.text !== "" ? row.text : null,
+        images: new Map<string, EntryImage>(),
+        imageNames: new Map<string, string>(),
+        files,
+      }
+    })
+    for (const [index, candidate] of candidates.entries()) {
+      const entry = entries[candidate.message]
+      if (!entry) continue
+      const fileName = cleanFileName(candidate.part.fileName ?? "image")
+      const bytes = read[index] ? await this.#bytes(candidate.sha256).catch(() => null) : null
+      const prepared = bytes ? await prepareImage(bytes, candidate.type) : null
+      if (prepared) entry.images.set(candidate.id, { ...prepared, cid: `${randomUUID()}@${domain}`, fileName })
+      else entry.imageNames?.set(candidate.id, fileName)
+    }
+    return entries
   }
 
   /** The message a reply answers: the ticket's latest message with a Message-ID (incoming or a reply, never a note). */
