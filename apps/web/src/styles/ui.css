@@ -2605,6 +2605,20 @@ textarea.ui-input.ui-textarea {
   color: var(--ui-muted);
   font-weight: 600;
 }
+/* What the recipient's server did: the status, its time, and the provider's reason, which may be long. */
+.ui-delivery-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.ui-delivery-detail {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-xs);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
 
 /* The composer: the fields, the editor with its tools, the signature, files, and the actions at its end. */
 .ui-composer-body {

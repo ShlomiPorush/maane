@@ -28,6 +28,17 @@ export {
   userEmail,
 } from "./auth.ts"
 export {
+  DELIVERY_DETAIL_MAX,
+  DELIVERY_POLL_MAX_AGE_DAYS,
+  DELIVERY_SOURCES,
+  DELIVERY_STATUSES,
+  type DeliverySource,
+  type DeliveryStatus,
+  FAILED_DELIVERY_STATUSES,
+  FINAL_DELIVERY_STATUSES,
+  type WebhookSecretsView,
+} from "./delivery.ts"
+export {
   SCAN_STATUSES,
   SCANNER_CHECKS,
   type ScannerCheck,
@@ -102,6 +113,7 @@ export {
   type SmtpProblem,
   type SmtpTestResult,
   type SmtpTestView,
+  type UnmatchedDelivery,
   UPLOAD_STATUSES,
   type UploadStatus,
   type UploadView,

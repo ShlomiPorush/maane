@@ -449,6 +449,11 @@ export const message = pgTable(
     rawSha256: text("raw_sha256").references(() => storedFile.sha256, { onDelete: "restrict" }),
     /** A delivery or disposition report's original Message-ID, for phase 3 to link to the outgoing message. */
     reportOriginalMessageId: text("report_original_message_id"),
+    /**
+     * A delivery status notification's recipients (RFC 3464), read at stage one: `{ address, action, status }[]`, only
+     * validated tokens (an address, an action keyword, a status code), never the report's free text (plan 3.3).
+     */
+    deliveryReport: jsonb("delivery_report"),
     /** The top-level content type as mailparser parsed it, bounded: `{ value, reportType }`. */
     contentType: jsonb("content_type"),
     /**
@@ -749,6 +754,20 @@ export const outbox = pgTable(
      * stops without sending or writing.
      */
     attempt: uuid("attempt"),
+    /**
+     * A delivery event about this reply Maane could not tie to one recipient's accepted send (plan 3.3): a failover report
+     * that names no accepted recipient or came before the acceptance, or an SMTP2GO event without a known queue ID whose
+     * recipient more than one attempt could have reached. Recorded here (when, and from where) without changing a
+     * recipient or the ticket's flag.
+     */
+    unmatchedDeliveryAt: at("unmatched_delivery_at"),
+    /** `@maane/shared` DELIVERY_SOURCES. */
+    unmatchedDeliverySource: text("unmatched_delivery_source"),
+    /**
+     * What that event said, for a person to read (`@maane/shared` UnmatchedDelivery without its source and time of
+     * recording): `{ status, at, recipient, messageId }`, validated tokens and times only.
+     */
+    unmatchedDeliveryEvent: jsonb("unmatched_delivery_event"),
     createdAt: createdAt(),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
@@ -781,14 +800,67 @@ export const outboxRecipient = pgTable(
     response: text("response"),
     /** The agent who marked an unknown recipient as sent. */
     markedBy: text("marked_by").references(() => authUser.id, { onDelete: "restrict" }),
+    /** SMTP2GO's queue ID from its final 250, the `email_id` its webhook and activity search name (plan 3.3). */
+    providerId: text("provider_id"),
+    /** When a provider accepted the reply for this recipient, or an agent marked it as sent (plan 3.3). */
+    acceptedAt: at("accepted_at"),
+    /**
+     * Attempts that may have reached this recipient: each one a provider accepted, or whose outcome is unknown. An
+     * SMTP2GO event without a known queue ID is matched by Maane's Message-ID only while this is exactly one.
+     */
+    possibleSends: integer("possible_sends").notNull().default(0),
+    /**
+     * What the recipient's server did, by the newest event (`@maane/shared` DELIVERY_STATUSES): written only by delivery
+     * events, never by a send's result, and only by an event newer than the one it holds.
+     */
+    delivery: text("delivery"),
+    /** The time of the event that wrote `delivery`, as the provider or the report gave it. */
+    deliveryAt: at("delivery_at"),
+    /** When Maane wrote that status, by its own clock: the flag counts only a status written after the acceptance. */
+    deliveryRecordedAt: at("delivery_recorded_at"),
+    /** The provider's reason or the report's status code, bounded. */
+    deliveryDetail: text("delivery_detail"),
+    /** `@maane/shared` DELIVERY_SOURCES. */
+    deliverySource: text("delivery_source"),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [
     primaryKey({ columns: [t.messageId, t.address] }),
+    index("outbox_recipient_provider_id_idx").on(t.providerId),
+    check(
+      "outbox_recipient_delivery",
+      sql`${t.delivery} is null or ${t.delivery} in ('delivered', 'soft_bounce', 'hard_bounce', 'rejected', 'spam')`,
+    ),
+    check("outbox_recipient_delivery_at", sql`(${t.delivery} is null) = (${t.deliveryAt} is null)`),
+    check(
+      "outbox_recipient_delivery_source",
+      sql`${t.deliverySource} is null or ${t.deliverySource} in ('webhook', 'activity', 'report')`,
+    ),
     check("outbox_recipient_kind", sql`${t.kind} in ('to', 'cc')`),
     check("outbox_recipient_state", sql`${t.state} in ('pending', 'accepted', 'refused', 'unknown')`),
     check("outbox_recipient_provider", sql`${t.provider} is null or ${t.provider} in ('smtp2go', 'failover')`),
   ],
+)
+
+/**
+ * Where SMTP2GO's activity search went on (plan 3.3), one row: the end of the last window every page of which was read.
+ * The next run starts a little before it, so an event the provider listed late is still read.
+ */
+export const deliveryPoll = pgTable(
+  "delivery_poll",
+  {
+    id: integer("id").primaryKey(),
+    until: at("until").notNull(),
+    /**
+     * A window the last run did not finish (it reached its page limit): SMTP2GO's documented `continue_token` and the
+     * window it pages through. The next run goes on from there before it starts a new window.
+     */
+    continueToken: text("continue_token"),
+    windowStart: at("window_start"),
+    windowEnd: at("window_end"),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+  },
+  (t) => [check("delivery_poll_one_row", sql`${t.id} = 1`)],
 )
 
 /**

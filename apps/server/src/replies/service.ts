@@ -41,6 +41,7 @@ import {
   ticketParticipant,
   upload,
 } from "../db/schema.ts"
+import { refreshDeliveryFlag } from "../delivery/service.ts"
 import { storedFilePath } from "../files/paths.ts"
 import { type JobQueue, SEND_REPLY, transactionWithJobs, UPLOAD_SCAN } from "../jobs/queue.ts"
 import { contentIdsIn, sanitizeMailHtml } from "../mail/html.ts"
@@ -622,7 +623,7 @@ export class Replies {
       if (row.state !== "unknown") throw new Refusal("reply_not_unknown", 409)
       const marked = await tx
         .update(outboxRecipient)
-        .set({ state: "accepted", markedBy: user.id, updatedAt: new Date() })
+        .set({ state: "accepted", markedBy: user.id, acceptedAt: sql`now()`, updatedAt: new Date() })
         .where(
           and(
             eq(outboxRecipient.messageId, messageId),
@@ -638,6 +639,8 @@ export class Replies {
           .insert(ticketParticipant)
           .values(marked.map((entry) => ({ ticketId: row.ticketId, address: entry.address, name: entry.name })))
           .onConflictDoNothing()
+      // An accepted reply may clear the ticket's delivery flag (plan 3.3).
+      await refreshDeliveryFlag(tx, row.ticketId)
       const states = await tx
         .select({ state: outboxRecipient.state })
         .from(outboxRecipient)

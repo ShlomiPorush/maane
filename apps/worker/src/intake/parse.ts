@@ -46,6 +46,21 @@ export interface ParsedMessage {
   contentHash: string
   /** A delivery or disposition report's original Message-ID (RFC 3464, RFC 8098), without brackets. */
   reportOriginalMessageId: string | null
+  /**
+   * A delivery status notification's recipients (RFC 3464), each as validated tokens; empty when it names none. Null
+   * for any other message, a disposition notification (a read receipt) included.
+   */
+  deliveryReport: ReportRecipient[] | null
+}
+
+/** One recipient of a delivery status notification: its final recipient, its action, and its status code. */
+export interface ReportRecipient {
+  /** In lower case. */
+  address: string
+  /** RFC 3464 2.3.3: failed, delayed, delivered, relayed, or expanded. Only `failed` is a bounce. */
+  action: string
+  /** RFC 3464 2.3.4, such as `5.1.1`, or null when the group has none Maane can read. */
+  status: string | null
 }
 
 const ANGLE_ID = /<([^<>\s]+)>/g
@@ -114,6 +129,49 @@ async function reportOriginal(type: ParsedMessage["contentType"], attachments: A
   return null
 }
 
+/** RFC 3464's actions. */
+const REPORT_ACTIONS = ["failed", "delayed", "delivered", "relayed", "expanded"]
+/** The most recipients of one report Maane keeps. */
+export const REPORT_RECIPIENTS_MAX = 100
+
+/**
+ * The recipients of a delivery status notification (RFC 3464, and RFC 6533's global form): mailparser's documented
+ * `keepDeliveryStatus` keeps the `message/delivery-status` part as an attachment (the main parse leaves it in the
+ * text, as 2.3 stores it), and each of its field groups, separated by a blank line, is read by mailparser's own header
+ * parser. Only a group with a Final-Recipient and a known Action counts; free text (Diagnostic-Code) is never kept.
+ */
+async function deliveryReport(raw: Buffer, type: ParsedMessage["contentType"]): Promise<ReportRecipient[] | null> {
+  if (type.value !== "multipart/report" || type.params["report-type"] !== "delivery-status") return null
+  const mail = await simpleParser(raw, { ...OPTIONS, ignoreEmbedded: true, keepDeliveryStatus: true }).catch(() => null)
+  const part = mail?.attachments.find((attachment) =>
+    ["message/delivery-status", "message/global-delivery-status"].includes(attachment.contentType.toLowerCase()),
+  )
+  if (!part) return []
+  const recipients: ReportRecipient[] = []
+  for (const group of part.content.toString("utf8").split(/\r?\n[ \t]*\r?\n/)) {
+    if (recipients.length >= REPORT_RECIPIENTS_MAX) break
+    if (!group.trim()) continue
+    const fields = await simpleParser(Buffer.from(`${group.trim()}\r\n\r\n`, "utf8"), OPTIONS).catch(() => null)
+    const value = (name: string) => {
+      const found = fields?.headers.get(name)
+      return typeof found === "string" ? found.trim() : null
+    }
+    const final = value("final-recipient")
+    const action = value("action")?.toLowerCase() ?? null
+    if (!final || !action || !REPORT_ACTIONS.includes(action)) continue
+    // "rfc822; someone@example.com" (or RFC 6533's "utf-8; ..."): the address after the type.
+    const semicolon = final.indexOf(";")
+    const address = (semicolon >= 0 ? final.slice(semicolon + 1) : final)
+      .trim()
+      .replace(/^<(.*)>$/, "$1")
+      .toLowerCase()
+    if (address.length > ADDRESS_MAX_LENGTH || !/^[^\s@<>]+@[^\s@<>]+$/.test(address)) continue
+    const status = value("status")?.split(/\s/)[0] ?? null
+    recipients.push({ address, action, status: status && /^[245]\.\d{1,3}\.\d{1,3}$/.test(status) ? status : null })
+  }
+  return recipients
+}
+
 /** simpleParser's options: no data: URLs for inline images, no text from unsanitized HTML, no links in text. */
 const OPTIONS = { skipImageLinks: true, skipHtmlToText: true, skipTextLinks: true } as const
 
@@ -142,7 +200,8 @@ const sha256 = (data: string | Uint8Array) => createHash("sha256").update(data).
 export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
   // ignoreEmbedded: an embedded message (a forward, a returned message in a report) stays an attachment, scanned and
   // kept like any other part, instead of being flattened into the text.
-  const mail = await simpleParser(Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength), {
+  const bytes = Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength)
+  const mail = await simpleParser(bytes, {
     ...OPTIONS,
     ignoreEmbedded: true,
   })
@@ -180,5 +239,6 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
     parts,
     contentHash,
     reportOriginalMessageId: await reportOriginal(contentType, mail.attachments),
+    deliveryReport: await deliveryReport(bytes, contentType),
   }
 }

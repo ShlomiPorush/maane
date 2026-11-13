@@ -774,6 +774,51 @@ describe("organizations", () => {
     )
     expect(JSON.parse(requests.find((r) => r.method === "PUT")?.body ?? "{}")).toEqual({ "intake.mode": "live" })
   })
+
+  it("makes SMTP2GO's webhook address and token, shows them once, and asks before replacing them", async () => {
+    let made = false
+    const secret = (key: string) => ({ key, value: null, secret: true, set: made, locked: false, variable: null })
+    // Built at run time: no secret-shaped literal in a tracked file.
+    const url = `http://127.0.0.1:8090/hooks/smtp2go/${"p".repeat(43)}`
+    const token = "t".repeat(43)
+    await renderAt("/settings", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": () => ok({ settings: [secret("smtp2go.webhookPath"), secret("smtp2go.webhookToken")] }),
+      "/api/v1/settings/smtp2go/webhook": () => {
+        made = true
+        return ok({ url, token })
+      },
+    })
+    const row = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[data-webhook]")
+      expect(found?.getAttribute("data-webhook")).toBe("not-set")
+      return found as HTMLElement
+    })
+    expect(row.textContent).toContain(he("settings.sending.webhook.notSet"))
+    const make = () =>
+      Array.from(document.querySelectorAll("button")).find((b) =>
+        [he("settings.sending.webhook.generate"), he("settings.sending.webhook.replace")].includes(
+          b.textContent?.trim() ?? "",
+        ),
+      )
+    // The first ones are made at once: there is nothing to replace.
+    await act(async () => make()?.click())
+    await vi.waitFor(() => expect(document.querySelector("[data-webhook-url] bdi")?.textContent).toBe(url))
+    expect(document.querySelector("[data-webhook-token] bdi")?.textContent).toBe(token)
+    expect(document.querySelector("[data-webhook-url] bdi")?.getAttribute("dir")).toBe("ltr")
+    expect(text()).toContain(he("settings.sending.webhook.shownOnce"))
+    expect(requests.filter((r) => r.url === "/api/v1/settings/smtp2go/webhook")).toHaveLength(1)
+    // New ones only after asking: the old ones stop working at once.
+    await act(async () => make()?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
+    expect(document.querySelector("[role=alertdialog]")?.textContent).toContain(
+      he("settings.sending.webhook.replaceMessage"),
+    )
+    expect(requests.filter((r) => r.url === "/api/v1/settings/smtp2go/webhook")).toHaveLength(1)
+    await act(async () => document.querySelector<HTMLButtonElement>("[role=alertdialog] .ui-btn-primary")?.click())
+    await vi.waitFor(() => expect(requests.filter((r) => r.url === "/api/v1/settings/smtp2go/webhook")).toHaveLength(2))
+  })
 })
 
 describe("organization dialogs", () => {
@@ -1681,6 +1726,81 @@ describe("tickets", () => {
     expect(requests.some((r) => r.url.endsWith("/resend"))).toBe(false)
     await act(async () => document.querySelector<HTMLButtonElement>("[role=alertdialog] .ui-btn-primary")?.click())
     await vi.waitFor(() => expect(requests.some((r) => r.method === "POST" && r.url.endsWith("/resend"))).toBe(true))
+  })
+
+  it("shows each recipient's delivery status next to the reply, and an event it could not tie to a recipient", async () => {
+    const delivered = reply({
+      delivery: {
+        state: "accepted",
+        problem: null,
+        unmatchedDelivery: {
+          source: "webhook",
+          recordedAt: when,
+          status: "soft_bounce",
+          at: when,
+          recipient: "lea@example.com",
+          messageId: "reply-1@example.com",
+        },
+        recipients: [
+          {
+            address: "dana@example.com",
+            name: "Dana Customer",
+            kind: "to",
+            state: "accepted",
+            provider: "smtp2go",
+            marked: false,
+            delivery: "hard_bounce",
+            deliveryAt: when,
+            deliveryDetail: "550 5.1.1 mailbox unavailable",
+          },
+          {
+            address: "ron@example.com",
+            name: null,
+            kind: "cc",
+            state: "accepted",
+            provider: "smtp2go",
+            marked: false,
+            delivery: "delivered",
+            deliveryAt: when,
+            deliveryDetail: null,
+          },
+          {
+            address: "lea@example.com",
+            name: null,
+            kind: "cc",
+            state: "accepted",
+            provider: "failover",
+            marked: false,
+            delivery: null,
+            deliveryAt: null,
+            deliveryDetail: null,
+          },
+        ],
+      },
+    })
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [delivered]),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("delivery.unmatched")))
+    // What the unmatched event said is shown: its status, time, recipient, and Message-ID.
+    const unmatched = document.querySelector('[data-unmatched="webhook"]') as HTMLElement
+    expect(unmatched.textContent).toContain(he("delivery.status.soft_bounce"))
+    expect(unmatched.textContent).toContain("lea@example.com")
+    expect(unmatched.textContent).toContain("reply-1@example.com")
+    expect(unmatched.querySelector("time")).not.toBeNull()
+    const card = document.querySelector('[data-direction="out"]') as HTMLElement
+    const dana = card.querySelector('[data-recipient="dana@example.com"]') as HTMLElement
+    expect(dana.querySelector("[data-delivery]")?.getAttribute("data-delivery")).toBe("hard_bounce")
+    expect(dana.textContent).toContain(he("delivery.status.hard_bounce"))
+    expect(dana.querySelector(".ui-delivery-detail")?.getAttribute("dir")).toBe("ltr")
+    expect(dana.textContent).toContain("550 5.1.1 mailbox unavailable")
+    expect(dana.querySelector("time")).not.toBeNull()
+    expect(card.querySelector('[data-recipient="ron@example.com"]')?.textContent).toContain(
+      he("delivery.status.delivered"),
+    )
+    expect(card.querySelector('[data-recipient="lea@example.com"] [data-delivery]')).toBeNull()
   })
 
   it("ends a PDF that finishes loading after its preview closed, and starts none once it closed", async () => {

@@ -366,7 +366,8 @@
     "blocked_content": "Content blocked",
     "possibly_automated": "Possibly automated",
     "sender_not_participant": "Sender not a participant",
-    "ambiguous_original": "Original of several tickets"
+    "ambiguous_original": "Original of several tickets",
+    "delivery_failed": "Delivery failed"
   },
   "intake": {
     "title": "Intake log",
@@ -732,7 +733,15 @@
         },
         "apiKey": {
           "label": "API key",
-          "hint": "Only for reading delivery status, in a later version. Stored encrypted and never shown again."
+          "hint": "Only for reading delivery status (SMTP2GO's activity search). Stored encrypted and never shown again."
+        },
+        "webhookPath": {
+          "label": "Delivery webhook",
+          "hint": "The address SMTP2GO reports delivery status to. Its last part is secret: give it to SMTP2GO only, under Settings, Webhooks."
+        },
+        "webhookToken": {
+          "label": "Authorization header",
+          "hint": "At SMTP2GO, choose the Bearer authorization type and paste this token. Requests without it are refused."
         }
       },
       "failover": {
@@ -777,6 +786,20 @@
         "tls": "TLS could not be set up. Check the port and the encryption.",
         "auth": "The server refused the user or the password.",
         "error": "The server answered with an error."
+      },
+      "webhook": {
+        "notSet": "Not set up",
+        "set": "Set up",
+        "notSetNote": "Make the address and the token, then copy both into SMTP2GO.",
+        "setNote": "Maane keeps them encrypted and does not show them again. Make new ones to replace them.",
+        "generate": "Make address and token",
+        "replace": "Make new ones",
+        "replaceTitle": "Replace the webhook's address and token?",
+        "replaceMessage": "The current ones stop working at once. SMTP2GO's delivery reports are refused until you give it the new ones.",
+        "shownOnce": "Copy both now: Maane shows them only this once.",
+        "url": "Webhook URL",
+        "token": "Bearer token",
+        "done": "A new webhook address and token were made."
       }
     }
   },
@@ -1089,6 +1112,14 @@
     "markSent": "Mark as sent",
     "markSentTitle": "Mark the reply as sent to {address}?",
     "markSentMessage": "Maane records that this recipient received the reply, and sends nothing. Do this only when you know it arrived.",
-    "markSentDone": "The reply is marked as sent."
+    "markSentDone": "The reply is marked as sent.",
+    "status": {
+      "delivered": "Delivered",
+      "soft_bounce": "Soft bounce",
+      "hard_bounce": "Bounced",
+      "rejected": "Rejected",
+      "spam": "Marked as spam"
+    },
+    "unmatched": "A delivery report about this reply arrived that Maane could not tie to one of its recipients' sends."
   }
 }

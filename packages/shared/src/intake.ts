@@ -57,8 +57,15 @@ export type MessageFlag = (typeof MESSAGE_FLAGS)[number]
  *   is linked to that one.
  * - `ambiguous_original`: a late original that more than one ticket was waiting for; this new ticket is linked to
  *   each of them.
+ * - `delivery_failed`: a reply bounced, was rejected, or was reported as spam for a recipient, and no later reply to
+ *   that recipient was accepted (plan 3.3). Maane sets and clears it from the replies' recipients.
  */
-export const TICKET_FLAGS = ["possibly_automated", "sender_not_participant", "ambiguous_original"] as const
+export const TICKET_FLAGS = [
+  "possibly_automated",
+  "sender_not_participant",
+  "ambiguous_original",
+  "delivery_failed",
+] as const
 export type TicketFlag = (typeof TICKET_FLAGS)[number]
 
 /** A new ticket is `new`; a customer message on an existing ticket makes it `open`. Later phases add the rest. */

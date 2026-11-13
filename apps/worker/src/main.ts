@@ -5,6 +5,7 @@ import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
 import type { SettingKey } from "@maane/shared"
 import { PgBoss } from "pg-boss"
+import { ActivityPoll } from "./delivery/poll.ts"
 import { clamdScanner } from "./files/scanner.ts"
 import { FileService } from "./files/service.ts"
 import { FileStore } from "./files/store.ts"
@@ -63,6 +64,7 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
     db: database.db,
     settings,
     sender: new ReplySender({ db: sending.db, settings: sendSettings, timeouts: options.timeouts }),
+    poll: new ActivityPoll({ db: database.db, settings }),
     timeouts: options.timeouts,
   }
 

@@ -28,6 +28,8 @@ export const SEND_REPLY = "send-reply"
 export const UPLOAD_SCAN = "upload-scan"
 /** An SMTP connection test of one provider: `{ provider }`. */
 export const SMTP_TEST = "smtp-test"
+/** SMTP2GO's activity search for recipients without a final delivery status (plan 3.3), every ten minutes. */
+export const DELIVERY_POLL = "delivery-poll"
 
 /**
  * The options of the queues the server sends to in a transaction, the same on both sides: pg-boss keeps the options of

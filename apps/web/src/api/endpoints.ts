@@ -15,6 +15,7 @@ import type {
   TicketList,
   TicketView,
   UploadView,
+  WebhookSecretsView,
 } from "@maane/shared"
 import { query, request, sendFile } from "./client.ts"
 
@@ -123,6 +124,8 @@ export const api = {
   /** Queues an SMTP connection test of one server the worker runs; smtpTest reads where it is. */
   testSmtp: (provider: "smtp2go" | "failover") => request<{ id: string }>("POST", `/settings/smtp/${provider}/test`),
   smtpTest: (id: string) => request<SmtpTestView>("GET", `/settings/smtp/test/${encodeURIComponent(id)}`),
+  /** Makes a new secret address and Authorization token for SMTP2GO's delivery webhook; they are shown this once. */
+  generateWebhook: () => request<WebhookSecretsView>("POST", "/settings/smtp2go/webhook"),
   audit: (before: number | null) =>
     request<AuditPage>("GET", `/audit${query({ before: before ?? undefined, limit: AUDIT_PAGE_SIZE })}`),
   organizations: () => request<{ organizations: OrganizationSummary[] }>("GET", ORGANIZATIONS),

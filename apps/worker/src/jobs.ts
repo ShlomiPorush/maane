@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises"
 import type { Db } from "@maane/server/db/client"
 import {
+  DELIVERY_POLL,
   FILES_SWEEP,
   GRAPH_TEST,
   INTAKE_FILES_RETRY,
@@ -16,6 +17,7 @@ import { errorFacts, log } from "@maane/server/log"
 import type { Settings } from "@maane/server/settings/service"
 import { type GraphTestResult, PROVIDERS, type Provider } from "@maane/shared"
 import type { PgBoss } from "pg-boss"
+import type { ActivityPoll } from "./delivery/poll.ts"
 import { selfTestView } from "./files/self-test.ts"
 import type { FileService } from "./files/service.ts"
 import { type GraphGateway, graphConfig } from "./intake/graph.ts"
@@ -49,6 +51,8 @@ export interface SendJobs {
   db: Db
   settings: Settings
   sender: ReplySender
+  /** SMTP2GO's activity search for delivery statuses (plan 3.3); without it the poll is not registered. */
+  poll?: ActivityPoll
   /** The connection tests' timeouts (tests make them short). */
   timeouts?: SmtpTimeouts
 }
@@ -83,8 +87,8 @@ export async function graphTest(settings: Settings, graph: GraphGateway): Promis
  * scanner self-test (queued once at start, every hour, when the address changes, and for a connection test; its output
  * is the result the Settings page polls for); the daily sweep of unreferenced stored files; and Graph intake (plan
  * 2.3): the connection test, stage one every minute, stage two after each sync, every minute, and once at start, and the
- * retry of waiting files every five minutes. Later phases add sending, delivery polling, scheduled actions, and
- * notifications here.
+ * retry of waiting files every five minutes; sending (plan 3.1) and the activity poll of delivery statuses every ten
+ * minutes (plan 3.3). Later phases add scheduled actions and notifications here.
  */
 export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Promise<void> {
   const heartbeatFile = options.heartbeatFile ?? HEARTBEAT_FILE
@@ -124,6 +128,13 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
       if ((PROVIDERS as readonly unknown[]).includes(provider))
         return smtpTest(send.settings, provider as Provider, send.timeouts)
     })
+    const poll = send.poll
+    if (poll) {
+      // One run at a time; a failed run leaves the cursor where it was, and the next one reads its window again.
+      await boss.createQueue(DELIVERY_POLL, { policy: "exclusive", expireInSeconds: 30 * 60 })
+      await boss.schedule(DELIVERY_POLL, "*/10 * * * *")
+      await boss.work(DELIVERY_POLL, async () => poll.run())
+    }
   }
 
   const intake = options.intake

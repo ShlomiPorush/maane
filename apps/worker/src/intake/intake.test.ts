@@ -316,6 +316,79 @@ describe("parsing", () => {
     expect(parsed.text).not.toContain("The original.")
   })
 
+  it("reads a delivery report's recipients, each with its action and status, and nothing else (plan 3.3)", async () => {
+    const report = (fields: string, type = "delivery-status", partType = "message/delivery-status") =>
+      parseMessage(
+        mime({
+          from: "MAILER-DAEMON@example.com",
+          report: {
+            type,
+            parts: [
+              { contentType: "text/plain", body: "Delivery failed." },
+              { contentType: partType, body: fields },
+              { contentType: "text/rfc822-headers", body: "Message-ID: <sent-2@maane.example.com>" },
+            ],
+          },
+        }),
+      )
+    const parsed = await report(
+      [
+        "Reporting-MTA: dns; mx.example.com",
+        "Arrival-Date: Thu, 12 Nov 2026 10:00:00 +0200",
+        "",
+        "Original-Recipient: rfc822;Dana@Example.com",
+        "Final-Recipient: rfc822; Dana@Example.com",
+        "Action: FAILED",
+        "Status: 5.1.1 (no such user)",
+        "Diagnostic-Code: smtp; 550 5.1.1 <dana@example.com>: Recipient address rejected",
+        "",
+        "Final-Recipient: rfc822;<ron@example.com>",
+        "Action: delayed",
+        "Status: 4.4.1",
+        "",
+        "Final-Recipient: rfc822; noaction@example.com",
+        "",
+        "Final-Recipient: rfc822; odd@example.com",
+        "Action: exploded",
+        "Status: 9.9.9",
+        "",
+        "Final-Recipient: rfc822; nostatus@example.com",
+        "Action: failed",
+      ].join("\r\n"),
+    )
+    expect(parsed.deliveryReport).toEqual([
+      { address: "dana@example.com", action: "failed", status: "5.1.1" },
+      { address: "ron@example.com", action: "delayed", status: "4.4.1" },
+      { address: "nostatus@example.com", action: "failed", status: null },
+    ])
+    expect(parsed.reportOriginalMessageId).toBe("sent-2@maane.example.com")
+    // The main parse is as 2.3 stored it: the report's fields are in the text, and not a part.
+    expect(parsed.text).toContain("Reporting-MTA")
+    expect(parsed.parts.map((part) => part.declaredType)).toEqual(["text/rfc822-headers"])
+    // A report that names no recipient reads as an empty list; RFC 6533's global form is read too.
+    expect((await report("Reporting-MTA: dns; mx.example.com")).deliveryReport).toEqual([])
+    expect(
+      (
+        await report(
+          "Final-Recipient: utf-8; ron@example.com\r\nAction: failed",
+          "delivery-status",
+          "message/global-delivery-status",
+        )
+      ).deliveryReport,
+    ).toEqual([{ address: "ron@example.com", action: "failed", status: null }])
+    // A disposition notification (a read receipt) and an ordinary message have none.
+    expect(
+      (
+        await report(
+          "Final-Recipient: rfc822; dana@example.com\r\nOriginal-Message-ID: <sent-2@maane.example.com>\r\nDisposition: manual-action/MDN-sent-manually; displayed",
+          "disposition-notification",
+          "message/disposition-notification",
+        )
+      ).deliveryReport,
+    ).toBeNull()
+    expect((await parseMessage(mime())).deliveryReport).toBeNull()
+  })
+
   it("collects the header values Maane keeps into one block for the scanner", async () => {
     const parsed = await parseMessage(
       mime({

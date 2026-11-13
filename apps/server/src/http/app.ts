@@ -11,6 +11,7 @@ import {
   type ScannerTestView,
   SMTP_PROBLEMS,
   type SmtpTestView,
+  type WebhookSecretsView,
 } from "@maane/shared"
 import { APIError } from "better-auth/api"
 import { desc, eq, lt, sql } from "drizzle-orm"
@@ -22,11 +23,12 @@ import type { SetupWindow } from "../auth/setup-window.ts"
 import type { Db } from "../db/client.ts"
 import { auditLog, authUser, scannerCheck } from "../db/schema.ts"
 import { GRAPH_TEST, type JobQueue, SCANNER_SELF_TEST, SMTP_TEST } from "../jobs/queue.ts"
-import { errorFacts, log } from "../log.ts"
+import { errorFacts, log, loggedPath } from "../log.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { Organizations } from "../organizations/service.ts"
 import { Replies } from "../replies/service.ts"
 import { type Settings, SettingsError } from "../settings/service.ts"
+import { hookRoutes } from "./hooks.ts"
 import { organizationRoutes } from "./organizations.ts"
 import { replyRoutes } from "./replies.ts"
 import { type ApiEnv, type AppUser, clientIp } from "./request.ts"
@@ -321,6 +323,21 @@ export function createApp(ctx: AppContext) {
     return c.json(view)
   })
 
+  // SMTP2GO's delivery webhook (plan 3.3): a new secret path and Authorization token from the CSPRNG, stored encrypted
+  // and shown this once, for the admin to copy into SMTP2GO. Making new ones replaces the old ones at once.
+  api.post("/settings/smtp2go/webhook", adminOnly, async (c) => {
+    const values = await ctx.settings.generate(
+      ["smtp2go.webhookPath", "smtp2go.webhookToken"],
+      c.get("actor"),
+      clientIp(c.req.raw),
+    )
+    const view: WebhookSecretsView = {
+      url: new URL(`/hooks/smtp2go/${values["smtp2go.webhookPath"]}`, ctx.publicUrl).href,
+      token: values["smtp2go.webhookToken"],
+    }
+    return c.json(view)
+  })
+
   // An agent's display name, which every reply's From line carries (plan 3.1). Better Auth's documented server API
   // updates it, with the admin's own session and the name only; its HTTP route /admin/update-user stays closed.
   api.put("/admin/users/:id/name", adminOnly, async (c) => {
@@ -368,6 +385,7 @@ export function createApp(ctx: AppContext) {
   api.route("/", replyRoutes(ctx.db, ctx.settings, replies))
 
   app.route("/api/v1", api)
+  app.route("/hooks", hookRoutes(ctx.db, ctx.settings))
   app.all("/api/*", (c) => c.json({ error: "not_found" }, 404))
 
   // The built UI: files as they are, every other path gets index.html (client-side routes).
@@ -381,7 +399,7 @@ export function createApp(ctx: AppContext) {
   app.onError((error, c) => {
     // An error answer never keeps a policy its route declared for success.
     c.set("security", undefined)
-    log.error("request failed", { path: new URL(c.req.url).pathname, ...errorFacts(error) })
+    log.error("request failed", { path: loggedPath(new URL(c.req.url).pathname), ...errorFacts(error) })
     return c.json({ error: "internal" }, 500)
   })
 
