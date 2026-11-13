@@ -129,6 +129,30 @@ describe("loadConfig", () => {
     )
   })
 
+  it("takes the sending settings from variables, and refuses a password or key that reads as an example", () => {
+    const password = randomBytes(18).toString("base64url")
+    const loaded = loadConfig(
+      env({
+        MAANE_SMTP2GO_PORT: "2525",
+        MAANE_SMTP2GO_PASSWORD: password,
+        MAANE_FAILOVER_SECURITY: "TLS",
+        MAANE_BOUNCE_ADDRESS: "bounces@example.com",
+      }),
+    )
+    expect(loaded.overrides).toMatchObject({
+      "smtp2go.port": "2525",
+      "smtp2go.password": password,
+      "failover.security": "TLS",
+      "mail.bounceAddress": "bounces@example.com",
+    })
+    for (const name of ["MAANE_SMTP2GO_PASSWORD", "MAANE_SMTP2GO_API_KEY", "MAANE_FAILOVER_PASSWORD"])
+      for (const placeholder of ["your-smtp-password-here", "<password>", "changeme"])
+        expect(problems(env({ [name]: placeholder }))).toContain(`${name} is a placeholder`)
+    expect(problems(env({ MAANE_FAILOVER_SECURITY: "plain" }))).toContain("MAANE_FAILOVER_SECURITY is not valid")
+    expect(problems(env({ MAANE_SMTP2GO_PORT: "70000" }))).toContain("MAANE_SMTP2GO_PORT is not valid")
+    expect(problems(env({ MAANE_BOUNCE_ADDRESS: "bounces" }))).toContain("MAANE_BOUNCE_ADDRESS is not valid")
+  })
+
   it("lets no variable set or lock the intake mode", () => {
     expect(SETTINGS["intake.mode"].env).toBeNull()
     const loaded = loadConfig(env({ MAANE_INTAKE_MODE: "live", INTAKE_MODE: "live" }))
