@@ -14,8 +14,8 @@ import { I18nProvider, translate } from "./i18n/i18n.tsx"
 import { ROUTES } from "./routes.tsx"
 
 /** pdf.js, as the PDF preview loads it (pages/tickets/pdf.ts): component tests never run it. */
-const pdf = vi.hoisted(() => ({ openPdf: vi.fn() }))
-vi.mock("./pages/tickets/pdf.ts", () => ({ openPdf: pdf.openPdf }))
+const pdf = vi.hoisted(() => ({ loadPdfJs: vi.fn(), openPdf: vi.fn() }))
+vi.mock("./pages/tickets/pdf.ts", () => ({ loadPdfJs: pdf.loadPdfJs, openPdf: pdf.openPdf }))
 
 const auth = vi.hoisted(() => ({
   listUsers: vi.fn(),
@@ -134,6 +134,7 @@ function type(input: HTMLInputElement, value: string) {
 beforeEach(() => {
   localStorage.clear()
   for (const fn of Object.values(auth)) fn.mockReset()
+  pdf.loadPdfJs.mockReset()
   pdf.openPdf.mockReset()
   auth.listSessions.mockResolvedValue({ data: [], error: null })
   session.set({ session: { id: "current" }, user: { id: "u1", role: "admin" } })
@@ -1572,31 +1573,31 @@ describe("tickets", () => {
       await finishDownload()
       expect(pdf.openPdf).not.toHaveBeenCalled()
 
-      // Closed while pdf.js loads: the document that arrives afterwards is destroyed with its worker.
-      let started: ((task: unknown) => void) | null = null
-      pdf.openPdf.mockImplementation(
+      // Closed while pdf.js loads: no document is ever started.
+      let loaded: ((pdfjs: unknown) => void) | null = null
+      pdf.loadPdfJs.mockImplementation(
         () =>
           new Promise((resolve) => {
-            started = resolve
+            loaded = resolve
           }),
       )
       await act(async () => (row.querySelector("button") as HTMLButtonElement).click())
       await finishDownload()
-      await vi.waitFor(() => expect(started).not.toBeNull())
+      await vi.waitFor(() => expect(loaded).not.toBeNull())
       await closeDialog()
-      const late = { destroy: vi.fn(async () => {}), promise: new Promise(() => {}) }
       await act(async () => {
-        started?.(late)
+        loaded?.({})
         await new Promise((resolve) => setTimeout(resolve, 20))
       })
-      expect(late.destroy).toHaveBeenCalledTimes(1)
+      expect(pdf.openPdf).not.toHaveBeenCalled()
 
       // Closed while the document opens: its loading task is destroyed.
       const opening = { destroy: vi.fn(async () => {}), promise: new Promise(() => {}) }
-      pdf.openPdf.mockResolvedValue(opening)
+      pdf.loadPdfJs.mockResolvedValue({})
+      pdf.openPdf.mockReturnValue(opening)
       await act(async () => (row.querySelector("button") as HTMLButtonElement).click())
       await finishDownload()
-      await vi.waitFor(() => expect(pdf.openPdf).toHaveBeenCalledTimes(2))
+      await vi.waitFor(() => expect(pdf.openPdf).toHaveBeenCalledTimes(1))
       await closeDialog()
       expect(opening.destroy).toHaveBeenCalledTimes(1)
     } finally {

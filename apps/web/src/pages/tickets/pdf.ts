@@ -17,13 +17,20 @@ import type { PDFDocumentLoadingTask } from "pdfjs-dist"
 /** Where Vite serves pdf.js's decoders (PDF_DECODERS in vite.config.ts), from the site's root. */
 const DECODERS = "/pdfjs/"
 
-/**
- * Starts loading a document. The caller owns the loading task: destroying it ends the document and its worker, also
- * while it still loads.
- */
-export async function openPdf(data: ArrayBuffer): Promise<PDFDocumentLoadingTask> {
+export type PdfJs = typeof import("pdfjs-dist")
+
+/** Loads pdf.js and points it at its worker. Nothing starts yet: the caller decides whether a document still opens. */
+export async function loadPdfJs(): Promise<PdfJs> {
   const [pdfjs, worker] = await Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.min.mjs?url")])
   pdfjs.GlobalWorkerOptions.workerSrc = worker.default
+  return pdfjs
+}
+
+/**
+ * Starts loading a document, at once: the caller checks that the preview is still open right before, and owns the
+ * loading task from this moment. Destroying it ends the document and its worker, also while it still loads.
+ */
+export function openPdf(pdfjs: PdfJs, data: ArrayBuffer): PDFDocumentLoadingTask {
   return pdfjs.getDocument({
     data: new Uint8Array(data),
     useWasm: false,

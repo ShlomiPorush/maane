@@ -93,13 +93,12 @@ function PdfPreview({ id }: { id: string }) {
       try {
         const data = await (await requestFile(previewUrl(id))).arrayBuffer()
         if (gone) return
-        const { openPdf } = await import("./pdf.ts")
+        const { loadPdfJs, openPdf } = await import("./pdf.ts")
         if (gone) return
-        const task = await openPdf(data)
-        if (gone) {
-          void task.destroy()
-          return
-        }
+        const pdfjs = await loadPdfJs()
+        // The last check before anything starts: from here on the task is created and owned in the same step.
+        if (gone) return
+        const task = openPdf(pdfjs, data)
         loading = task
         const document = await task.promise
         if (!gone) setState({ status: "ready", document, pages: document.numPages })
