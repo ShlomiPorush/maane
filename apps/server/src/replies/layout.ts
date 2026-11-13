@@ -226,7 +226,9 @@ function renderContent(
   const dir = messageDirection(entry.text, entry.html, around)
   if (form === "short") {
     const text = shortText(entry)
-    return { html: `<div dir="${textDirection(text) ?? dir}">${escapeHtml(text)}</div>`, dir, images }
+    // Word's own copy of a long run here too (html-email).
+    const html = wordCopies(`<div dir="${textDirection(text) ?? dir}">${escapeHtml(text)}</div>`)
+    return { html, dir, images }
   }
   let html = ""
   if (entry.html) {

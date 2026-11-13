@@ -252,6 +252,23 @@ describe("the size budget", () => {
     expect(html).toContain(`<!--[if !mso]><!-->${token}<!--<![endif]-->`)
   })
 
+  it("gives a history message in short form that starts with a long string Word's own copy too", () => {
+    const token = "Y".repeat(200)
+    const history = [entry({ html: `<p>${token} and then ${"more words of the message ".repeat(20)}</p>`, text: null })]
+    const conversation = { dir: "ltr" as const, lang: "en", words: MESSAGES.en.mail, referenceCode: CODE }
+    // Level 1: the oldest (and only) history message in short form.
+    const { html } = layout({ ...conversation, current: entry(), history }, { level: 1, imageNames: false })
+    const short = /<div dir="ltr">(?:<!--[\s\S]*?-->)*(Y{200} and then [^<]*\.\.\.)(?:<!--[\s\S]*?-->)*<\/div>/.exec(
+      html,
+    )
+    expect(short, html).not.toBeNull()
+    expect(html).toContain(`<!--[if mso]>${"Y".repeat(50)}<br>`)
+    // What every other client shows: the short text once, unchanged.
+    const visible = html.replace(/<!--[\s\S]*?-->/g, "")
+    expect(visible).toContain(`<div dir="ltr">${short?.[1]}</div>`)
+    expect(visible.split(token).length).toBe(2)
+  })
+
   it("decides from stored sizes which history images are read, newest first, before reading any", () => {
     const mb = 1024 * 1024
     const plan = imagesToRead(
