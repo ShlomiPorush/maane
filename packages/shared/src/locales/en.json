@@ -1120,6 +1120,6 @@
       "rejected": "Rejected",
       "spam": "Marked as spam"
     },
-    "reportWithoutRecipient": "A delivery failure report arrived for this reply, but it does not say which recipient failed."
+    "unmatched": "A delivery report about this reply arrived that Maane could not tie to one of its recipients' sends."
   }
 }

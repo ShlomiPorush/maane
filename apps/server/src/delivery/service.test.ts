@@ -42,6 +42,7 @@ describe("the webhook's events", () => {
     expect(statuses).toEqual(["delivered", "hard_bounce", "soft_bounce", "rejected", "spam"])
     expect(webhookEvents({ ...base, event: "bounce", message: "550 no such user" })[0]).toEqual({
       providerId: "1rXyZw-4n3KqF-0e",
+      messageId: null,
       event: {
         recipient: "dana@example.com",
         status: "hard_bounce",
@@ -50,6 +51,15 @@ describe("the webhook's events", () => {
         source: "webhook",
       },
     })
+  })
+
+  it("reads Maane's own Message-ID from the event, with or without its angle brackets", () => {
+    const named = (value: unknown) => webhookEvents({ ...base, event: "delivered", "message-id": value })[0]?.messageId
+    expect(named("<a1.b2@example.com>")).toBe("a1.b2@example.com")
+    expect(named(" a1.b2@example.com ")).toBe("a1.b2@example.com")
+    expect(named("two words@example.com")).toBeNull()
+    expect(named("")).toBeNull()
+    expect(named(42)).toBeNull()
   })
 
   it("drops what it does not read: other events, no ID, no recipient, no time it can read", () => {

@@ -338,7 +338,7 @@ export class Tickets {
             messageId: outbox.messageId,
             state: outbox.state,
             problem: outbox.problem,
-            reportWithoutRecipient: outbox.reportWithoutRecipient,
+            unmatchedDeliveryAt: outbox.unmatchedDeliveryAt,
           })
           .from(outbox)
           .where(inArray(outbox.messageId, replyIds))
@@ -391,7 +391,7 @@ export class Tickets {
             deliveryAt: r.deliveryAt?.toISOString() ?? null,
             deliveryDetail: r.deliveryDetail,
           })),
-        reportWithoutRecipient: sent.reportWithoutRecipient !== null,
+        unmatchedDelivery: sent.unmatchedDeliveryAt !== null,
       }
     }
     const views: MessageView[] = messages.map((m) => {

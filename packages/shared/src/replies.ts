@@ -132,8 +132,12 @@ export interface DeliveryView {
   state: OutboxState
   problem: SendProblem | null
   recipients: RecipientView[]
-  /** A delivery report about this reply arrived that names none of its recipients as failed (plan 3.3). */
-  reportWithoutRecipient: boolean
+  /**
+   * A delivery event about this reply could not be tied to one recipient's send (plan 3.3): a report that names no
+   * recipient accepted before it arrived, or an SMTP2GO event without a known queue ID for a recipient more than one
+   * attempt could have reached.
+   */
+  unmatchedDelivery: boolean
 }
 
 /** What the composer of a ticket starts from. */

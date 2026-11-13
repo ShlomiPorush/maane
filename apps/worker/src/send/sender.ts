@@ -129,7 +129,12 @@ export class ReplySender {
         // An earlier run claimed this attempt and stopped before it finished: it may have sent. Never again by itself.
         await tx
           .update(outboxRecipient)
-          .set({ state: "unknown", updatedAt: this.#now() })
+          // The stopped attempt may have reached each of them.
+          .set({
+            state: "unknown",
+            possibleSends: sql`${outboxRecipient.possibleSends} + 1`,
+            updatedAt: this.#now(),
+          })
           .where(and(eq(outboxRecipient.messageId, messageId), ne(outboxRecipient.state, "accepted")))
         await this.#settle(tx, messageId, true)
         log.warn("a reply's earlier attempt stopped halfway; its fate is unknown", { messageId })
@@ -214,9 +219,20 @@ export class ReplySender {
         // SMTP2GO's queue ID, from its final 250, finds the recipient for its delivery events (plan 3.3). The delivery
         // columns themselves are only ever written by those events.
         const providerId = state === "accepted" && config.provider === "smtp2go" ? queueIdOf(response) : null
+        // An accepted or unknown answer means this attempt may have reached the recipient (possible_sends), and an
+        // acceptance is dated by the database's clock, as delivery statuses are (the ticket's flag compares them).
+        const reached = state === "accepted" || state === "unknown"
         await tx
           .update(outboxRecipient)
-          .set({ state, provider: config.provider, response, providerId, updatedAt: now })
+          .set({
+            state,
+            provider: config.provider,
+            response,
+            providerId,
+            updatedAt: now,
+            ...(state === "accepted" ? { acceptedAt: sql`now()` } : {}),
+            ...(reached ? { possibleSends: sql`${outboxRecipient.possibleSends} + 1` } : {}),
+          })
           .where(and(eq(outboxRecipient.messageId, messageId), inArray(outboxRecipient.address, addresses)))
       }
       if (result.kind === "unknown") {

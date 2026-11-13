@@ -1728,12 +1728,12 @@ describe("tickets", () => {
     await vi.waitFor(() => expect(requests.some((r) => r.method === "POST" && r.url.endsWith("/resend"))).toBe(true))
   })
 
-  it("shows each recipient's delivery status next to the reply, and a report that names no recipient", async () => {
+  it("shows each recipient's delivery status next to the reply, and an event it could not tie to a recipient", async () => {
     const delivered = reply({
       delivery: {
         state: "accepted",
         problem: null,
-        reportWithoutRecipient: true,
+        unmatchedDelivery: true,
         recipients: [
           {
             address: "dana@example.com",
@@ -1776,7 +1776,7 @@ describe("tickets", () => {
       "/api/v1/me": admin,
       "/api/v1/tickets/7": view("v1", [delivered]),
     })
-    await vi.waitFor(() => expect(text()).toContain(he("delivery.reportWithoutRecipient")))
+    await vi.waitFor(() => expect(text()).toContain(he("delivery.unmatched")))
     const card = document.querySelector('[data-direction="out"]') as HTMLElement
     const dana = card.querySelector('[data-recipient="dana@example.com"]') as HTMLElement
     expect(dana.querySelector("[data-delivery]")?.getAttribute("data-delivery")).toBe("hard_bounce")

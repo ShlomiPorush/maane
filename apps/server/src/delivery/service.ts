@@ -4,14 +4,19 @@
 // sends, permits, or blocks a send.
 //
 // - SMTP2GO's events find their recipient by SMTP2GO's queue ID (kept from its final 250 when it accepted the reply) and
-//   the recipient's address. An event for an ID Maane does not know is dropped.
+//   the recipient's address. When no recipient holds that ID (the connection dropped after the data, or a run stopped
+//   before it stored the ID), a webhook event finds it by Maane's own Message-ID, which the event carries, and the
+//   address, but only while exactly one attempt could have reached that recipient (possible_sends) and no queue ID was
+//   stored for it; otherwise the event is recorded on the reply as unmatched. An event for a reply Maane does not know
+//   is dropped. A status written this way on an `unknown` recipient is shown beside it; the send state stays the
+//   agent's to decide.
 // - An older event never overwrites a newer one: the UPDATE itself only takes an event whose time is later than the
 //   one the recipient holds (at the same time, only a final status over one that is not), so duplicates, late
 //   retries, and events out of order change nothing. A send's result writes other columns and never these.
-// - The ticket's `delivery_failed` flag follows from the rows (refreshDeliveryFlag): for each address, the newest reply
-//   of the ticket that address accepted decides; the flag is set while one of those holds a bounce, a rejection, or a
-//   spam report. A later accepted reply to the same address clears it, and an old bounce of an earlier reply never
-//   sets it again.
+// - The ticket's `delivery_failed` flag follows from the rows (refreshDeliveryFlag): for each address, the recipient row
+//   of the ticket accepted last (by when it was accepted, not when its reply was written) decides; the flag is set while
+//   that row holds a bounce, a rejection, or a spam report written after its acceptance. A later accepted send to the
+//   same address clears it, and an old bounce of an earlier send never sets it again.
 
 import {
   DELIVERY_DETAIL_MAX,
@@ -23,7 +28,7 @@ import {
 } from "@maane/shared"
 import { and, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
-import { message, outboxRecipient, ticket } from "../db/schema.ts"
+import { message, outbox, outboxRecipient, ticket } from "../db/schema.ts"
 import { wellFormedText } from "../text.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
@@ -39,8 +44,17 @@ export interface DeliveryEvent {
   source: DeliverySource
 }
 
-/** Which reply an event is about: SMTP2GO's queue ID, or (a report in the intake mailbox) the reply's own row. */
-export type DeliveryTarget = { providerId: string } | { messageId: string }
+/**
+ * Which recipient an event is about:
+ * - `providerId`: SMTP2GO's queue ID.
+ * - `acceptedBefore`: a reply's recipient accepted before this time (a report in the intake mailbox, received then).
+ * - `onlyAttempt`: a reply's recipient without a queue ID that exactly one attempt could have reached (an SMTP2GO
+ *   event matched by Maane's Message-ID).
+ */
+export type DeliveryTarget =
+  | { providerId: string }
+  | { messageId: string; acceptedBefore: Date }
+  | { messageId: string; onlyAttempt: true }
 
 const FLAG: TicketFlag = "delivery_failed"
 
@@ -90,7 +104,17 @@ export async function applyDeliveryEvent(tx: Tx, target: DeliveryTarget, event: 
   const which =
     "providerId" in target
       ? and(eq(outboxRecipient.providerId, target.providerId), eq(outboxRecipient.provider, "smtp2go"))
-      : eq(outboxRecipient.messageId, target.messageId)
+      : "acceptedBefore" in target
+        ? and(
+            eq(outboxRecipient.messageId, target.messageId),
+            eq(outboxRecipient.state, "accepted"),
+            lt(outboxRecipient.acceptedAt, target.acceptedBefore),
+          )
+        : and(
+            eq(outboxRecipient.messageId, target.messageId),
+            isNull(outboxRecipient.providerId),
+            eq(outboxRecipient.possibleSends, 1),
+          )
   const newer = or(
     isNull(outboxRecipient.deliveryAt),
     lt(outboxRecipient.deliveryAt, event.at),
@@ -108,6 +132,7 @@ export async function applyDeliveryEvent(tx: Tx, target: DeliveryTarget, event: 
       deliveryAt: event.at,
       deliveryDetail: event.detail,
       deliverySource: event.source,
+      deliveryRecordedAt: sql`now()`,
     })
     .where(and(which, eq(outboxRecipient.address, event.recipient), newer))
     .returning({ messageId: outboxRecipient.messageId })
@@ -141,18 +166,67 @@ export async function refreshDeliveryFlag(tx: Tx, ticketId: string): Promise<voi
   const result = await tx.execute<{ failed: boolean }>(sql`
     select exists (
       select 1 from (
-        select distinct on (r.address) r.delivery
+        select distinct on (r.address) r.delivery, r.delivery_recorded_at, r.accepted_at
         from ${outboxRecipient} r
         join ${message} m on m.id = r.message_id
         where m.ticket_id = ${ticketId} and r.state = 'accepted'
-        order by r.address, m.received_at desc, m.created_at desc, m.id desc
+        order by r.address, r.accepted_at desc nulls last, m.received_at desc, m.id desc
       ) latest
       where latest.delivery in (${sql.join(failed, sql`, `)})
+        and (latest.accepted_at is null or latest.delivery_recorded_at >= latest.accepted_at)
     ) as failed`)
   const flagged = result.rows[0]?.failed === true
   if (flagged === row.flags.includes(FLAG)) return
   const flags = flagged ? [...row.flags, FLAG] : row.flags.filter((flag) => flag !== FLAG)
   await tx.update(ticket).set({ reviewFlags: flags }).where(eq(ticket.id, ticketId))
+}
+
+/** One webhook event: SMTP2GO's queue ID, Maane's own Message-ID when the event carries it, and what happened. */
+export interface WebhookEvent {
+  providerId: string
+  messageId: string | null
+  event: DeliveryEvent
+}
+
+/**
+ * Applies one webhook event: by its queue ID when a recipient holds it; else by Maane's Message-ID and the address,
+ * only for a recipient exactly one attempt could have reached and no queue ID was stored for; else, for one of Maane's
+ * replies, recorded on the reply as unmatched. An event for a reply Maane does not know is dropped.
+ */
+export async function applyWebhookEvent(
+  tx: Tx,
+  { providerId, messageId, event }: WebhookEvent,
+): Promise<"applied" | "unchanged" | "unmatched" | "dropped"> {
+  const [known] = await tx
+    .select({ messageId: outboxRecipient.messageId })
+    .from(outboxRecipient)
+    .where(and(eq(outboxRecipient.providerId, providerId), eq(outboxRecipient.provider, "smtp2go")))
+    .limit(1)
+  if (known) return (await applyDeliveryEvent(tx, { providerId }, event)) ? "applied" : "unchanged"
+  if (!messageId) return "dropped"
+  const [reply] = await tx
+    .select({ messageId: outbox.messageId })
+    .from(outbox)
+    .where(eq(outbox.messageIdHeader, messageId))
+  if (!reply) return "dropped"
+  const [recipient] = await tx
+    .select({ providerId: outboxRecipient.providerId, possibleSends: outboxRecipient.possibleSends })
+    .from(outboxRecipient)
+    .where(and(eq(outboxRecipient.messageId, reply.messageId), eq(outboxRecipient.address, event.recipient)))
+  if (recipient && recipient.providerId === null && recipient.possibleSends === 1) {
+    const applied = await applyDeliveryEvent(tx, { messageId: reply.messageId, onlyAttempt: true }, event)
+    return applied ? "applied" : "unchanged"
+  }
+  await recordUnmatched(tx, reply.messageId, event.source)
+  return "unmatched"
+}
+
+/** Records on a reply that a delivery event about it could not be tied to one recipient's send; changes nothing else. */
+export async function recordUnmatched(tx: Tx, messageId: string, source: DeliverySource): Promise<void> {
+  await tx
+    .update(outbox)
+    .set({ unmatchedDeliveryAt: sql`now()`, unmatchedDeliverySource: source })
+    .where(eq(outbox.messageId, messageId))
 }
 
 /** SMTP2GO's webhook events Maane reads (its documented `event` values), and the status each one means. */
@@ -168,9 +242,9 @@ function webhookStatus(event: unknown, bounce: unknown): DeliveryStatus | null {
  * The events of one webhook request (SMTP2GO posts one event, as a form or as JSON; an array is read item by item):
  * those Maane reads, with an `email_id`, a recipient, and a time it can read. Everything else is dropped.
  */
-export function webhookEvents(payload: unknown): { providerId: string; event: DeliveryEvent }[] {
+export function webhookEvents(payload: unknown): WebhookEvent[] {
   const items = Array.isArray(payload) ? payload.slice(0, 100) : [payload]
-  const events: { providerId: string; event: DeliveryEvent }[] = []
+  const events: WebhookEvent[] = []
   for (const item of items) {
     if (typeof item !== "object" || item === null) continue
     const fields = item as Record<string, unknown>
@@ -179,8 +253,11 @@ export function webhookEvents(payload: unknown): { providerId: string; event: De
     const recipient = typeof fields.rcpt === "string" ? fields.rcpt.trim().toLowerCase() : ""
     const at = eventTime(fields.time)
     if (!status || !at || !/^[A-Za-z0-9._-]{1,100}$/.test(providerId) || !recipient || recipient.length > 254) continue
+    // Maane's own Message-ID, as SMTP2GO passes the header on (with or without its angle brackets).
+    const named = typeof fields["message-id"] === "string" ? fields["message-id"].trim().replace(/^<(.*)>$/, "$1") : ""
     events.push({
       providerId,
+      messageId: named && named.length <= 998 && !/\s/.test(named) ? named : null,
       event: {
         recipient,
         status,

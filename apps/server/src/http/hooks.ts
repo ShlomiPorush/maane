@@ -7,13 +7,14 @@
 // - The path's secret, the header, and the body are never logged, never in an error, never in an audit row: this route
 //   logs only counts, and the app's error handler logs no path under /hooks/.
 // - It only changes delivery information (delivery/service.ts): it never sends, permits, or blocks a send.
-// - An event Maane does not read or cannot match is dropped with a 200, so SMTP2GO does not retry it for two days.
+// - An event Maane does not read, or about a reply it does not know, is dropped with a 200, so SMTP2GO does not retry it
+//   for two days. An event about a reply that cannot be tied to one recipient's send is recorded on the reply.
 
 import { createHash, timingSafeEqual } from "node:crypto"
 import { type Context, Hono, type Next } from "hono"
 import { bodyLimit } from "hono/body-limit"
 import type { Db } from "../db/client.ts"
-import { applyDeliveryEvent, webhookEvents } from "../delivery/service.ts"
+import { applyWebhookEvent, webhookEvents } from "../delivery/service.ts"
 import { log } from "../log.ts"
 import type { Settings } from "../settings/service.ts"
 
@@ -66,7 +67,7 @@ export function hookRoutes(db: Db, settings: Settings): Hono {
       const events = webhookEvents(payload)
       let applied = 0
       await db.transaction(async (tx) => {
-        for (const { providerId, event } of events) if (await applyDeliveryEvent(tx, { providerId }, event)) applied++
+        for (const event of events) if ((await applyWebhookEvent(tx, event)) === "applied") applied++
       })
       log.info("the SMTP2GO webhook read delivery events", { events: events.length, applied })
       return c.json({ ok: true })

@@ -3,7 +3,7 @@
 // to the recipients not accepted, or mark one recipient whose fate is unknown as sent (each on its own: one of them
 // may have been refused before the connection dropped). Both ask first: a second copy cannot be called back. Once a
 // provider or a delivery report said what the recipient's server did (plan 3.3), that status shows with its time and the
-// provider's reason, and a report that names no recipient shows above the list.
+// provider's reason, and a delivery event Maane could not tie to one recipient shows above the list.
 
 import type { DeliveryStatus, DeliveryView, OutboxState, RecipientState } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
@@ -107,7 +107,7 @@ export function Delivery({
           action={actions}
         />
       ) : null}
-      {delivery.reportWithoutRecipient ? <Banner tone="warn" title={t("delivery.reportWithoutRecipient")} /> : null}
+      {delivery.unmatchedDelivery ? <Banner tone="warn" title={t("delivery.unmatched")} /> : null}
       <ul className="ui-delivery-list">
         {delivery.recipients.map((recipient) => (
           <li key={recipient.address} data-recipient={recipient.address} data-state={recipient.state}>

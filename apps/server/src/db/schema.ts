@@ -755,10 +755,14 @@ export const outbox = pgTable(
      */
     attempt: uuid("attempt"),
     /**
-     * The latest delivery report from the intake mailbox about this reply that names none of its recipients as failed
-     * (plan 3.3): recorded here without changing any recipient.
+     * A delivery event about this reply Maane could not tie to one recipient's accepted send (plan 3.3): a failover report
+     * that names no accepted recipient or came before the acceptance, or an SMTP2GO event without a known queue ID whose
+     * recipient more than one attempt could have reached. Recorded here (when, and from where) without changing a
+     * recipient or the ticket's flag.
      */
-    reportWithoutRecipient: uuid("report_without_recipient").references(() => message.id, { onDelete: "restrict" }),
+    unmatchedDeliveryAt: at("unmatched_delivery_at"),
+    /** `@maane/shared` DELIVERY_SOURCES. */
+    unmatchedDeliverySource: text("unmatched_delivery_source"),
     createdAt: createdAt(),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
@@ -793,6 +797,13 @@ export const outboxRecipient = pgTable(
     markedBy: text("marked_by").references(() => authUser.id, { onDelete: "restrict" }),
     /** SMTP2GO's queue ID from its final 250, the `email_id` its webhook and activity search name (plan 3.3). */
     providerId: text("provider_id"),
+    /** When a provider accepted the reply for this recipient, or an agent marked it as sent (plan 3.3). */
+    acceptedAt: at("accepted_at"),
+    /**
+     * Attempts that may have reached this recipient: each one a provider accepted, or whose outcome is unknown. An
+     * SMTP2GO event without a known queue ID is matched by Maane's Message-ID only while this is exactly one.
+     */
+    possibleSends: integer("possible_sends").notNull().default(0),
     /**
      * What the recipient's server did, by the newest event (`@maane/shared` DELIVERY_STATUSES): written only by delivery
      * events, never by a send's result, and only by an event newer than the one it holds.
@@ -800,6 +811,8 @@ export const outboxRecipient = pgTable(
     delivery: text("delivery"),
     /** The time of the event that wrote `delivery`, as the provider or the report gave it. */
     deliveryAt: at("delivery_at"),
+    /** When Maane wrote that status, by its own clock: the flag counts only a status written after the acceptance. */
+    deliveryRecordedAt: at("delivery_recorded_at"),
     /** The provider's reason or the report's status code, bounded. */
     deliveryDetail: text("delivery_detail"),
     /** `@maane/shared` DELIVERY_SOURCES. */
@@ -833,6 +846,13 @@ export const deliveryPoll = pgTable(
   {
     id: integer("id").primaryKey(),
     until: at("until").notNull(),
+    /**
+     * A window the last run did not finish (it reached its page limit): SMTP2GO's documented `continue_token` and the
+     * window it pages through. The next run goes on from there before it starts a new window.
+     */
+    continueToken: text("continue_token"),
+    windowStart: at("window_start"),
+    windowEnd: at("window_end"),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [check("delivery_poll_one_row", sql`${t.id} = 1`)],

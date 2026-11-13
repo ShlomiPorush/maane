@@ -623,7 +623,7 @@ export class Replies {
       if (row.state !== "unknown") throw new Refusal("reply_not_unknown", 409)
       const marked = await tx
         .update(outboxRecipient)
-        .set({ state: "accepted", markedBy: user.id, updatedAt: new Date() })
+        .set({ state: "accepted", markedBy: user.id, acceptedAt: sql`now()`, updatedAt: new Date() })
         .where(
           and(
             eq(outboxRecipient.messageId, messageId),

@@ -6,6 +6,8 @@
 // The window: from a little before where the last complete run ended (the durable cursor, `delivery_poll`), so an
 // event the provider listed late is read again; never earlier than the oldest such recipient's acceptance, nor than
 // DELIVERY_POLL_MAX_AGE_DAYS ago. Every page of a window is read before the cursor moves; a run that fails keeps it.
+// A run that reaches its page limit keeps SMTP2GO's documented `continue_token` and its window beside the cursor, and
+// the next run goes on from that page with the same window, so no page past the limit is out of reach.
 // The API's address is a constant here; only test code gives a stand-in's.
 
 import type { Db } from "@maane/server/db/client"
@@ -71,6 +73,9 @@ export interface ActivityPollOptions {
   baseUrl?: string
   now?: () => Date
   timeoutMs?: number
+  /** Events per page and pages per run (tests make them small). */
+  pageSize?: number
+  pagesMax?: number
 }
 
 /** ISO 8601 in UTC without fractions, as the activity search's dates. */
@@ -82,6 +87,8 @@ export class ActivityPoll {
   readonly #baseUrl: string
   readonly #now: () => Date
   readonly #timeoutMs: number
+  readonly #pageSize: number
+  readonly #pagesMax: number
 
   constructor(options: ActivityPollOptions) {
     this.#db = options.db
@@ -89,16 +96,22 @@ export class ActivityPoll {
     this.#baseUrl = options.baseUrl ?? SMTP2GO_API
     this.#now = options.now ?? (() => new Date())
     this.#timeoutMs = options.timeoutMs ?? 30_000
+    this.#pageSize = options.pageSize ?? POLL_PAGE_SIZE
+    this.#pagesMax = options.pagesMax ?? POLL_PAGES_MAX
   }
 
-  async run(): Promise<{ state: "not_configured" | "nothing_pending" | "done"; events: number; applied: number }> {
+  async run(): Promise<{
+    state: "not_configured" | "nothing_pending" | "done" | "partial"
+    events: number
+    applied: number
+  }> {
     const key = await this.#settings.get("smtp2go.apiKey")
     if (!key) return { state: "not_configured", events: 0, applied: 0 }
     const now = this.#now()
     const floor = new Date(now.getTime() - DELIVERY_POLL_MAX_AGE_DAYS * DAY_MS)
     // Recipients SMTP2GO accepted, with its queue ID, still without a final status, accepted within the age bound.
     const [pending] = await this.#db
-      .select({ oldest: min(outboxRecipient.updatedAt) })
+      .select({ oldest: min(outboxRecipient.acceptedAt) })
       .from(outboxRecipient)
       .where(
         and(
@@ -106,24 +119,38 @@ export class ActivityPoll {
           eq(outboxRecipient.provider, "smtp2go"),
           isNotNull(outboxRecipient.providerId),
           or(isNull(outboxRecipient.delivery), notInArray(outboxRecipient.delivery, [...FINAL_DELIVERY_STATUSES])),
-          gte(outboxRecipient.updatedAt, floor),
+          gte(outboxRecipient.acceptedAt, floor),
         ),
       )
     if (!pending?.oldest) return { state: "nothing_pending", events: 0, applied: 0 }
-    const [cursor] = await this.#db
-      .select({ until: deliveryPoll.until })
-      .from(deliveryPoll)
-      .where(eq(deliveryPoll.id, 1))
-    const starts = [floor.getTime(), pending.oldest.getTime() - POLL_OVERLAP_MS]
-    if (cursor) starts.push(cursor.until.getTime() - POLL_OVERLAP_MS)
-    const start = new Date(Math.min(Math.max(...starts), now.getTime()))
+    const [cursor] = await this.#db.select().from(deliveryPoll).where(eq(deliveryPoll.id, 1))
+    // A window the last run did not finish goes on from its next page; otherwise a new window ends now.
+    const resumed = cursor?.continueToken && cursor.windowStart && cursor.windowEnd ? cursor : null
+    let start: Date
+    let end: Date
+    if (resumed?.windowStart && resumed.windowEnd) {
+      start = resumed.windowStart
+      end = resumed.windowEnd
+    } else {
+      const starts = [floor.getTime(), pending.oldest.getTime() - POLL_OVERLAP_MS]
+      if (cursor) starts.push(cursor.until.getTime() - POLL_OVERLAP_MS)
+      start = new Date(Math.min(Math.max(...starts), now.getTime()))
+      end = now
+    }
 
     let events = 0
     let applied = 0
-    let token: string | null = null
+    let token: string | null = resumed?.continueToken ?? null
     let pages = 0
     do {
-      const page = await this.#page(key, start, now, token)
+      let page: NonNullable<ReturnType<typeof activityPage>>
+      try {
+        page = await this.#page(key, start, end, token)
+      } catch (error) {
+        // A kept token SMTP2GO no longer takes: the next run starts its window again.
+        if (resumed && token === resumed.continueToken) await this.#keep(cursor?.until ?? start, null, null, null)
+        throw error
+      }
       pages++
       events += page.events.length
       await this.#db.transaction(async (tx) => {
@@ -140,18 +167,25 @@ export class ActivityPoll {
         }
       })
       token = page.token
-    } while (token && pages < POLL_PAGES_MAX)
+    } while (token && pages < this.#pagesMax)
     if (token) {
-      // Not every page of the window was read: the cursor stays, and the next run reads the window again.
-      log.warn("the activity poll stopped at its page limit; the next run reads the window again", { pages })
-      return { state: "done", events, applied }
+      // Not every page of the window was read: the cursor stays, and the next run goes on from this token.
+      await this.#keep(cursor?.until ?? start, token, start, end)
+      log.warn("the activity poll stopped at its page limit; the next run goes on from there", { pages })
+      return { state: "partial", events, applied }
     }
-    await this.#db
-      .insert(deliveryPoll)
-      .values({ id: 1, until: now })
-      .onConflictDoUpdate({ target: deliveryPoll.id, set: { until: now, updatedAt: new Date() } })
+    await this.#keep(end, null, null, null)
     if (applied > 0) log.info("the activity poll updated delivery statuses", { events, applied })
     return { state: "done", events, applied }
+  }
+
+  /** The cursor, and the window still being paged through (with its token), or none. */
+  async #keep(until: Date, continueToken: string | null, windowStart: Date | null, windowEnd: Date | null) {
+    const values = { until, continueToken, windowStart, windowEnd }
+    await this.#db
+      .insert(deliveryPoll)
+      .values({ id: 1, ...values })
+      .onConflictDoUpdate({ target: deliveryPoll.id, set: { ...values, updatedAt: new Date() } })
   }
 
   async #page(key: string, start: Date, end: Date, token: string | null) {
@@ -162,7 +196,7 @@ export class ActivityPoll {
         start_date: isoSeconds(start),
         end_date: isoSeconds(end),
         event_types: Object.keys(ACTIVITY_EVENTS),
-        limit: POLL_PAGE_SIZE,
+        limit: this.#pageSize,
         ...(token ? { continue_token: token } : {}),
       }),
       signal: AbortSignal.timeout(this.#timeoutMs),
