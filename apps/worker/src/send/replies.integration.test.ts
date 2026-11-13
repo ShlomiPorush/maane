@@ -20,6 +20,7 @@ import { fromCodePoints, mime } from "../testing/mime.ts"
 import { type StandInSmtp, startStandInSmtp } from "../testing/smtp.ts"
 import { ReplySender } from "./sender.ts"
 import type { SmtpTimeouts } from "./smtp.ts"
+import { smtpTest } from "./test.ts"
 import { scanUpload } from "./uploads.ts"
 
 // Replies that send (plan 3.1), from the composer's API to the stand-in SMTP servers and back through intake: the server
@@ -73,9 +74,9 @@ afterEach(async () => {
   await h.close()
 })
 
-/** The worker's settings: the stand-ins' addresses and credentials, given to this sender only. */
-function sender(values: Partial<Record<SettingKey, string>> = {}, options: { afterClaim?: () => Promise<void> } = {}) {
-  const settings = new Settings(h.database.db, createSettingsCipher([{ version: 1, value: h.cipherKey }]), {
+/** The worker's settings: the stand-ins' addresses and credentials, given to this process only. */
+function workerSettings(values: Partial<Record<SettingKey, string>> = {}) {
+  return new Settings(h.database.db, createSettingsCipher([{ version: 1, value: h.cipherKey }]), {
     "smtp2go.host": smtp2go.host,
     "smtp2go.port": String(smtp2go.port),
     "smtp2go.user": smtp2go.user,
@@ -88,6 +89,10 @@ function sender(values: Partial<Record<SettingKey, string>> = {}, options: { aft
     "mail.bounceAddress": BOUNCE,
     ...values,
   })
+}
+
+function sender(values: Partial<Record<SettingKey, string>> = {}, options: { afterClaim?: () => Promise<void> } = {}) {
+  const settings = workerSettings(values)
   return new ReplySender({ db: h.database.db, settings, timeouts: QUICK, afterClaim: options.afterClaim })
 }
 
@@ -525,5 +530,29 @@ describe("uploads", () => {
     const answer = await uploadFile(admin, "big.bin", Buffer.alloc(limit + 1))
     expect(answer.json).toMatchObject({ error: "file_too_large" })
     expect(await h.database.db.select().from(upload)).toHaveLength(0)
+  })
+})
+
+describe("the SMTP connection test", () => {
+  it("signs in with TLS and sends nothing, and says what failed", async () => {
+    const before = smtp2go.received.length + failover.received.length
+    expect(await smtpTest(workerSettings(), "smtp2go", QUICK)).toMatchObject({ ok: true, problem: null })
+    expect(await smtpTest(workerSettings(), "failover", QUICK)).toMatchObject({ ok: true, provider: "failover" })
+    expect(
+      await smtpTest(workerSettings({ "smtp2go.password": `${smtp2go.password}x` }), "smtp2go", QUICK),
+    ).toMatchObject({ ok: false, problem: "auth", code: "EAUTH", response: expect.stringMatching(/^535 /) })
+    expect(await smtpTest(workerSettings({ "failover.host": "" }), "failover", QUICK)).toMatchObject({
+      ok: false,
+      problem: "not_configured",
+    })
+    const plain = await startStandInSmtp({ noTls: true })
+    try {
+      const result = await smtpTest(workerSettings({ "smtp2go.port": String(plain.port) }), "smtp2go", QUICK)
+      expect(result.ok).toBe(false)
+      expect(["tls", "connection"]).toContain(result.problem)
+    } finally {
+      await plain.close()
+    }
+    expect(smtp2go.received.length + failover.received.length).toBe(before)
   })
 })
