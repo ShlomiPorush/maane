@@ -7,6 +7,7 @@ import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
 import { createTestApp } from "@maane/server/testing/app"
 import { nextIp, TestBrowser, testPassword } from "@maane/server/testing/browser"
+import { pdf, png } from "@maane/server/testing/files"
 import { MESSAGES, type SettingKey, type TicketView, userEmail } from "@maane/shared"
 import { and, eq } from "drizzle-orm"
 import { simpleParser } from "mailparser"
@@ -214,13 +215,20 @@ describe("a reply, end to end", () => {
     expect(parsed.subject).toBe(`Re: A question [#${ticket.number}]`)
     expect(parsed.inReplyTo).toBe(`<${ticket.messageId}>`)
     expect(parsed.from?.value).toEqual([{ address: SUPPORT, name: "first.admin (Example Support)" }])
-    const reference = `${MESSAGES.he.mail.reference}: ${ticket.referenceCode}`
-    expect(parsed.text?.startsWith(reference)).toBe(true)
+    // The header line, then the reference code isolated left to right (U+2066 ... U+2069).
+    const [header, reference] = (parsed.text ?? "").split(/\r?\n/)
+    expect(header).toBe(MESSAGES.he.mail.header)
+    expect(reference).toBe(
+      `${MESSAGES.he.mail.reference}: ${fromCodePoints(0x2066)}${ticket.referenceCode}${fromCodePoints(0x2069)}`,
+    )
     expect(parsed.text).toContain(`${SHALOM}, ${TODA}`)
     expect(parsed.text).toContain("The English paragraph.")
     expect(parsed.html).toContain(`<span dir="ltr">${ticket.referenceCode}</span>`)
-    expect(parsed.html).toContain('<p dir="auto">The English paragraph.</p>')
-    expect(parsed.html).toMatch(/<html dir="rtl">/)
+    // The direction of each paragraph, set by the server.
+    expect(parsed.html).toContain(`<p dir="rtl">${SHALOM}, ${TODA}</p>`)
+    expect(parsed.html).toContain('<p dir="ltr">The English paragraph.</p>')
+    expect(parsed.html).not.toContain('dir="auto"')
+    expect(parsed.html).toMatch(/<html dir="rtl" lang="he">/)
     expect(parsed.attachments.map((a) => [a.filename, a.content.toString()])).toEqual([
       ["notes.txt", "The notes of the meeting.\n"],
     ])
@@ -244,6 +252,74 @@ describe("a reply, end to end", () => {
     expect(after.ticket.status).toBe("open")
     const [recipient] = await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id))
     expect(recipient?.response).toContain(`OK id=${sent.queueId}`)
+  })
+
+  it("quotes the ticket's public history in the layout: newest first, never a note or a reply nobody accepted", async () => {
+    const admin = await firstAdmin()
+    // A Hebrew customer message with a large inline screenshot.
+    const graphId = h.graph.add(
+      mime({
+        messageId: `${randomUUID()}@mail.example.com`,
+        subject: "A screenshot",
+        from: "Dana Customer <dana@example.com>",
+        to: SUPPORT,
+        html: { content: `<p>${SHALOM}</p><p><img src="cid:shot@mail.example.com" alt="shot"></p>` },
+        attachments: [
+          {
+            fileName: "shot.png",
+            contentType: "image/png",
+            content: png(2400, 600),
+            inline: true,
+            contentId: "shot@mail.example.com",
+          },
+          { fileName: "invoice.pdf", contentType: "application/pdf", content: pdf() },
+        ],
+      }),
+    )
+    await h.round()
+    const found = await h.ticketOf(graphId)
+    if (!found) throw new Error("no ticket")
+    const post = async (values: Record<string, unknown>) => {
+      const written = await admin.call("POST", `/api/v1/tickets/${found.number}/messages`, reply(values))
+      expect(written.status, JSON.stringify(written.json)).toBe(201)
+      return written.json.id as string
+    }
+    await post({ kind: "note", html: "<p>An internal note for the team.</p>" })
+    const refused = await post({
+      to: [{ address: "refuse.nobody@example.com", name: null }],
+      html: "<p>Nobody got this.</p>",
+    })
+    expect(await sender({ "failover.host": "" }).send(refused)).toBe("failed")
+    expect(await sender().send(await post({ html: "<p>The first answer.</p>" }))).toBe("accepted")
+    expect(await sender().send(await post({ html: `<p dir="auto">${TODA}</p>` }))).toBe("accepted")
+
+    const sent = smtp2go.received.at(-1)
+    if (!sent) throw new Error("nothing reached the stand-in")
+    const parsed = await simpleParser(sent.raw, { skipImageLinks: true })
+    const html = parsed.html || ""
+    const quote = html.indexOf('<blockquote type="cite"')
+    expect(html.indexOf(found.referenceCode)).toBeLessThan(html.indexOf('class="email-avatar"'))
+    expect(html.indexOf(`<p dir="rtl">${TODA}</p>`)).toBeLessThan(quote)
+    // Newest first: the accepted reply, then the customer's message.
+    expect(html.indexOf("The first answer.")).toBeGreaterThan(quote)
+    expect(html.indexOf(`<p dir="rtl">${SHALOM}</p>`)).toBeGreaterThan(html.indexOf("The first answer."))
+    expect(html).not.toContain("An internal note")
+    expect(html).not.toContain("Nobody got this.")
+    expect(html).not.toContain('dir="auto"')
+    expect(html).toContain('<span dir="ltr">invoice.pdf</span>')
+    // The screenshot, downscaled and embedded, shown no wider than the history's column; an image alone stays right to left.
+    const image =
+      /<p dir="rtl"><img alt="shot" src="cid:([^"]+)" width="586" height="147" style="width:586px;max-width:100%;height:auto;border:0" \/><\/p>/.exec(
+        html,
+      )
+    expect(image, html).not.toBeNull()
+    const embedded = parsed.attachments.find((file) => file.cid === image?.[1])
+    expect(embedded).toMatchObject({ contentType: "image/png", contentDisposition: "inline" })
+    expect(parsed.attachments.map((file) => file.filename)).toEqual(["shot.png"])
+    const text = parsed.text ?? ""
+    expect(text).toContain("> first.admin (Example Support) | ")
+    expect(text).toContain("> The first answer.")
+    expect(text).not.toContain("internal note")
   })
 
   it("writes one message for one click, however often the request is repeated", async () => {

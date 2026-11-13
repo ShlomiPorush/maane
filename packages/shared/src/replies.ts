@@ -89,6 +89,16 @@ export const RECIPIENTS_MAX = 50
 export const ATTACHMENTS_MAX = 20
 /** The longest reply text the composer sends, in characters of HTML. */
 export const REPLY_HTML_MAX = 500_000
+
+/**
+ * The largest whole message SMTP2GO takes, attachments and encoding included: "up to 50MB per email" (SMTP2GO's FAQ,
+ * https://www.smtp2go.com/faq, and its support article "Maximum Attachment Size",
+ * https://support.smtp2go.com/hc/en-gb/articles/223087547-Maximum-Attachment-Size, read 2026-11-13). Read as 50,000,000
+ * bytes, the smaller reading of MB. A reply whose message is still larger once its history is trimmed is refused before
+ * it is queued (plan 3.2).
+ */
+export const MESSAGE_MAX_MB = 50
+export const MESSAGE_MAX_BYTES = MESSAGE_MAX_MB * 1_000_000
 /** The longest agent display name, in characters. */
 export const AGENT_NAME_MAX = 80
 

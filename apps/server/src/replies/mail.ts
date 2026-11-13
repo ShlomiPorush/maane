@@ -1,13 +1,29 @@
-// The email of a reply (plan 3.1, the basic email; the full layout is plan 3.2): an HTML part and a text part, each
-// with the ticket's reference code line at the top (isolated left to right, so it never flips inside Hebrew), then the
-// reply, then the organization's signature; `In-Reply-To` and `References` to the conversation; `[#n]` in the subject.
-// nodemailer's MailComposer builds the MIME from data only: file and URL access are off, and every attachment is bytes
-// the server read itself. The message is built once, when the agent sends it; a resend sends the same bytes.
+// The email of a reply (plan 3.1, with the layout of plan 3.2 in layout.ts): an HTML part and a text part, the header
+// and the reference code line first, the reply as a conversation block with the organization's signature, the public
+// history quoted below; `In-Reply-To` and `References` to the conversation; `[#n]` in the subject. History images go
+// as embedded parts (CID) in multipart/related, the reply's files as attachments. nodemailer's MailComposer builds the
+// MIME from data only: file and URL access are off, and every attachment is bytes the server read itself. The message
+// is built once, when the agent sends it; a resend sends the same bytes.
+//
+// Size (requirements 4.1 and 4.3): the reference code is at the top, so it is never clipped. The HTML part is kept
+// under Gmail's clip budget by shortening the oldest history messages to their first words, then leaving the oldest
+// out; the whole encoded message is kept under the provider's limit (MESSAGE_MAX_BYTES) by showing history images by
+// their names, then shortening history; if the reply's own files still make it larger, it is refused (MessageTooLarge)
+// before anything is written or queued.
 
 import { randomUUID } from "node:crypto"
-import { convert } from "html-to-text"
+import { MESSAGE_MAX_BYTES } from "@maane/shared"
 import MailComposer from "nodemailer/lib/mail-composer"
 import { textDirection } from "../mail/bidi.ts"
+import { type Conversation, type Entry, escapeHtml, layout, type MailWords, type Trim } from "./layout.ts"
+
+export { htmlToText } from "./layout.ts"
+
+/**
+ * Gmail clips a message whose HTML is larger than about 102 KB (requirements 4.1); the HTML part is kept under this
+ * many bytes of UTF-8 (a Hebrew letter is two), which leaves room for the encoding's line breaks.
+ */
+export const GMAIL_HTML_BUDGET = 100_000
 
 export interface ReplyAttachment {
   fileName: string
@@ -26,30 +42,28 @@ export interface ReplyMail {
   inReplyTo: string | null
   references: string[]
   date: Date
-  /** The reference line: its label in the organization's language, and the ticket's code. */
-  referenceLabel: string
+  /** The words of the layout in the default language, and the language. */
+  words: MailWords
+  lang: string
   referenceCode: string
-  /** The reply as stored: sanitized HTML and its text. */
+  /** The agent's own name, for the initials. */
+  authorName: string
+  /** The reply as stored: sanitized HTML with the signature, and its text with the signature. */
   html: string
   text: string
-  signature: string
   /** The direction of a message without a strong character of its own: the default language's. */
   fallbackDirection: "rtl" | "ltr"
   attachments: ReplyAttachment[]
+  /** The public history, newest first: incoming messages and replies at least one recipient accepted. */
+  history: Entry[]
 }
 
-const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }
-const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (char) => ESCAPES[char] ?? char)
-
-/** The text of sanitized HTML, for the text part and the stored text (html-to-text, as intake uses it). */
-export function htmlToText(html: string): string {
-  return convert(html, {
-    wordwrap: false,
-    selectors: [
-      { selector: "a", options: { hideLinkHrefIfSameAsText: true } },
-      { selector: "img", format: "skip" },
-    ],
-  }).trim()
+/** The reply's message is larger than the provider takes, even with its history trimmed. */
+export class MessageTooLarge extends Error {
+  constructor(readonly size: number) {
+    super("the message is larger than the provider takes")
+    this.name = "MessageTooLarge"
+  }
 }
 
 /** The subject of a reply: the ticket's, with `Re:` once and `[#n]` once. */
@@ -85,42 +99,104 @@ export function storedBody(html: string, text: string, signature: string): { htm
   }
 }
 
-/** The direction of the whole message: its text's first strong character, else the default language's. */
-const directionOf = (mail: ReplyMail) => textDirection(mail.text) ?? mail.fallbackDirection
+const utf8Bytes = (text: string) => Buffer.byteLength(text, "utf8")
 
-/** The reply's MIME, built once. */
-export async function buildReply(mail: ReplyMail): Promise<Buffer> {
-  const dir = directionOf(mail)
-  const reference =
-    `<p dir="${dir}" style="margin:0 0 12px;font-size:12px;color:#6b7280">` +
-    `${escapeHtml(mail.referenceLabel)}: <span dir="ltr">${escapeHtml(mail.referenceCode)}</span></p>`
-  const html =
-    `<!doctype html><html dir="${dir}"><head><meta charset="utf-8">` +
-    `<meta name="viewport" content="width=device-width, initial-scale=1"></head>` +
-    `<body dir="${dir}">${reference}${mail.html}${signatureHtml(mail.signature, dir)}</body></html>`
-  const signatureText = mail.signature.trim() ? `\n\n-- \n${mail.signature.replace(/\r\n?/g, "\n")}` : ""
-  const text = `${mail.referenceLabel}: ${mail.referenceCode}\n\n${mail.text}${signatureText}\n`
+/** The conversation the layout draws. The email's direction is the reply's own, else the default language's. */
+function conversationOf(mail: ReplyMail): Conversation {
+  return {
+    dir: textDirection(mail.text) ?? mail.fallbackDirection,
+    lang: mail.lang,
+    words: mail.words,
+    referenceCode: mail.referenceCode,
+    current: {
+      name: mail.from.name,
+      initialsOf: mail.authorName,
+      at: mail.date,
+      html: mail.html,
+      text: mail.text,
+      images: new Map(),
+      files: [],
+    },
+    history: mail.history,
+  }
+}
+
+/**
+ * The lowest trim level whose HTML fits Gmail's budget, or the last one (all history left out). The HTML only shrinks
+ * as the level rises, so the level is found by bisection.
+ */
+function gmailTrim(conversation: Conversation, budget: number): Trim {
+  const fits = (level: number) => utf8Bytes(layout(conversation, { level, imageNames: false }).html) <= budget
+  let low = 0
+  let high = conversation.history.length * 2
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (fits(middle)) high = middle
+    else low = middle + 1
+  }
+  return { level: low, imageNames: false }
+}
+
+async function compose(mail: ReplyMail, conversation: Conversation, trim: Trim): Promise<Buffer> {
+  const built = layout(conversation, trim)
+  const address = (entry: { address: string; name: string | null }) =>
+    entry.name ? { address: entry.address, name: entry.name } : entry.address
   const composer = new MailComposer({
     from: mail.from,
-    to: mail.to.map((entry) => (entry.name ? { address: entry.address, name: entry.name } : entry.address)),
-    cc: mail.cc.length
-      ? mail.cc.map((entry) => (entry.name ? { address: entry.address, name: entry.name } : entry.address))
-      : undefined,
+    to: mail.to.map(address),
+    cc: mail.cc.length ? mail.cc.map(address) : undefined,
     subject: mail.subject,
     messageId: `<${mail.messageId}>`,
     date: mail.date,
     inReplyTo: mail.inReplyTo ? `<${mail.inReplyTo}>` : undefined,
     references: mail.references.length ? mail.references.map((id) => `<${id}>`) : undefined,
-    text,
-    html,
-    attachments: mail.attachments.map((file) => ({
-      filename: file.fileName,
-      content: file.content,
-      contentType: file.contentType,
-    })),
+    text: built.text,
+    html: built.html,
+    attachments: [
+      ...mail.attachments.map((file) => ({
+        filename: file.fileName,
+        content: file.content,
+        contentType: file.contentType,
+      })),
+      // Embedded history images: nodemailer puts an attachment with a cid into multipart/related with the HTML.
+      ...built.images.map((image) => ({
+        filename: image.fileName,
+        content: image.content,
+        contentType: image.contentType,
+        cid: image.cid,
+        contentDisposition: "inline" as const,
+      })),
+    ],
     disableFileAccess: true,
     disableUrlAccess: true,
     newline: "win",
   })
   return composer.compile().build()
+}
+
+/** The budgets a message is built within: the HTML part's bytes and the whole message's. */
+export interface Budget {
+  html: number
+  message: number
+}
+
+export const BUDGET: Budget = { html: GMAIL_HTML_BUDGET, message: MESSAGE_MAX_BYTES }
+
+/** The reply's MIME, built once, within the budgets above. */
+export async function buildReply(mail: ReplyMail, budget: Budget = BUDGET): Promise<Buffer> {
+  const conversation = conversationOf(mail)
+  let trim = gmailTrim(conversation, budget.html)
+  let mime = await compose(mail, conversation, trim)
+  if (mime.length <= budget.message) return mime
+  // History images by their names first, then history in short form, then without it.
+  trim = { ...trim, imageNames: true }
+  mime = await compose(mail, conversation, trim)
+  const count = conversation.history.length
+  for (const level of [count, count * 2]) {
+    if (mime.length <= budget.message || trim.level >= level) continue
+    trim = { level, imageNames: true }
+    mime = await compose(mail, conversation, trim)
+  }
+  if (mime.length > budget.message) throw new MessageTooLarge(mime.length)
+  return mime
 }

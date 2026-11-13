@@ -81,6 +81,8 @@ export {
   type ComposeView,
   type DeliveryView,
   MESSAGE_DIRECTIONS,
+  MESSAGE_MAX_BYTES,
+  MESSAGE_MAX_MB,
   type MessageDirection,
   OUTBOX_STATES,
   type OutboxState,

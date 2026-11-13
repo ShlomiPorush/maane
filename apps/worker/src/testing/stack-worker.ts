@@ -1,3 +1,4 @@
+import { MESSAGES } from "@maane/shared"
 import { simpleParser } from "mailparser"
 import { startWorker } from "../main.ts"
 import { fromCodePoints } from "./mime.ts"
@@ -32,6 +33,18 @@ console.log("stack worker ready")
 
 // Hebrew letters, from code points: a message holds Hebrew when one of them is in its text.
 const HEBREW = new RegExp(`[${fromCodePoints(0x5d0)}-${fromCodePoints(0x5ea)}]`)
+// The text part's reference line: a label, then the code isolated left to right (U+2066 ... U+2069).
+const REFERENCE = new RegExp(`^\\S+: ${fromCodePoints(0x2066)}[A-Z0-9]{4}-[A-Z0-9]{4}${fromCodePoints(0x2069)}$`, "m")
+
+/** The layout of plan 3.2: the header line first, the code before the first block, history quoted, no dir="auto". */
+function layoutOf(html: string, text: string): "yes" | "no" {
+  const header = text.split(/\r?\n/)[0] === MESSAGES.he.mail.header
+  const code = /<span dir="ltr">[A-Z0-9]{4}-[A-Z0-9]{4}<\/span>/.exec(html)
+  const first = html.indexOf('class="email-avatar"')
+  const quote = html.indexOf('<blockquote type="cite"')
+  const quoted = quote > -1 && html.indexOf('class="email-avatar"', quote) > quote
+  return header && code !== null && code.index < first && quoted && !html.includes('dir="auto"') ? "yes" : "no"
+}
 
 async function report(): Promise<void> {
   for (const [name, server] of [
@@ -39,7 +52,7 @@ async function report(): Promise<void> {
     ["failover", failover],
   ] as const)
     for (const received of server.received) {
-      const parsed = await simpleParser(received.raw)
+      const parsed = await simpleParser(received.raw, { skipImageLinks: true })
       const text = parsed.text ?? ""
       console.log(
         [
@@ -48,8 +61,10 @@ async function report(): Promise<void> {
           `from=${received.from}`,
           `hebrew=${HEBREW.test(text) ? "yes" : "no"}`,
           `english=${/English paragraph/.test(text) ? "yes" : "no"}`,
-          `attachments=${parsed.attachments.length}`,
-          `reference=${/^\S+: [A-Z0-9]{4}-[A-Z0-9]{4}$/m.test(text) ? "yes" : "no"}`,
+          // The reply's own files; embedded history images are related parts.
+          `attachments=${parsed.attachments.filter((file) => !file.related).length}`,
+          `reference=${REFERENCE.test(text) ? "yes" : "no"}`,
+          `layout=${layoutOf(parsed.html || "", text)}`,
           `subject-number=${/\[#\d+\]/.test(parsed.subject ?? "") ? "yes" : "no"}`,
           `dropped=${received.dropped ? "yes" : "no"}`,
         ].join(" "),

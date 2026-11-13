@@ -287,7 +287,8 @@ start_sender() {
 }
 
 # What the stand-ins received while the end-to-end tests ran: the Hebrew reply with an English paragraph and an
-# attachment (e2e/replies.spec.ts) reached SMTP2GO's stand-in, with the reference line and the ticket number.
+# attachment (e2e/replies.spec.ts) reached SMTP2GO's stand-in, with the reference line, the ticket number, and the
+# layout of plan 3.2: the header line first, the code before the first block, the history quoted, no dir="auto".
 check_sends() {
   local out line
   docker stop -t 30 "$SENDER" >/dev/null 2>&1 || true
@@ -295,7 +296,7 @@ check_sends() {
   docker rm -f "$SENDER" >/dev/null 2>&1 || true
   SENDER=""
   while IFS= read -r line; do echo "    $line"; done <<<"$out"
-  grep -qE '^received smtp2go .* hebrew=yes english=yes attachments=1 reference=yes subject-number=yes dropped=no$' <<<"$out" ||
+  grep -qE '^received smtp2go .* hebrew=yes english=yes attachments=1 reference=yes layout=yes subject-number=yes dropped=no$' <<<"$out" ||
     die "the stand-in SMTP2GO did not receive the Hebrew reply of the end-to-end tests"
 }
 
