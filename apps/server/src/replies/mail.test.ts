@@ -1,6 +1,7 @@
 import { MESSAGES } from "@maane/shared"
 import { simpleParser } from "mailparser"
 import { describe, expect, it } from "vitest"
+import { withoutComments } from "../testing/comments.ts"
 import { png } from "../testing/files.ts"
 import { COLUMN_WIDTH, IMAGE_MAX_WIDTH, imagesToRead, prepareImage } from "./images.ts"
 import { type Entry, type EntryImage, israelTime, LRI, layout, PDI } from "./layout.ts"
@@ -258,14 +259,10 @@ describe("the size budget", () => {
     const conversation = { dir: "ltr" as const, lang: "en", words: MESSAGES.en.mail, referenceCode: CODE }
     // Level 1: the oldest (and only) history message in short form.
     const { html } = layout({ ...conversation, current: entry(), history }, { level: 1, imageNames: false })
-    const short = /<div dir="ltr">(?:<!--[\s\S]*?-->)*(Y{200} and then [^<]*\.\.\.)(?:<!--[\s\S]*?-->)*<\/div>/.exec(
-      html,
-    )
-    expect(short, html).not.toBeNull()
     expect(html).toContain(`<!--[if mso]>${"Y".repeat(50)}<br>`)
-    // What every other client shows: the short text once, unchanged.
-    const visible = html.replace(/<!--[\s\S]*?-->/g, "")
-    expect(visible).toContain(`<div dir="ltr">${short?.[1]}</div>`)
+    // What every other client shows: the short text once, unchanged, in its own block.
+    const visible = withoutComments(html)
+    expect(visible, html).toMatch(/<div dir="ltr">Y{200} and then [^<]*\.\.\.<\/div>/)
     expect(visible.split(token).length).toBe(2)
   })
 

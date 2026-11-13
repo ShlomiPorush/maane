@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest"
+import { withoutComments as visible } from "../testing/comments.ts"
 import { cutForWord, LONG_RUN, wordCopies } from "./word.ts"
-
-/** What a client other than Word shows: the HTML without its comments (Word's copy lives in one). */
-const visible = (html: string) => html.replace(/<!--[\s\S]*?-->/g, "")
 
 describe("Word's copy of a long run (html-email, long values without spaces)", () => {
   const token = `https://www.example.com/?q=${"A1&b".repeat(44)}`
