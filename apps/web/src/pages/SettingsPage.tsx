@@ -831,6 +831,7 @@ function WebhookRow({ set, onMade }: { set: boolean; onMade: () => void }) {
           className="ui-btn ui-btn-sm"
           disabled={busy}
           aria-busy={busy || undefined}
+          data-webhook-make=""
           onClick={() => void make()}
         >
           {set || made ? t("settings.sending.webhook.replace") : t("settings.sending.webhook.generate")}
