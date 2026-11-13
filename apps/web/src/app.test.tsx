@@ -778,8 +778,9 @@ describe("organizations", () => {
   it("makes SMTP2GO's webhook address and token, shows them once, and asks before replacing them", async () => {
     let made = false
     const secret = (key: string) => ({ key, value: null, secret: true, set: made, locked: false, variable: null })
-    const url = "http://127.0.0.1:8090/hooks/smtp2go/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-    const token = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    // Built at run time: no secret-shaped literal in a tracked file.
+    const url = `http://127.0.0.1:8090/hooks/smtp2go/${"p".repeat(43)}`
+    const token = "t".repeat(43)
     await renderAt("/settings", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,

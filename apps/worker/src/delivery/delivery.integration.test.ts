@@ -487,12 +487,12 @@ function deliveryReport(original: string, groups: { address: string; action: str
 
 describe("failover bounces in the intake mailbox", () => {
   // SMTP2GO cannot be logged in to, so the failover takes the reply (from the bounce address).
-  const viaFailover = { "smtp2go.password": "not-the-password" }
+  const viaFailover = () => ({ "smtp2go.password": `${smtp2go.password}x` })
 
   it("bounces only the recipients a delivery report says failed, and flags the ticket", async () => {
     await firstAdmin()
     const number = await customerTicket()
-    const reply = await sentReply(number, ["dana@example.com", "ron@example.com"], viaFailover)
+    const reply = await sentReply(number, ["dana@example.com", "ron@example.com"], viaFailover())
     expect(await recipientsOf(number, reply.id)).toMatchObject([
       { state: "accepted", provider: "failover" },
       { state: "accepted", provider: "failover" },
@@ -522,7 +522,7 @@ describe("failover bounces in the intake mailbox", () => {
   it("records a report that names no recipient of the reply on the reply, and changes no recipient", async () => {
     await firstAdmin()
     const number = await customerTicket()
-    const reply = await sentReply(number, ["dana@example.com"], viaFailover)
+    const reply = await sentReply(number, ["dana@example.com"], viaFailover())
     h.graph.add(
       deliveryReport(reply.messageId, [{ address: "someone.else@example.com", action: "failed", status: "5.1.1" }]),
     )
@@ -535,7 +535,7 @@ describe("failover bounces in the intake mailbox", () => {
   it("never takes a read receipt for a bounce", async () => {
     await firstAdmin()
     const number = await customerTicket()
-    const reply = await sentReply(number, ["dana@example.com"], viaFailover)
+    const reply = await sentReply(number, ["dana@example.com"], viaFailover())
     h.graph.add(
       mime({
         from: "Dana Customer <dana@example.com>",
@@ -559,22 +559,32 @@ describe("failover bounces in the intake mailbox", () => {
     expect((await view(number)).ticket.reviewFlags).not.toContain("delivery_failed")
   })
 
-  it("never lets a later send's result overwrite a status a report wrote", async () => {
+  it("bounces only an accepted recipient: a report about an unknown one is recorded on the reply and flags nothing", async () => {
     await firstAdmin()
     const number = await customerTicket()
     // SMTP2GO takes the data and drops the connection before its final reply: unknown, never sent again by itself.
     const reply = await sentReply(number, ["drop.dana@example.com"], { "failover.host": "" })
     expect(await recipientsOf(number, reply.id)).toMatchObject([{ state: "unknown" }])
-    // The failover's report says it bounced.
-    h.graph.add(
-      deliveryReport(reply.messageId, [{ address: "drop.dana@example.com", action: "failed", status: "5.1.1" }]),
-    )
+    // A report names the unknown recipient: it is kept on the reply, and the recipient keeps no status.
+    const bounced = (status: string) =>
+      deliveryReport(reply.messageId, [{ address: "drop.dana@example.com", action: "failed", status }])
+    h.graph.add(bounced("5.1.1"))
     await h.round()
-    // The agent sends it again, and the failover takes it this time.
+    expect((await view(number)).messages.find((m) => m.id === reply.id)?.delivery).toMatchObject({
+      reportWithoutRecipient: true,
+      recipients: [{ state: "unknown", delivery: null }],
+    })
+    // The agent sends it again and the failover takes it: the earlier attempt's report flags nothing.
     expect((await admin.call("POST", `/api/v1/messages/${reply.id}/resend`)).status).toBe(200)
-    expect(await sender(viaFailover).send(reply.id)).toBe("accepted")
+    expect(await sender(viaFailover()).send(reply.id)).toBe("accepted")
     expect(await recipientsOf(number, reply.id)).toMatchObject([
-      { state: "accepted", provider: "failover", delivery: "hard_bounce", deliveryDetail: "5.1.1" },
+      { state: "accepted", provider: "failover", delivery: null },
     ])
+    expect((await view(number)).ticket.reviewFlags).not.toContain("delivery_failed")
+    // A report that comes after the accepted send bounces it.
+    h.graph.add(bounced("5.2.2"))
+    await h.round()
+    expect(await recipientsOf(number, reply.id)).toMatchObject([{ delivery: "hard_bounce", deliveryDetail: "5.2.2" }])
+    expect((await view(number)).ticket.reviewFlags).toContain("delivery_failed")
   })
 })
