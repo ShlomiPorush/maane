@@ -2,7 +2,7 @@
 // states of an outgoing message and of each recipient, why a send did not happen, uploads, and the shapes the composer
 // and the ticket view use.
 
-import type { DeliveryStatus } from "./delivery.ts"
+import type { DeliverySource, DeliveryStatus } from "./delivery.ts"
 import type { MailAddress } from "./tickets.ts"
 
 /** `in` came through intake; `out` is an agent's reply; `note` is an internal note, never sent. */
@@ -127,6 +127,19 @@ export interface RecipientView extends MailAddress {
   deliveryDetail: string | null
 }
 
+/** The latest delivery event about a reply that Maane could not tie to one recipient's send, as it was received. */
+export interface UnmatchedDelivery {
+  source: DeliverySource
+  /** When Maane recorded it. */
+  recordedAt: string
+  status: DeliveryStatus | null
+  /** The event's own time. */
+  at: string | null
+  recipient: string | null
+  /** The Message-ID the event named (Maane's own, of this reply). */
+  messageId: string | null
+}
+
 /** Where an outgoing message is. */
 export interface DeliveryView {
   state: OutboxState
@@ -137,7 +150,7 @@ export interface DeliveryView {
    * recipient accepted before it arrived, or an SMTP2GO event without a known queue ID for a recipient more than one
    * attempt could have reached.
    */
-  unmatchedDelivery: boolean
+  unmatchedDelivery: UnmatchedDelivery | null
 }
 
 /** What the composer of a ticket starts from. */

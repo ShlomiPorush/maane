@@ -107,7 +107,28 @@ export function Delivery({
           action={actions}
         />
       ) : null}
-      {delivery.unmatchedDelivery ? <Banner tone="warn" title={t("delivery.unmatched")} /> : null}
+      {delivery.unmatchedDelivery ? (
+        <Banner tone="warn" title={t("delivery.unmatched")}>
+          <span className="ui-delivery-status" data-unmatched={delivery.unmatchedDelivery.source}>
+            {delivery.unmatchedDelivery.status ? (
+              <Tag tone={STATUS_TONE[delivery.unmatchedDelivery.status]}>
+                {t(`delivery.status.${delivery.unmatchedDelivery.status}`)}
+              </Tag>
+            ) : null}
+            <Time value={delivery.unmatchedDelivery.at ?? delivery.unmatchedDelivery.recordedAt} />
+            {delivery.unmatchedDelivery.recipient ? (
+              <bdi className="ui-mono" dir="ltr">
+                {delivery.unmatchedDelivery.recipient}
+              </bdi>
+            ) : null}
+            {delivery.unmatchedDelivery.messageId ? (
+              <bdi className="ui-delivery-detail ui-mono" dir="ltr">
+                {delivery.unmatchedDelivery.messageId}
+              </bdi>
+            ) : null}
+          </span>
+        </Banner>
+      ) : null}
       <ul className="ui-delivery-list">
         {delivery.recipients.map((recipient) => (
           <li key={recipient.address} data-recipient={recipient.address} data-state={recipient.state}>

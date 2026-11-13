@@ -763,6 +763,11 @@ export const outbox = pgTable(
     unmatchedDeliveryAt: at("unmatched_delivery_at"),
     /** `@maane/shared` DELIVERY_SOURCES. */
     unmatchedDeliverySource: text("unmatched_delivery_source"),
+    /**
+     * What that event said, for a person to read (`@maane/shared` UnmatchedDelivery without its source and time of
+     * recording): `{ status, at, recipient, messageId }`, validated tokens and times only.
+     */
+    unmatchedDeliveryEvent: jsonb("unmatched_delivery_event"),
     createdAt: createdAt(),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },

@@ -113,6 +113,7 @@ export {
   type SmtpProblem,
   type SmtpTestResult,
   type SmtpTestView,
+  type UnmatchedDelivery,
   UPLOAD_STATUSES,
   type UploadStatus,
   type UploadView,

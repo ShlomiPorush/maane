@@ -65,7 +65,15 @@ export async function applyDeliveryReport(
     ).map((row) => row.address),
   )
   const named = failed.filter((entry) => before.has(entry.address))
-  if (failed.length === 0 || named.length < failed.length) await recordUnmatched(tx, reply.messageId, "report")
+  const unnamed = failed.filter((entry) => !before.has(entry.address))
+  if (failed.length === 0 || unnamed.length > 0)
+    await recordUnmatched(tx, reply.messageId, {
+      source: "report",
+      status: "hard_bounce",
+      at: msg.receivedAt,
+      recipient: unnamed[0]?.address ?? null,
+      messageId: msg.reportOriginalMessageId,
+    })
   for (const entry of named)
     await applyDeliveryEvent(
       tx,

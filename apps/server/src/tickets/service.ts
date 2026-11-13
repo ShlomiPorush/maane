@@ -8,7 +8,9 @@ import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import {
   type AttachmentView,
+  DELIVERY_SOURCES,
   DELIVERY_STATUSES,
+  type DeliverySource,
   type DeliveryStatus,
   type FieldNotice,
   type IntakeEntry,
@@ -30,6 +32,7 @@ import {
   type TicketStatus,
   type TicketSummary,
   type TicketView,
+  type UnmatchedDelivery,
 } from "@maane/shared"
 import { and, asc, type Column, desc, eq, inArray, or, type SQL, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
@@ -58,6 +61,30 @@ const INLINE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "ima
 /** Inline images are embedded up to these sizes; a larger one stays a file to download. */
 export const INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 export const INLINE_IMAGES_MAX_BYTES = 20 * 1024 * 1024
+
+/** A reply's unmatched delivery event as the ticket view shows it, its stored JSON read field by field. */
+function unmatchedOf(row: {
+  unmatchedDeliveryAt: Date | null
+  unmatchedDeliverySource: string | null
+  unmatchedDeliveryEvent: unknown
+}): UnmatchedDelivery | null {
+  if (!row.unmatchedDeliveryAt) return null
+  const event = (typeof row.unmatchedDeliveryEvent === "object" ? row.unmatchedDeliveryEvent : null) as Record<
+    string,
+    unknown
+  > | null
+  const text = (value: unknown) => (typeof value === "string" ? value : null)
+  const status = text(event?.status)
+  const source = text(row.unmatchedDeliverySource)
+  return {
+    source: (DELIVERY_SOURCES as readonly string[]).includes(source ?? "") ? (source as DeliverySource) : "report",
+    recordedAt: row.unmatchedDeliveryAt.toISOString(),
+    status: (DELIVERY_STATUSES as readonly string[]).includes(status ?? "") ? (status as DeliveryStatus) : null,
+    at: text(event?.at),
+    recipient: text(event?.recipient),
+    messageId: text(event?.messageId),
+  }
+}
 
 const STORED = new Set<string>(STORED_STATUSES)
 const isPartStatus = (value: string): value is PartStatus => (PART_STATUSES as readonly string[]).includes(value)
@@ -339,6 +366,8 @@ export class Tickets {
             state: outbox.state,
             problem: outbox.problem,
             unmatchedDeliveryAt: outbox.unmatchedDeliveryAt,
+            unmatchedDeliverySource: outbox.unmatchedDeliverySource,
+            unmatchedDeliveryEvent: outbox.unmatchedDeliveryEvent,
           })
           .from(outbox)
           .where(inArray(outbox.messageId, replyIds))
@@ -391,7 +420,7 @@ export class Tickets {
             deliveryAt: r.deliveryAt?.toISOString() ?? null,
             deliveryDetail: r.deliveryDetail,
           })),
-        unmatchedDelivery: sent.unmatchedDeliveryAt !== null,
+        unmatchedDelivery: unmatchedOf(sent),
       }
     }
     const views: MessageView[] = messages.map((m) => {

@@ -1733,7 +1733,14 @@ describe("tickets", () => {
       delivery: {
         state: "accepted",
         problem: null,
-        unmatchedDelivery: true,
+        unmatchedDelivery: {
+          source: "webhook",
+          recordedAt: when,
+          status: "soft_bounce",
+          at: when,
+          recipient: "lea@example.com",
+          messageId: "reply-1@example.com",
+        },
         recipients: [
           {
             address: "dana@example.com",
@@ -1777,6 +1784,12 @@ describe("tickets", () => {
       "/api/v1/tickets/7": view("v1", [delivered]),
     })
     await vi.waitFor(() => expect(text()).toContain(he("delivery.unmatched")))
+    // What the unmatched event said is shown: its status, time, recipient, and Message-ID.
+    const unmatched = document.querySelector('[data-unmatched="webhook"]') as HTMLElement
+    expect(unmatched.textContent).toContain(he("delivery.status.soft_bounce"))
+    expect(unmatched.textContent).toContain("lea@example.com")
+    expect(unmatched.textContent).toContain("reply-1@example.com")
+    expect(unmatched.querySelector("time")).not.toBeNull()
     const card = document.querySelector('[data-direction="out"]') as HTMLElement
     const dana = card.querySelector('[data-recipient="dana@example.com"]') as HTMLElement
     expect(dana.querySelector("[data-delivery]")?.getAttribute("data-delivery")).toBe("hard_bounce")

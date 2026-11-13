@@ -11,7 +11,7 @@ import { MIGRATIONS_DIR } from "@maane/server/testing/db"
 import type { SettingKey, TicketView, WebhookSecretsView } from "@maane/shared"
 import { eq, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { ReplySender } from "../send/sender.ts"
+import { ReplySender, type ReplySenderOptions } from "../send/sender.ts"
 import type { SmtpTimeouts } from "../send/smtp.ts"
 import { type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
 import { type IntakeHarness, startIntake } from "../testing/intake.ts"
@@ -88,8 +88,10 @@ function workerSettings(values: Partial<Record<SettingKey, string>> = {}, withou
   return new Settings(h.database.db, createSettingsCipher([{ version: 1, value: h.cipherKey }]), overrides)
 }
 
-const sender = (values: Partial<Record<SettingKey, string>> = {}) =>
-  new ReplySender({ db: h.database.db, settings: workerSettings(values), timeouts: QUICK })
+const sender = (
+  values: Partial<Record<SettingKey, string>> = {},
+  hooks: Pick<ReplySenderOptions, "afterClaim" | "afterSend" | "afterRecord"> = {},
+) => new ReplySender({ db: h.database.db, settings: workerSettings(values), timeouts: QUICK, ...hooks })
 
 /** SMTP2GO cannot be logged in to, so the failover takes the reply (from the bounce address). */
 const viaFailover = () => ({ "smtp2go.password": `${smtp2go.password}x` })
@@ -531,7 +533,10 @@ describe("failover bounces in the intake mailbox", () => {
     )
     await h.round()
     const delivery = (await view(number)).messages.find((m) => m.id === reply.id)?.delivery
-    expect(delivery).toMatchObject({ unmatchedDelivery: true, recipients: [{ delivery: null }] })
+    expect(delivery).toMatchObject({
+      unmatchedDelivery: expect.objectContaining({ source: "report" }),
+      recipients: [{ delivery: null }],
+    })
     expect((await view(number)).ticket.reviewFlags).not.toContain("delivery_failed")
   })
 
@@ -558,7 +563,7 @@ describe("failover bounces in the intake mailbox", () => {
     )
     await h.round()
     const delivery = (await view(number)).messages.find((m) => m.id === reply.id)?.delivery
-    expect(delivery).toMatchObject({ unmatchedDelivery: false, recipients: [{ delivery: null }] })
+    expect(delivery).toMatchObject({ unmatchedDelivery: null, recipients: [{ delivery: null }] })
     expect((await view(number)).ticket.reviewFlags).not.toContain("delivery_failed")
   })
 
@@ -574,7 +579,7 @@ describe("failover bounces in the intake mailbox", () => {
     h.graph.add(bounced("5.1.1"))
     await h.round()
     expect((await view(number)).messages.find((m) => m.id === reply.id)?.delivery).toMatchObject({
-      unmatchedDelivery: true,
+      unmatchedDelivery: expect.objectContaining({ source: "report" }),
       recipients: [{ state: "unknown", delivery: null }],
     })
     // The agent sends it again and the failover takes it: the earlier attempt's report flags nothing.
@@ -634,7 +639,7 @@ describe("review of 3.3", () => {
     // ... and only then is the report processed.
     await h.processor.run()
     expect((await view(number)).messages.find((m) => m.id === reply.id)?.delivery).toMatchObject({
-      unmatchedDelivery: true,
+      unmatchedDelivery: expect.objectContaining({ source: "report" }),
       recipients: [{ state: "accepted", delivery: null }],
     })
     expect(await flagged(number)).toBe(false)
@@ -698,7 +703,7 @@ describe("review of 3.3", () => {
     // The status shows beside the recipient; whether it was sent stays the agent's to decide.
     expect((await view(number)).messages.find((m) => m.id === reply.id)?.delivery).toMatchObject({
       state: "unknown",
-      unmatchedDelivery: false,
+      unmatchedDelivery: null,
       recipients: [{ state: "unknown", delivery: "delivered" }],
     })
   })
@@ -721,8 +726,15 @@ describe("review of 3.3", () => {
       `Bearer ${token}`,
     )
     expect(answer.status).toBe(200)
+    // What the event said is kept for a person to read.
     expect((await view(number)).messages.find((m) => m.id === reply.id)?.delivery).toMatchObject({
-      unmatchedDelivery: true,
+      unmatchedDelivery: {
+        source: "webhook",
+        status: "hard_bounce",
+        at: "2026-11-13T10:00:00.000Z",
+        recipient: address,
+        messageId: reply.messageId,
+      },
       recipients: [{ state: "unknown", delivery: null }],
     })
     expect(await flagged(number)).toBe(false)
@@ -736,7 +748,7 @@ describe("review of 3.3", () => {
       },
       `Bearer ${token}`,
     )
-    expect((await view(number)).messages.find((m) => m.id === other.id)?.delivery?.unmatchedDelivery).toBe(false)
+    expect((await view(number)).messages.find((m) => m.id === other.id)?.delivery?.unmatchedDelivery).toBeNull()
   })
 
   it("D5: the migration fills the queue ID and the acceptance of replies sent before the upgrade", async () => {
@@ -757,5 +769,127 @@ describe("review of 3.3", () => {
     expect(row?.providerId).toBe(queueId)
     expect(row?.acceptedAt?.toISOString()).toBe(row?.updatedAt.toISOString())
     expect(row?.possibleSends).toBe(1)
+  })
+})
+
+describe("review of 3.3, round 2", () => {
+  const crash = () => {
+    throw new Error("the run stops here")
+  }
+  /** A reply written through the API, not sent yet. */
+  async function written(number: number, to: string[]): Promise<{ id: string; messageId: string }> {
+    const answer = await admin.call("POST", `/api/v1/tickets/${number}/messages`, {
+      submissionId: randomUUID(),
+      kind: "reply",
+      from: SUPPORT,
+      to: to.map((address) => ({ address, name: null })),
+      cc: [],
+      html: `<p dir="auto">${TODA}</p>`,
+      uploads: [],
+      parts: [],
+    })
+    expect(answer.status).toBe(201)
+    const [row] = await h.database.db
+      .select({ messageId: outbox.messageIdHeader })
+      .from(outbox)
+      .where(eq(outbox.messageId, answer.json.id))
+    return { id: answer.json.id as string, messageId: row?.messageId ?? "" }
+  }
+  const possibleSends = async (id: string) =>
+    (await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id))).map(
+      (row) => row.possibleSends,
+    )
+
+  it("D6: a run that stops after SMTP2GO took the data and before its answer was saved still counts its attempt", async () => {
+    await firstAdmin()
+    const number = await customerTicket()
+    const reply = await written(number, ["dana@example.com"])
+    // SMTP2GO accepts the data; the run stops before it saves the answer, so the queue ID is never stored.
+    await expect(sender({ "failover.host": "" }, { afterSend: async () => crash() }).send(reply.id)).rejects.toThrow()
+    expect(await possibleSends(reply.id)).toEqual([1])
+    const { path, token } = await webhookSecrets()
+    const answer = await hook(
+      path,
+      {
+        ...event({
+          event: "delivered",
+          email_id: smtp2go.received.at(-1)?.queueId ?? "",
+          rcpt: "dana@example.com",
+          time: "2026-11-13T10:00:00Z",
+        }),
+        "message-id": reply.messageId,
+      },
+      `Bearer ${token}`,
+    )
+    expect(answer.status).toBe(200)
+    expect((await view(number)).messages.find((m) => m.id === reply.id)?.delivery).toMatchObject({
+      unmatchedDelivery: null,
+      recipients: [{ delivery: "delivered" }],
+    })
+  })
+
+  it("D6: once Send again claims a second attempt, an event by Message-ID is unmatched", async () => {
+    await firstAdmin()
+    const number = await customerTicket()
+    const address = "drop.dana@example.com"
+    const reply = await sentReply(number, [address], { "failover.host": "" })
+    expect(await possibleSends(reply.id)).toEqual([1])
+    const { path, token } = await webhookSecrets()
+    expect((await admin.call("POST", `/api/v1/messages/${reply.id}/resend`)).status).toBe(200)
+    // The second attempt is claimed; while it may already be on its way, an event naming the Message-ID arrives.
+    let during: Response | null = null
+    const second = sender(
+      { "failover.host": "" },
+      {
+        afterClaim: async () => {
+          during = await hook(
+            path,
+            {
+              ...event({ event: "bounce", email_id: "never-stored", rcpt: address, time: "2026-11-13T10:00:00Z" }),
+              "message-id": reply.messageId,
+            },
+            `Bearer ${token}`,
+          )
+        },
+      },
+    )
+    expect(await second.send(reply.id)).toBe("unknown")
+    expect((during as Response | null)?.status).toBe(200)
+    expect(await possibleSends(reply.id)).toEqual([2])
+    expect((await view(number)).messages.find((m) => m.id === reply.id)?.delivery).toMatchObject({
+      unmatchedDelivery: { source: "webhook", status: "hard_bounce", recipient: address },
+      recipients: [{ delivery: null }],
+    })
+  })
+
+  it("D7: the recovery of a run that stopped after saving an unknown answer is not a new attempt", async () => {
+    await firstAdmin()
+    const number = await customerTicket()
+    const reply = await written(number, ["drop.dana@example.com"])
+    // The unknown answer is saved, then the run stops before it settles the row (still `sending`).
+    await expect(sender({ "failover.host": "" }, { afterRecord: async () => crash() }).send(reply.id)).rejects.toThrow()
+    const [row] = await h.database.db.select({ state: outbox.state }).from(outbox).where(eq(outbox.messageId, reply.id))
+    expect(row?.state).toBe("sending")
+    // The next run finds it halfway and recovers it without sending.
+    expect(await sender({ "failover.host": "" }).send(reply.id)).toBe("unknown")
+    expect(await possibleSends(reply.id)).toEqual([1])
+  })
+
+  it("D8: the backfill never lets an old unknown recipient, or one sent again, match by Message-ID", async () => {
+    await firstAdmin()
+    const number = await customerTicket()
+    const unknown = await sentReply(number, ["drop.dana@example.com"], { "failover.host": "" })
+    const once = await sentReply(number, ["dana@example.com"])
+    const resent = await sentReply(number, ["drop.ron@example.com"], { "failover.host": "" })
+    expect((await admin.call("POST", `/api/v1/messages/${resent.id}/resend`)).status).toBe(200)
+    expect(await sender(viaFailover()).send(resent.id)).toBe("accepted")
+    // As rows sent before 0010.
+    await h.database.db.update(outboxRecipient).set({ possibleSends: 0, acceptedAt: null })
+    const file = readFileSync(join(MIGRATIONS_DIR, "0012_delivery_backfill.sql"), "utf8")
+    for (const statement of file.split("--> statement-breakpoint"))
+      if (statement.includes('"outbox_recipient"')) await h.database.db.execute(sql.raw(statement))
+    expect(await possibleSends(unknown.id)).toEqual([2])
+    expect(await possibleSends(once.id)).toEqual([1])
+    expect(await possibleSends(resent.id)).toEqual([2])
   })
 })

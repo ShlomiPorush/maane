@@ -1,0 +1,1 @@
+ALTER TABLE "outbox" ADD COLUMN "unmatched_delivery_event" jsonb;

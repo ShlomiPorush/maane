@@ -36,6 +36,12 @@ export interface ReplySenderOptions {
   timeouts?: SmtpTimeouts
   /** Called right after the attempt was committed as `sending`, before anything is sent: a test stops a run here. */
   afterClaim?: (messageId: string) => Promise<void>
+  /**
+   * Test hooks around one provider's answer: right after it answered, before it is saved, and right after it is saved.
+   * A test that throws there stops the run as a crash would.
+   */
+  afterSend?: (messageId: string) => Promise<void>
+  afterRecord?: (messageId: string) => Promise<void>
   now?: () => Date
 }
 
@@ -53,6 +59,8 @@ export class ReplySender {
   readonly #settings: Settings
   readonly #timeouts: SmtpTimeouts
   readonly #afterClaim?: (messageId: string) => Promise<void>
+  readonly #afterSend?: (messageId: string) => Promise<void>
+  readonly #afterRecord?: (messageId: string) => Promise<void>
   readonly #now: () => Date
 
   constructor(options: ReplySenderOptions) {
@@ -60,6 +68,8 @@ export class ReplySender {
     this.#settings = options.settings
     this.#timeouts = options.timeouts ?? SMTP_TIMEOUTS
     this.#afterClaim = options.afterClaim
+    this.#afterSend = options.afterSend
+    this.#afterRecord = options.afterRecord
     this.#now = options.now ?? (() => new Date())
   }
 
@@ -83,7 +93,9 @@ export class ReplySender {
       // Still this attempt's, right before the bytes leave: a stale attempt sends nothing.
       if (!(await this.#db.transaction((tx) => this.#owns(tx, messageId, claim.attempt)))) return this.#stale(messageId)
       const result = await deliver(config, { from, to: remaining }, claim.mime, this.#timeouts)
+      await this.#afterSend?.(messageId)
       if (!(await this.#record(messageId, claim, config, result))) return this.#stale(messageId)
+      await this.#afterRecord?.(messageId)
       if (result.kind === "unknown") break
       if (result.kind === "answered") remaining = result.refused.map((entry) => entry.address)
     }
@@ -129,12 +141,8 @@ export class ReplySender {
         // An earlier run claimed this attempt and stopped before it finished: it may have sent. Never again by itself.
         await tx
           .update(outboxRecipient)
-          // The stopped attempt may have reached each of them.
-          .set({
-            state: "unknown",
-            possibleSends: sql`${outboxRecipient.possibleSends} + 1`,
-            updatedAt: this.#now(),
-          })
+          // Not a new attempt: its claim already counted it in possible_sends.
+          .set({ state: "unknown", updatedAt: this.#now() })
           .where(and(eq(outboxRecipient.messageId, messageId), ne(outboxRecipient.state, "accepted")))
         await this.#settle(tx, messageId, true)
         log.warn("a reply's earlier attempt stopped halfway; its fate is unknown", { messageId })
@@ -175,6 +183,12 @@ export class ReplySender {
           updatedAt: this.#now(),
         })
         .where(eq(outbox.messageId, messageId))
+      // Every recipient of this attempt may be reached from its first byte on (possible_sends), counted here, in the
+      // claim, so a run that stops after a provider took the data and before its answer is saved is counted too.
+      await tx
+        .update(outboxRecipient)
+        .set({ possibleSends: sql`${outboxRecipient.possibleSends} + 1` })
+        .where(and(eq(outboxRecipient.messageId, messageId), eq(outboxRecipient.state, "pending")))
       return { attempt, mime: row.mime, from: row.from, ticketId: row.ticketId, recipients }
     })
   }
@@ -219,9 +233,7 @@ export class ReplySender {
         // SMTP2GO's queue ID, from its final 250, finds the recipient for its delivery events (plan 3.3). The delivery
         // columns themselves are only ever written by those events.
         const providerId = state === "accepted" && config.provider === "smtp2go" ? queueIdOf(response) : null
-        // An accepted or unknown answer means this attempt may have reached the recipient (possible_sends), and an
-        // acceptance is dated by the database's clock, as delivery statuses are (the ticket's flag compares them).
-        const reached = state === "accepted" || state === "unknown"
+        // An acceptance is dated by the database's clock, as delivery statuses are (the ticket's flag compares them).
         await tx
           .update(outboxRecipient)
           .set({
@@ -231,7 +243,6 @@ export class ReplySender {
             providerId,
             updatedAt: now,
             ...(state === "accepted" ? { acceptedAt: sql`now()` } : {}),
-            ...(reached ? { possibleSends: sql`${outboxRecipient.possibleSends} + 1` } : {}),
           })
           .where(and(eq(outboxRecipient.messageId, messageId), inArray(outboxRecipient.address, addresses)))
       }

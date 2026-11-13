@@ -29,7 +29,7 @@ import {
 import { and, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
 import { message, outbox, outboxRecipient, ticket } from "../db/schema.ts"
-import { wellFormedText } from "../text.ts"
+import { wellFormed, wellFormedText } from "../text.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
@@ -217,15 +217,43 @@ export async function applyWebhookEvent(
     const applied = await applyDeliveryEvent(tx, { messageId: reply.messageId, onlyAttempt: true }, event)
     return applied ? "applied" : "unchanged"
   }
-  await recordUnmatched(tx, reply.messageId, event.source)
+  await recordUnmatched(tx, reply.messageId, {
+    source: event.source,
+    status: event.status,
+    at: event.at,
+    recipient: event.recipient,
+    messageId,
+  })
   return "unmatched"
 }
 
-/** Records on a reply that a delivery event about it could not be tied to one recipient's send; changes nothing else. */
-export async function recordUnmatched(tx: Tx, messageId: string, source: DeliverySource): Promise<void> {
+/** What an unmatched event said: kept on the reply for a person to read. */
+export interface UnmatchedEvent {
+  source: DeliverySource
+  status: DeliveryStatus
+  at: Date
+  recipient: string | null
+  messageId: string | null
+}
+
+/**
+ * Records on a reply that a delivery event about it could not be tied to one recipient's send, with what the event
+ * said (the latest one); changes nothing else.
+ */
+export async function recordUnmatched(tx: Tx, messageId: string, event: UnmatchedEvent): Promise<void> {
+  const details = {
+    status: event.status,
+    at: event.at.toISOString(),
+    recipient: event.recipient?.slice(0, 254) ?? null,
+    messageId: event.messageId?.slice(0, 998) ?? null,
+  }
   await tx
     .update(outbox)
-    .set({ unmatchedDeliveryAt: sql`now()`, unmatchedDeliverySource: source })
+    .set({
+      unmatchedDeliveryAt: sql`now()`,
+      unmatchedDeliverySource: event.source,
+      unmatchedDeliveryEvent: wellFormed(details).value,
+    })
     .where(eq(outbox.messageId, messageId))
 }
 
