@@ -18,6 +18,7 @@ import {
   type MailAddress,
   MESSAGES,
   matchSupportAddress,
+  outboxStateOf,
   parseExactAddress,
   RECIPIENTS_MAX,
   REPLY_HTML_MAX,
@@ -416,6 +417,8 @@ export class Replies {
             and(
               inArray(messagePart.id, partIds),
               eq(message.ticketId, ticketId),
+              // An internal note's files never reach a customer (review R1).
+              inArray(message.direction, ["in", "out"]),
               inArray(messagePart.status, [...STORED_STATUSES]),
             ),
           )
@@ -483,28 +486,50 @@ export class Replies {
     })
   }
 
-  /** "Mark as sent": the agent decides that a reply whose fate is unknown reached its unknown recipients. */
-  async markSent(scope: OrganizationScope, user: ReplyUser, messageId: string): Promise<void> {
+  /**
+   * "Mark as sent": the agent decides that one recipient whose fate is unknown received the reply (review R4: an
+   * unknown recipient may also be one the server refused before the connection dropped, which nodemailer does not
+   * report on a failed send, so the agent decides per recipient). The reply's state then follows its recipients.
+   */
+  async markSent(scope: OrganizationScope, user: ReplyUser, messageId: string, address: string): Promise<void> {
     await this.db.transaction(async (tx) => {
       const row = await this.#reply(tx, scope, messageId)
       if (row.state !== "unknown") throw new Refusal("reply_not_unknown", 409)
       const marked = await tx
         .update(outboxRecipient)
         .set({ state: "accepted", markedBy: user.id, updatedAt: new Date() })
-        .where(and(eq(outboxRecipient.messageId, messageId), eq(outboxRecipient.state, "unknown")))
+        .where(
+          and(
+            eq(outboxRecipient.messageId, messageId),
+            eq(outboxRecipient.address, address.trim().toLowerCase()),
+            eq(outboxRecipient.state, "unknown"),
+          ),
+        )
         .returning({ address: outboxRecipient.address, name: outboxRecipient.name })
+      if (marked.length === 0) throw new Refusal("reply_not_unknown", 409)
       // Accepted by the agent's decision: they become participants, as a recipient a provider accepted does.
       if (marked.length)
         await tx
           .insert(ticketParticipant)
           .values(marked.map((entry) => ({ ticketId: row.ticketId, address: entry.address, name: entry.name })))
           .onConflictDoNothing()
-      await tx.update(outbox).set({ state: "accepted", updatedAt: new Date() }).where(eq(outbox.messageId, messageId))
+      const states = await tx
+        .select({ state: outboxRecipient.state })
+        .from(outboxRecipient)
+        .where(eq(outboxRecipient.messageId, messageId))
+      const settled = outboxStateOf(
+        states.map((entry) => entry.state),
+        true,
+      )
+      await tx
+        .update(outbox)
+        .set({ state: settled.state, problem: settled.problem, updatedAt: new Date() })
+        .where(eq(outbox.messageId, messageId))
       await writeAudit(tx, user.actor, {
         action: "message.mark_sent",
         entityType: "message",
         entityId: messageId,
-        details: { ticket: row.number },
+        details: { ticket: row.number, recipients: marked.map((entry) => entry.address) },
         ipAddress: user.ipAddress,
       })
     })

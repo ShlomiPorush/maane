@@ -1,6 +1,7 @@
 // Where a reply's sending is (plan 3.1): its state, each recipient's (accepted, refused, unknown, or not sent yet) and
 // the server that answered, and, when its fate is unknown or nothing went out, what the agent can do: send it again
-// to the recipients not accepted, or mark it as sent. Both ask first: a second copy cannot be called back.
+// to the recipients not accepted, or mark one recipient whose fate is unknown as sent (each on its own: one of them
+// may have been refused before the connection dropped). Both ask first: a second copy cannot be called back.
 
 import type { DeliveryView, OutboxState, RecipientState } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
@@ -41,7 +42,7 @@ export function Delivery({
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
 
-  const act = async (action: "resend" | "markSent") => {
+  const act = async (action: "resend" | "markSent", address = "") => {
     const yes = await confirmDialog(
       action === "resend"
         ? {
@@ -50,7 +51,7 @@ export function Delivery({
             confirmText: t("delivery.resend"),
           }
         : {
-            title: t("delivery.markSentTitle"),
+            title: t("delivery.markSentTitle", { address }),
             message: t("delivery.markSentMessage"),
             confirmText: t("delivery.markSent"),
           },
@@ -59,7 +60,7 @@ export function Delivery({
     setBusy(true)
     try {
       if (action === "resend") await api.resend(messageId)
-      else await api.markSent(messageId)
+      else await api.markSent(messageId, address)
       showToast(action === "resend" ? t("delivery.resendDone") : t("delivery.markSentDone"), "success")
       await queryClient.invalidateQueries({ queryKey: qk.ticket(ticketNumber) })
     } catch (failure) {
@@ -74,11 +75,6 @@ export function Delivery({
       <button type="button" className="ui-btn ui-btn-sm" disabled={busy} onClick={() => void act("resend")}>
         {t("delivery.resend")}
       </button>
-      {delivery.state === "unknown" ? (
-        <button type="button" className="ui-btn ui-btn-sm" disabled={busy} onClick={() => void act("markSent")}>
-          {t("delivery.markSent")}
-        </button>
-      ) : null}
     </span>
   )
 
@@ -110,6 +106,17 @@ export function Delivery({
               <span className="ui-muted">{t(`delivery.provider.${recipient.provider}`)}</span>
             ) : null}
             {recipient.marked ? <span className="ui-muted">{t("delivery.marked")}</span> : null}
+            {recipient.state === "unknown" && delivery.state === "unknown" ? (
+              <button
+                type="button"
+                className="ui-btn ui-btn-sm"
+                disabled={busy}
+                data-mark={recipient.address}
+                onClick={() => void act("markSent", recipient.address)}
+              >
+                {t("delivery.markSent")}
+              </button>
+            ) : null}
           </li>
         ))}
       </ul>

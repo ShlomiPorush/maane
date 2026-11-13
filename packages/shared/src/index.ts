@@ -84,6 +84,7 @@ export {
   type MessageDirection,
   OUTBOX_STATES,
   type OutboxState,
+  outboxStateOf,
   PROVIDERS,
   type Provider,
   RECIPIENT_STATES,

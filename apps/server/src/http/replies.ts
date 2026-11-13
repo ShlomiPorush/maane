@@ -4,6 +4,7 @@
 
 import { type Context, Hono } from "hono"
 import { bodyLimit } from "hono/body-limit"
+import { z } from "zod"
 import type { Db } from "../db/client.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { visibleOrganizations } from "../organizations/scope.ts"
@@ -15,6 +16,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const NUMBER = /^[1-9][0-9]{0,15}$/
 /** Room for the multipart framing around a file of files.maxBytes. */
 const MULTIPART_OVERHEAD = 64 * 1024
+/** Mark as sent names the one recipient it marks. */
+const MarkSentBody = z.object({ address: z.string().min(1).max(254) })
 
 type Handler = (c: Context<ApiEnv>) => Promise<Response>
 
@@ -69,7 +72,9 @@ export function replyRoutes(db: Db, settings: Settings, replies: Replies): Hono<
   routes.post(
     "/messages/:id/mark-sent",
     refusals(async (c) => {
-      await replies.markSent(await scopeOf(c), userOf(c), messageId(c))
+      const parsed = MarkSentBody.safeParse(await c.req.json().catch(() => null))
+      if (!parsed.success) throw new Refusal("request_invalid", 400)
+      await replies.markSent(await scopeOf(c), userOf(c), messageId(c), parsed.data.address)
       return c.json({ ok: true })
     }),
   )

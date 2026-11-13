@@ -160,7 +160,8 @@ function Ticket({ view }: { view: TicketView }) {
       {view.messages.map((message) => (
         <MessageCard key={message.id} message={message} ticketNumber={ticket.number} onPreview={setPreview} />
       ))}
-      <Composer view={view} />
+      {/* One composer per ticket: moving to another ticket starts a fresh one (recipients, text, files, submission). */}
+      <Composer key={ticket.number} view={view} />
       {preview ? <FilePreview file={preview} onClose={() => setPreview(null)} /> : null}
     </>
   )

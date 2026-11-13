@@ -155,8 +155,8 @@ export const api = {
   writeMessage: (number: number, input: ReplyInput) =>
     request<{ id: string }>("POST", `/tickets/${number}/messages`, input),
   resend: (messageId: string) => request<{ ok: true }>("POST", `/messages/${encodeURIComponent(messageId)}/resend`),
-  markSent: (messageId: string) =>
-    request<{ ok: true }>("POST", `/messages/${encodeURIComponent(messageId)}/mark-sent`),
+  markSent: (messageId: string, address: string) =>
+    request<{ ok: true }>("POST", `/messages/${encodeURIComponent(messageId)}/mark-sent`, { address }),
   upload: (file: File) => sendFile<UploadView>("/uploads", file),
   uploadState: (id: string) => request<UploadView>("GET", `/uploads/${encodeURIComponent(id)}`),
   setSignature: (id: string, signature: string) => request<{ ok: true }>("PUT", `${at(id)}/signature`, { signature }),

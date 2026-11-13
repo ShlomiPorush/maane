@@ -26,6 +26,21 @@ export type OutboxState = (typeof OUTBOX_STATES)[number]
 export const RECIPIENT_STATES = ["pending", "accepted", "refused", "unknown"] as const
 export type RecipientState = (typeof RECIPIENT_STATES)[number]
 
+/**
+ * The state of an outgoing message from its recipients' states: unknown while any is, accepted once any was, else
+ * failed; with no recipient answered at all, the problem says why (no provider set up, or none reachable).
+ */
+export function outboxStateOf(
+  states: readonly string[],
+  configured: boolean,
+): { state: OutboxState; problem: SendProblem | null } {
+  if (states.includes("unknown")) return { state: "unknown", problem: null }
+  if (states.includes("accepted")) return { state: "accepted", problem: null }
+  if (states.every((state) => state === "pending"))
+    return { state: "failed", problem: configured ? "unreachable" : "not_configured" }
+  return { state: "failed", problem: null }
+}
+
 /** The SMTP servers Maane sends through: SMTP2GO first, then the failover. */
 export const PROVIDERS = ["smtp2go", "failover"] as const
 export type Provider = (typeof PROVIDERS)[number]

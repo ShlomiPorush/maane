@@ -21,6 +21,9 @@ import type { SmtpTimeouts } from "./send/smtp.ts"
 // server, so a stack never runs half configured. index.ts starts it as configured; the stack check starts it the same
 // way with stand-ins' settings given to its own process only (apps/worker/src/testing/stack-worker.ts).
 
+/** How long one statement of a send may take, a lock wait included. */
+export const SEND_STATEMENT_TIMEOUT_MS = 30_000
+
 export interface WorkerOptions {
   /** Settings this process alone uses, on top of the environment's (the stack check's stand-ins). */
   overrides?: Partial<Record<SettingKey, string>>
@@ -49,10 +52,17 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
     process: new IntakeProcessor({ db: database.db }),
     retry: new WaitingFiles({ db: database.db, settings, files, graph }),
   }
+  // Sending reads the database through a pool of its own whose every statement is bounded, so an attempt cannot hang
+  // on a read between its claim and its send (plan 3.1, review R3).
+  const sending = openDatabase(config.databaseUrl, 2, { statementTimeoutMs: SEND_STATEMENT_TIMEOUT_MS })
+  const sendSettings = new Settings(sending.db, createSettingsCipher(config.settingsKeys), {
+    ...config.overrides,
+    ...options.overrides,
+  })
   const send = {
     db: database.db,
     settings,
-    sender: new ReplySender({ db: database.db, settings, timeouts: options.timeouts }),
+    sender: new ReplySender({ db: sending.db, settings: sendSettings, timeouts: options.timeouts }),
     timeouts: options.timeouts,
   }
 
@@ -65,6 +75,7 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
     async stop() {
       await boss.stop({ graceful: true, timeout: 20_000 })
       await database.close()
+      await sending.close()
     },
   }
 }

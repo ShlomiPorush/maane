@@ -287,15 +287,22 @@ describe("what a reply may carry and come from", () => {
     // Still scanning: not attachable yet.
     const pending = await uploadFile(admin, "late.txt", Buffer.from("late"))
     expect((await post(admin, { uploads: [pending.json.id] })).json).toEqual({ error: "attachment_invalid" })
-    // Its own upload and a part of its own ticket's message are fine.
+    // A file of an internal note of the same ticket never goes to a customer (review R1).
     const ownNote = await admin.call(
       "POST",
       `/api/v1/tickets/${ticket.number}/messages`,
       reply({ kind: "note", uploads: [mine] }),
     )
-    const ownPart = (await view(admin, ticket.number)).messages.find((m) => m.id === ownNote.json.id)?.attachments[0]
+    const notePart = (await view(admin, ticket.number)).messages.find((m) => m.id === ownNote.json.id)?.attachments[0]
       ?.id
-    expect((await post(admin, { uploads: [mine], parts: [ownPart] })).status).toBe(201)
+    expect(notePart).toBeTruthy()
+    expect((await post(admin, { parts: [notePart] })).json).toEqual({ error: "attachment_invalid" })
+    // Its own upload and a file of an earlier reply are fine.
+    const firstReply = await post(admin, { uploads: [mine] })
+    expect(firstReply.status).toBe(201)
+    const replyPart = (await view(admin, ticket.number)).messages.find((m) => m.id === firstReply.json.id)
+      ?.attachments[0]?.id
+    expect((await post(admin, { uploads: [mine], parts: [replyPart] })).status).toBe(201)
     // An upload is its uploader's alone, also to read.
     expect((await agent.call("GET", `/api/v1/uploads/${mine}`)).status).toBe(404)
     expect((await admin.call("GET", `/api/v1/uploads/${mine}`)).json).toMatchObject({ status: "clean" })
@@ -429,8 +436,20 @@ describe("what each provider's answer means", () => {
     ])
     expect([first?.status, second?.status].sort()).toEqual([200, 409])
     expect(await sender().send(result.id)).toBe("unknown")
-    // "Mark as sent".
-    expect((await result.admin.call("POST", `/api/v1/messages/${result.id}/mark-sent`)).status).toBe(200)
+    // "Mark as sent", one recipient at a time (review R4): the other stays unknown, and so does the reply.
+    const mark = (address?: string) =>
+      result.admin.call("POST", `/api/v1/messages/${result.id}/mark-sent`, address === undefined ? {} : { address })
+    expect((await mark()).status).toBe(400)
+    expect((await mark("ron@example.com")).status).toBe(200)
+    expect(deliveryOf(await view(result.admin, result.ticket.number), result.id)).toMatchObject({
+      state: "unknown",
+      recipients: [
+        { address: "drop.dana@example.com", state: "unknown", marked: false },
+        { address: "ron@example.com", state: "accepted", marked: true },
+      ],
+    })
+    expect((await mark("ron@example.com")).json).toEqual({ error: "reply_not_unknown" })
+    expect((await mark("drop.dana@example.com")).status).toBe(200)
     expect(deliveryOf(await view(result.admin, result.ticket.number), result.id)).toMatchObject({
       state: "accepted",
       recipients: [
@@ -438,9 +457,7 @@ describe("what each provider's answer means", () => {
         { state: "accepted", marked: true },
       ],
     })
-    expect((await result.admin.call("POST", `/api/v1/messages/${result.id}/mark-sent`)).json).toEqual({
-      error: "reply_not_unknown",
-    })
+    expect((await mark("drop.dana@example.com")).json).toEqual({ error: "reply_not_unknown" })
     // Marked as sent, Ron (whom the agent added) is a participant, as one a provider accepted would be.
     expect(await h.participantsOf((await h.tickets())[0]?.id ?? "")).toEqual(
       expect.arrayContaining(["drop.dana@example.com", "ron@example.com"]),
@@ -471,6 +488,51 @@ describe("what each provider's answer means", () => {
     expect(await sender().send(id)).toBe("unknown")
     expect(smtp2go.received.length + failover.received.length).toBe(before)
     expect(deliveryOf(await view(admin, ticket.number), id)?.recipients).toMatchObject([{ state: "unknown" }])
+  })
+})
+
+describe("attempts that overlap", () => {
+  it("an attempt made stale while it was paused after its claim sends nothing and changes nothing (review R3)", async () => {
+    const admin = await firstAdmin()
+    const ticket = await customerTicket()
+    const written = await admin.call("POST", `/api/v1/tickets/${ticket.number}/messages`, reply())
+    const id = written.json.id as string
+    let reached!: () => void
+    let release!: () => void
+    const paused = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    // The first attempt claims, then stops before it sends, as a stalled worker would.
+    const first = sender(
+      {},
+      {
+        afterClaim: async () => {
+          reached()
+          await gate
+        },
+      },
+    ).send(id)
+    await paused
+    // A redelivered job finds it `sending` and marks it unknown; the agent sends again; a second attempt sends.
+    expect(await sender().send(id)).toBe("unknown")
+    expect((await admin.call("POST", `/api/v1/messages/${id}/resend`)).status).toBe(200)
+    expect(await sender().send(id)).toBe("accepted")
+    const received = smtp2go.received.length + failover.received.length
+    const [after] = await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id))
+    // The first attempt goes on: it sends nothing and writes nothing.
+    release()
+    await first
+    expect(smtp2go.received.length + failover.received.length).toBe(received)
+    const [row] = await h.database.db
+      .select({ state: outbox.state, attempt: outbox.attempt })
+      .from(outbox)
+      .where(eq(outbox.messageId, id))
+    expect(row).toEqual({ state: "accepted", attempt: null })
+    const [now] = await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id))
+    expect(now).toEqual(after)
   })
 })
 

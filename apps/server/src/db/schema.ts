@@ -743,6 +743,12 @@ export const outbox = pgTable(
     problem: text("problem"),
     /** Send attempts started: each tries the first provider, then the failover for what the first did not take. */
     attempts: integer("attempts").notNull().default(0),
+    /**
+     * The attempt that owns the row while it is `sending`, a new ID for each claim. Every later step of an attempt
+     * (each send, each result) goes on only while this is still its ID and the row still `sending`; a stale attempt
+     * stops without sending or writing.
+     */
+    attempt: uuid("attempt"),
     createdAt: createdAt(),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },

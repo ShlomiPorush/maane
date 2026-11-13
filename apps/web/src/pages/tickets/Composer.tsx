@@ -202,7 +202,10 @@ export function Composer({ view }: { view: TicketView }) {
     }
   }
 
-  const ticketFiles = view.messages.flatMap((message) => message.attachments.filter((file) => file.download))
+  // Files of incoming messages and replies only: an internal note's files never reach a customer (review R1).
+  const ticketFiles = view.messages.flatMap((message) =>
+    message.direction === "note" ? [] : message.attachments.filter((file) => file.download),
+  )
   const tool = (label: string, active: boolean, run: () => void, icon: React.ReactNode) => (
     <button
       type="button"

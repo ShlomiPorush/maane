@@ -1067,7 +1067,7 @@
     },
     "marked": "marked as sent by an agent",
     "unknownTitle": "Maane does not know whether this reply went out.",
-    "unknownHint": "The mail server stopped answering while it took the message. Maane does not send it again by itself. Send it again to the recipients not accepted, or mark it as sent.",
+    "unknownHint": "The mail server stopped answering while it took the message. Maane does not send it again by itself. Send it again to the recipients not accepted, or mark each recipient you know received it as sent.",
     "refusedAll": "The mail servers refused every recipient.",
     "problem": {
       "listening": "Intake is listening, so Maane sent nothing.",
@@ -1081,8 +1081,8 @@
     "resendMessage": "It goes again to every recipient who did not accept it. One of them may get it twice.",
     "resendDone": "The reply is on its way again.",
     "markSent": "Mark as sent",
-    "markSentTitle": "Mark this reply as sent?",
-    "markSentMessage": "Maane records the unknown recipients as accepted and sends nothing.",
+    "markSentTitle": "Mark the reply as sent to {address}?",
+    "markSentMessage": "Maane records that this recipient received the reply, and sends nothing. Do this only when you know it arrived.",
     "markSentDone": "The reply is marked as sent."
   }
 }

@@ -1617,12 +1617,44 @@ describe("tickets", () => {
     expect(listening.querySelector(".ui-composer-fields")).toBeNull()
   })
 
+  it("starts a fresh composer for each ticket: another ticket's recipients and text never carry over (review R2)", async () => {
+    const other = view()
+    const body = other.body as { ticket: { number: number }; compose: Record<string, unknown> }
+    const eight = ok({
+      ...body,
+      ticket: { ...body.ticket, number: 8 },
+      compose: { ...body.compose, to: [{ address: "eight@example.com", name: null }], cc: [] },
+    })
+    // Ticket 8 first, so it is in the cache and shows at once when the agent comes back to it from ticket 7.
+    await renderAt("/tickets/8", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view(),
+      "/api/v1/tickets/8": eight,
+    })
+    const fields = () => Array.from(document.querySelectorAll<HTMLInputElement>(".ui-composer-fields input"))
+    await vi.waitFor(() => expect(fields()[0]?.value).toBe("eight@example.com"))
+    await act(async () => {
+      await router?.navigate("/tickets/7")
+    })
+    await vi.waitFor(() => expect(fields()[0]?.value).toBe("dana@example.com"))
+    await act(async () => type(fields()[1] as HTMLInputElement, "typed@example.com"))
+    expect(fields()[1]?.value).toBe("typed@example.com")
+    await act(async () => {
+      await router?.navigate("/tickets/8")
+    })
+    await vi.waitFor(() => expect(fields()[0]?.value).toBe("eight@example.com"))
+    expect(fields()[1]?.value).toBe("")
+    expect(document.querySelector(".ui-editor-text")?.textContent).toBe("")
+  })
+
   it("shows each recipient's state, and sends an unknown reply again only after asking", async () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
       "/api/v1/tickets/7": view("v1", [reply()]),
       "/api/v1/messages/00000000-0000-4000-8000-0000000000aa/resend": ok({ ok: true }),
+      "/api/v1/messages/00000000-0000-4000-8000-0000000000aa/mark-sent": ok({ ok: true }),
     })
     await vi.waitFor(() => expect(text()).toContain(he("delivery.unknownTitle")))
     const card = document.querySelector('[data-direction="out"]') as HTMLElement
@@ -1633,6 +1665,17 @@ describe("tickets", () => {
     )
     // The recipients show once, in the sending list, not again in the header.
     expect(card.querySelector(".ui-message-to")).toBeNull()
+    // Mark as sent is per recipient, and only for one whose fate is unknown (review R4).
+    expect(card.querySelector('[data-mark="ron@example.com"]')).toBeNull()
+    await act(async () => card.querySelector<HTMLButtonElement>('[data-mark="dana@example.com"]')?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
+    await act(async () => document.querySelector<HTMLButtonElement>("[role=alertdialog] .ui-btn-primary")?.click())
+    await vi.waitFor(() => {
+      const marked = requests.find((r) => r.method === "POST" && r.url.endsWith("/mark-sent"))
+      expect(JSON.parse(marked?.body ?? "null")).toEqual({ address: "dana@example.com" })
+    })
+    await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).toBeNull())
+
     await act(async () => button(he("delivery.resend"))?.click())
     await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
     expect(requests.some((r) => r.url.endsWith("/resend"))).toBe(false)
