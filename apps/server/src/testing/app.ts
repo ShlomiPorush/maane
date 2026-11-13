@@ -42,6 +42,8 @@ export function createTestApp(
   jobs: JobQueue = NO_JOBS,
   /** The file store the ticket routes read; tests that serve files give a temporary directory. */
   filesDir = "/nonexistent",
+  /** The link routes: the proxies they trust and the GeoLite2 directory. */
+  links: { trustedProxies?: string[]; geoipDir?: string | null } = {},
 ) {
   const audit = openDatabase(database.url, 2)
   const clock = new TestClock()
@@ -77,6 +79,8 @@ export function createTestApp(
     version: "test",
     onSettingsChanged: build,
     jobs,
+    trustedProxies: links.trustedProxies ?? [],
+    geoipDir: links.geoipDir ?? null,
   })
   return {
     ready,
@@ -87,6 +91,8 @@ export function createTestApp(
       return app.fetch(request)
     },
     auth: () => auth,
+    /** The app itself, for a test that serves it on a port (the link routes read the TCP peer). */
+    app,
     close: () => audit.close(),
   }
 }

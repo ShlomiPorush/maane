@@ -46,6 +46,8 @@ async function main(): Promise<void> {
       auth = await build()
     },
     jobs,
+    trustedProxies: config.trustedProxies,
+    geoipDir: config.geoipDir,
   })
 
   const server = serve({ fetch: app.fetch, port: config.port, hostname: "0.0.0.0" })

@@ -52,6 +52,7 @@ import {
   ticketParticipant,
 } from "../db/schema.ts"
 import { storedFilePath } from "../files/paths.ts"
+import { linkViews } from "../links/service.ts"
 import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
 import { renderMailHtml } from "../mail/html.ts"
 import type { OrganizationScope } from "../organizations/scope.ts"
@@ -398,6 +399,16 @@ export class Tickets {
       )
       .orderBy(asc(other.number))
 
+    // The links each reply carried that were clicked, and its history files that were downloaded (plan 3.4). A click is
+    // early against the time a provider accepted the reply (no delivery time is known yet).
+    const sentAt = (id: string) =>
+      recipients
+        .filter((r) => r.messageId === id && r.state === "accepted" && r.markedBy === null)
+        .reduce<Date | null>((first, r) => (first === null || r.updatedAt < first ? r.updatedAt : first), null)
+    const clicked = await linkViews(
+      this.db,
+      replyIds.map((id) => ({ id, since: sentAt(id) })),
+    )
     const authorOf = new Map(authors.map((a) => [a.id, { id: a.id, name: a.name || a.username || a.id }]))
     const deliveryOf = (id: string): MessageView["delivery"] => {
       const sent = outboxes.find((o) => o.messageId === id)
@@ -468,6 +479,7 @@ export class Tickets {
         ),
         fields: fieldNotices(m.fieldScans),
         attachments,
+        links: clicked.get(m.id) ?? [],
       }
     })
 

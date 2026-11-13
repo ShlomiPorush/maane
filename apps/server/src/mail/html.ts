@@ -192,9 +192,14 @@ export type EmailImage = { cid: string; width: number; height: number } | { name
  * only as an embedded part (`cid:`) that the email carries, with its size as attributes and as a style no wider than
  * the column (Outlook for Windows ignores max-width), or shows only its name; every other image (remote ones too) is
  * removed with its tag. A link keeps an https, http, or mailto address and its underline, inline with !important so
- * the rule that gives the links a mail client adds the text's look leaves it alone (`html-email`).
+ * the rule that gives the links a mail client adds the text's look leaves it alone (`html-email`). `link` gives an http
+ * or https address the one the email carries instead (a tracked link, plan 3.4); mailto and tel are never given to it.
  */
-export function renderEmailHtml(stored: string, image: (contentId: string) => EmailImage | null): string {
+export function renderEmailHtml(
+  stored: string,
+  image: (contentId: string) => EmailImage | null,
+  link?: (href: string) => string,
+): string {
   return sanitizeHtml(stored, {
     ...OPTIONS,
     allowedSchemesByTag: { img: ["cid"], a: [...LINK_SCHEMES] },
@@ -222,7 +227,8 @@ export function renderEmailHtml(stored: string, image: (contentId: string) => Em
         const { href, ...rest } = attribs
         const scheme = href === undefined ? null : schemeOf(href)
         if (href === undefined || scheme === null || !LINK_SCHEMES.has(scheme)) return { tagName, attribs: rest }
-        return { tagName, attribs: { ...rest, href, style: "text-decoration:underline !important" } }
+        const carried = link && (scheme === "https" || scheme === "http") ? link(href) : href
+        return { tagName, attribs: { ...rest, href: carried, style: "text-decoration:underline !important" } }
       },
     },
   })

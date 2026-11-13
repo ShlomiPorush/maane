@@ -801,6 +801,23 @@
         "token": "Bearer token",
         "done": "A new webhook address and token were made."
       }
+    },
+    "linksGroup": "Link tracking",
+    "linksIntro": "Links in replies can pass through Maane, so you see who opened them. Files of earlier messages in a reply's history always get a download link.",
+    "linkTracking": {
+      "label": "Track links",
+      "mode": {
+        "on": "On",
+        "off": "Off"
+      },
+      "explain": {
+        "on": "On: the links an agent writes in a reply lead through Maane, and each click and download is recorded with its address and location.",
+        "off": "Off: links stay as written, and nothing is recorded. Links in replies already sent keep working."
+      }
+    },
+    "linkDomain": {
+      "label": "Link domain",
+      "hint": "The host name in tracked links and download links, like {example}. Empty uses Maane's own address. Point it at Maane in DNS and Traefik first."
     }
   },
   "audit": {
@@ -1121,5 +1138,40 @@
       "spam": "Marked as spam"
     },
     "unmatched": "A delivery report about this reply arrived that Maane could not tie to one of its recipients' sends."
+  },
+  "links": {
+    "unknown": "This link does not work. It may be incomplete, or what it led to was removed.",
+    "busy": "Too many requests from your address. Wait a minute, then try again.",
+    "title": "Clicks and downloads",
+    "kind": {
+      "url": "Link",
+      "file": "File"
+    },
+    "count": {
+      "one": "{count} time",
+      "two": "{count} times",
+      "other": "{count} times"
+    },
+    "last": "Last {time}",
+    "noIp": "No address",
+    "country": "Country {code}",
+    "unknownPlace": "Location unknown",
+    "city": "City: {value}",
+    "region": "Region: {value}",
+    "isp": "ISP: {value}",
+    "asn": "AS {value}",
+    "scanner": "Possibly a scanner",
+    "scannerReason": {
+      "early": "Opened within a minute of sending",
+      "agent": "The user agent of a crawler or a program",
+      "network": "From the network of a known mail scanner"
+    },
+    "device": {
+      "desktop": "Computer",
+      "mobile": "Phone",
+      "tablet": "Tablet",
+      "bot": "Program",
+      "other": "Other device"
+    }
   }
 }

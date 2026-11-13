@@ -56,6 +56,8 @@ export interface ReplyMail {
   attachments: ReplyAttachment[]
   /** The public history, newest first: incoming messages and replies at least one recipient accepted. */
   history: Entry[]
+  /** The address the HTML part carries for an http or https link of the reply (a tracked link, plan 3.4). */
+  link?: (href: string) => string
 }
 
 /** The reply's message is larger than the provider takes, even with its history trimmed. */
@@ -124,6 +126,7 @@ function conversationOf(mail: ReplyMail): Conversation {
       text: mail.text,
       images: new Map(),
       files: [],
+      link: mail.link,
     },
     history: mail.history,
   }

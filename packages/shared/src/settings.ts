@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { isClientId, isMailbox, isTenantId } from "./intake.ts"
+import { isLinkDomain, LINK_TRACKING, type LinkTracking } from "./links.ts"
 import { LOCALES } from "./locales.ts"
 
 /**
@@ -379,6 +380,24 @@ export const SETTINGS = {
     secret: false,
     env: "MAANE_BOUNCE_ADDRESS",
     fromEnv: (text) => text.trim(),
+  }),
+  // Link tracking (plan 3.4): on, the links an agent writes become https://<link domain>/l/<code>, and clicks and
+  // downloads are recorded; off, links stay as written and nothing is recorded. Download links of history files exist
+  // either way.
+  "links.tracking": define({
+    schema: z.enum(LINK_TRACKING),
+    defaultValue: "on" as LinkTracking,
+    secret: false,
+    env: "MAANE_LINK_TRACKING",
+    fromEnv: (text) => text.trim().toLowerCase(),
+  }),
+  /** The host name of tracked links and download links; empty means the public URL's own. */
+  "links.domain": define({
+    schema: z.string().refine((text) => text === "" || isLinkDomain(text)),
+    defaultValue: "",
+    secret: false,
+    env: "MAANE_LINK_DOMAIN",
+    fromEnv: (text) => text.trim().toLowerCase(),
   }),
 } as const
 

@@ -901,3 +901,64 @@ export const upload = pgTable(
     ),
   ],
 )
+
+// --- Link tracking and download links (plan 3.4) ---
+
+/**
+ * A link of an outgoing reply (`out`): a link the agent wrote (`url`, the original address) or a file of an earlier
+ * message the email's history names (`file`, the part). The code is random (a CSPRNG) and is the only thing the email
+ * carries: the target is only what is stored here, so the routes can never redirect elsewhere. A link goes with its
+ * reply, and a file link with its part (on delete cascade), so deleting a file or a ticket disables its links; a file
+ * link is served only while its part is still a stored file of an incoming message or a reply.
+ */
+export const trackedLink = pgTable(
+  "tracked_link",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    code: text("code").notNull().unique(),
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => message.id, { onDelete: "cascade" }),
+    /** `url` or `file`. */
+    kind: text("kind").notNull(),
+    url: text("url"),
+    partId: uuid("part_id").references(() => messagePart.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("tracked_link_message_idx").on(t.messageId),
+    index("tracked_link_part_idx").on(t.partId),
+    check("tracked_link_kind", sql`${t.kind} in ('url', 'file')`),
+    check(
+      "tracked_link_target",
+      sql`(${t.kind} = 'url' and ${t.url} is not null and ${t.partId} is null) or (${t.kind} = 'file' and ${t.partId} is not null and ${t.url} is null)`,
+    ),
+  ],
+)
+
+/**
+ * One click on a tracked link or one download of a file link: when, from which address (the client address behind the
+ * trusted proxies only), where that address is by the local GeoLite2 files, and what the user agent says. Every string
+ * is bounded (`@maane/shared` CLICK_BOUNDS).
+ */
+export const linkClick = pgTable(
+  "link_click",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    linkId: uuid("link_id")
+      .notNull()
+      .references(() => trackedLink.id, { onDelete: "cascade" }),
+    at: at("at").notNull().defaultNow(),
+    ip: text("ip"),
+    country: text("country"),
+    city: text("city"),
+    region: text("region"),
+    isp: text("isp"),
+    asn: bigint("asn", { mode: "number" }),
+    device: text("device"),
+    os: text("os"),
+    browser: text("browser"),
+    userAgent: text("user_agent"),
+  },
+  (t) => [index("link_click_link_idx").on(t.linkId, t.at)],
+)
