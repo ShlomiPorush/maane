@@ -115,6 +115,32 @@ export async function requestFile(url: string): Promise<Response> {
   throw error
 }
 
+/**
+ * Sends one file to Maane's API as multipart form data (the composer's uploads), with the header every change carries
+ * and the session cookie. Longer than a JSON request may take: a large file needs the time to travel.
+ */
+export async function sendFile<T>(path: string, file: File): Promise<T> {
+  const form = new FormData()
+  form.set("file", file)
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { Accept: "application/json", [REQUEST_HEADER]: "1" },
+      credentials: "same-origin",
+      body: form,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS * 15),
+    })
+  } catch {
+    throw new ApiError(0, "network")
+  }
+  const body = await response.json().catch(() => null)
+  if (response.ok) return body as T
+  const error = errorFrom(response.status, body)
+  if (error.status === 401 || error.code === "totp_required") unauthorizedHandler?.(error)
+  throw error
+}
+
 /** A query string from the defined values only. */
 export function query(params: Record<string, string | number | null | undefined>): string {
   const search = new URLSearchParams()

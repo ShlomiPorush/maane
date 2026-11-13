@@ -4,9 +4,16 @@
 // is never edited: the admin adds a new one and removes the old one. Make default moves the default mark in one step
 // (exact addresses only); while intake is live the default cannot be removed, only replaced, and the server says so
 // (intake_default_required). Only agents are added: admins see every organization by their role. Removing an agent
-// takes effect on their next request.
+// takes effect on their next request. The signature (plan 3.1) is plain text added after every reply sent for the
+// organization, edited in its own dialog.
 
-import { ADDRESS_KINDS, type AddressKind, ORGANIZATION_NAME_MAX, parseSupportAddress } from "@maane/shared"
+import {
+  ADDRESS_KINDS,
+  type AddressKind,
+  ORGANIZATION_NAME_MAX,
+  parseSupportAddress,
+  SIGNATURE_MAX,
+} from "@maane/shared"
 import { keepPreviousData, useInfiniteQuery, useQueryClient } from "@tanstack/react-query"
 import { Ellipsis, Pencil, Plus, Star, Trash2, UserMinus, UserPlus } from "lucide-react"
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react"
@@ -83,6 +90,7 @@ function Organization() {
   const [renaming, setRenaming] = useState(false)
   const [addingAddress, setAddingAddress] = useState(false)
   const [addingMember, setAddingMember] = useState(false)
+  const [signing, setSigning] = useState(false)
 
   const remove = async () => {
     if (!data) return
@@ -149,14 +157,109 @@ function Organization() {
       <StaleNote failed={query.isError} />
       <Addresses data={data} change={change} onAdd={() => setAddingAddress(true)} />
       <Members data={data} change={change} onAdd={() => setAddingMember(true)} />
+      <Signature signature={data.organization.signature} onEdit={() => setSigning(true)} />
       {renaming ? <RenameDialog id={id} name={name} onClose={() => setRenaming(false)} /> : null}
       {addingAddress ? <AddAddressDialog id={id} onClose={() => setAddingAddress(false)} /> : null}
       {addingMember ? <AddMemberDialog data={data} onClose={() => setAddingMember(false)} /> : null}
+      {signing ? (
+        <SignatureDialog id={id} signature={data.organization.signature} onClose={() => setSigning(false)} />
+      ) : null}
     </div>
   )
 }
 
 type Change = ReturnType<typeof useChange>
+
+/** The signature of the organization's replies, as the customer reads it under each reply. */
+function Signature({ signature, onEdit }: { signature: string; onEdit: () => void }) {
+  const { t } = useI18n()
+  return (
+    <section className="ui-panel" aria-labelledby="organization-signature">
+      <div className="ui-panel-head">
+        <h2 id="organization-signature">{t("organization.signature.title")}</h2>
+        <button type="button" className="ui-btn ui-btn-sm" onClick={onEdit}>
+          <Pencil aria-hidden="true" />
+          {t("organization.signature.edit")}
+        </button>
+      </div>
+      {signature ? (
+        <p className="ui-signature" dir="auto" data-testid="organization-signature">
+          {signature}
+        </p>
+      ) : (
+        <Empty title={t("organization.signature.empty")} hint={t("organization.signature.emptyHint")} />
+      )}
+    </section>
+  )
+}
+
+function SignatureDialog({ id, signature, onClose }: { id: string; signature: string; onClose: () => void }) {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+  const formId = useId()
+  const fieldId = useId()
+  const hintId = useId()
+  const mounted = useMounted()
+  const [value, setValue] = useState(signature)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const guardedClose = useDiscardGuard(value !== signature, onClose)
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if ([...value].length > SIGNATURE_MAX) return setError(t("organization.signature.rule", { max: SIGNATURE_MAX }))
+    setBusy(true)
+    setError(null)
+    try {
+      await api.setSignature(id, value)
+      showToast(t("organization.signature.done"), "success")
+      if (mounted.current) {
+        guardedClose.dismiss()
+        onClose()
+      }
+      await queryClient.invalidateQueries({ queryKey: qk.organization(id) })
+    } catch (failure) {
+      setError(errorText(t, failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog
+      title={t("organization.signature.editTitle")}
+      size="md"
+      onClose={() => void guardedClose()}
+      foot={
+        <button type="submit" form={formId} className="ui-btn ui-btn-primary" disabled={busy}>
+          {busy ? t("organization.signature.saving") : t("organization.signature.save")}
+        </button>
+      }
+    >
+      <form id={formId} className="ui-form-stack" onSubmit={(event) => void submit(event)} noValidate>
+        <div className="ui-field">
+          <label className="ui-label" htmlFor={fieldId}>
+            {t("organization.signature.title")}
+          </label>
+          <textarea
+            id={fieldId}
+            className="ui-input ui-textarea"
+            dir="auto"
+            rows={6}
+            value={value}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={hintId}
+            onChange={(event) => setValue(event.target.value)}
+          />
+          <p id={hintId} className="ui-hint">
+            {t("organization.signature.hint", { max: SIGNATURE_MAX })}
+          </p>
+        </div>
+        {error ? <FormError>{error}</FormError> : null}
+      </form>
+    </Dialog>
+  )
+}
 
 function Addresses({ data, change, onAdd }: { data: OrganizationDetail; change: Change; onAdd: () => void }) {
   const { t } = useI18n()

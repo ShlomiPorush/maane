@@ -146,7 +146,19 @@
       "addressDefaultNotExact": "Only an exact address can be the default address.",
       "intakeNoDefaultAddress": "Live intake needs a default address. Make an exact address the default under Organizations first.",
       "intakeDefaultRequired": "Intake is live, so the default address cannot be removed. Make another address the default first, or switch intake to listening.",
-      "previewRefused": "This file cannot be previewed. Download it instead."
+      "previewRefused": "This file cannot be previewed. Download it instead.",
+      "listeningMode": "Intake is listening, so Maane sends no replies. Add an internal note instead.",
+      "fromNotAllowed": "Choose a From address of this ticket's organization.",
+      "recipientsRequired": "Add at least one recipient in To.",
+      "recipientInvalid": "One of the recipients is not a valid address. Check To and Cc.",
+      "recipientsTooMany": "A reply can have up to 50 recipients.",
+      "replyEmpty": "Write a message or attach a file first.",
+      "attachmentInvalid": "A file cannot be attached. Remove it and add it again.",
+      "fileTooLarge": "The file is larger than the file size limit.",
+      "replyNotRetryable": "This reply is already on its way again.",
+      "replyNotUnknown": "This reply's state changed. Reload the page.",
+      "signatureInvalid": "The signature is too long.",
+      "nameInvalid": "Give a name of 1 to 80 characters without control characters."
     }
   },
   "auth": {
@@ -312,7 +324,12 @@
     "pdfNext": "Next page",
     "pdfNote": "A preview may not show every part of a PDF. The download has the original.",
     "signature": "Signature",
-    "blockedBy": "Blocked by"
+    "blockedBy": "Blocked by",
+    "direction": {
+      "in": "Customer",
+      "out": "Reply",
+      "note": "Internal note"
+    }
   },
   "scan": {
     "status": {
@@ -401,7 +418,8 @@
       "disposition_report": "Read or disposition report",
       "precedence": "Precedence header: bulk, list, or junk",
       "list": "Mailing list headers",
-      "autoreply_header": "Automatic reply header"
+      "autoreply_header": "Automatic reply header",
+      "sent_by_maane": "A reply Maane sent, back in the mailbox"
     },
     "unknownSender": "Unknown sender",
     "noSubject": "(no subject)",
@@ -531,7 +549,14 @@
     "unban": "Enable",
     "unbanTitle": "Enable {name}?",
     "unbanMessage": "They can sign in again.",
-    "unbanDone": "{name} is enabled."
+    "unbanDone": "{name} is enabled.",
+    "setName": "Set display name",
+    "setNameTitle": "Display name of {name}",
+    "setNameBusy": "Saving",
+    "setNameDone": "{name} now shows as {display}.",
+    "displayName": "Display name",
+    "nameHint": "Replies show it as the sender: Name (Organization). Up to {max} characters.",
+    "nameRule": "Give a name of 1 to {max} characters."
   },
   "settings": {
     "title": "Settings",
@@ -675,6 +700,82 @@
     "scanTimeout": {
       "label": "Scan time limit (seconds)",
       "hint": "How long one file scan may take before Maane stops waiting and the setting below decides. {min} to {max} seconds."
+    },
+    "sending": {
+      "smtp2goTitle": "SMTP2GO",
+      "failoverTitle": "Backup mail server",
+      "intro": "Maane sends replies through SMTP2GO first, always with TLS. Nothing else changes at SMTP2GO.",
+      "failoverIntro": "When SMTP2GO certainly did not take a reply, Maane tries this server, always with TLS.",
+      "enterSecret": "Paste the value",
+      "security": {
+        "starttls": "STARTTLS",
+        "tls": "TLS"
+      },
+      "smtp2go": {
+        "host": {
+          "label": "SMTP server",
+          "hint": "SMTP2GO's SMTP server."
+        },
+        "port": {
+          "label": "Port",
+          "hint": "Ports 465, 8465, and 443 use TLS from the start; every other port uses STARTTLS, required."
+        },
+        "user": {
+          "label": "SMTP user",
+          "hint": "The SMTP user made at SMTP2GO for Maane."
+        },
+        "password": {
+          "label": "SMTP password",
+          "hint": "Stored encrypted and never shown again. To replace it, type a new one; an empty field keeps it."
+        },
+        "apiKey": {
+          "label": "API key",
+          "hint": "Only for reading delivery status, in a later version. Stored encrypted and never shown again."
+        }
+      },
+      "failover": {
+        "host": {
+          "label": "SMTP server",
+          "hint": "Leave empty when there is no backup server."
+        },
+        "port": {
+          "label": "Port",
+          "hint": "The port of the backup server."
+        },
+        "security": {
+          "label": "Encryption",
+          "hint": "STARTTLS, required, or TLS from the start. Plain SMTP is never used."
+        },
+        "user": {
+          "label": "SMTP user",
+          "hint": "Leave empty when the server needs no sign-in."
+        },
+        "password": {
+          "label": "SMTP password",
+          "hint": "Stored encrypted and never shown again. To replace it, type a new one; an empty field keeps it."
+        }
+      },
+      "mail": {
+        "bounceAddress": {
+          "label": "Bounce address",
+          "hint": "The envelope sender of mail sent through the backup server, for example bounces@{example}. It must reach the intake mailbox."
+        }
+      },
+      "test": {
+        "hint": "Connects with TLS and signs in with the saved settings. It sends nothing.",
+        "smtp2go": "Test SMTP2GO",
+        "failover": "Test the backup server",
+        "okToast": "Maane can sign in to the mail server.",
+        "failedToast": "The connection test failed: {problem}",
+        "saveFirst": "Save this server's settings first: the test uses the saved settings."
+      },
+      "problem": {
+        "not_configured": "The server, the user, or the password is missing.",
+        "connection": "The server did not answer. Check the server name, the port, and the network.",
+        "tls": "TLS could not be set up. Check the port and the encryption.",
+        "auth": "The server refused the user or the password.",
+        "error": "The server answered with an error."
+      }
     }
   },
   "audit": {
@@ -703,7 +804,12 @@
       "previousDefault": "Previous default",
       "fileName": "File",
       "signature": "Signature",
-      "blockedType": "Blocked type"
+      "blockedType": "Blocked type",
+      "displayName": "Display name",
+      "ticket": "Ticket",
+      "from": "From",
+      "recipients": "Recipients",
+      "problem": "Problem"
     },
     "stage": {
       "password": "password",
@@ -730,7 +836,8 @@
         "ban": "User disabled",
         "unban": "User enabled",
         "revoke_sessions": "Sessions ended",
-        "set_password": "Password set by an admin"
+        "set_password": "Password set by an admin",
+        "rename": "Display name changed"
       },
       "setting": {
         "update": "Setting changed"
@@ -744,13 +851,19 @@
         "address_add": "Support address added",
         "address_remove": "Support address removed",
         "address_default": "Default address changed",
-        "memberships_clear": "Organization memberships removed after a role change"
+        "memberships_clear": "Organization memberships removed after a role change",
+        "signature": "Signature changed"
       },
       "file": {
         "blocked": "File blocked"
       },
       "message": {
-        "content_blocked": "Message content blocked"
+        "content_blocked": "Message content blocked",
+        "reply": "Reply written",
+        "note": "Internal note written",
+        "resend": "Reply sent again",
+        "mark_sent": "Reply marked as sent",
+        "send_refused": "Reply not sent"
       }
     }
   },
@@ -863,9 +976,113 @@
       "showMore": "Show more agents",
       "loadingMore": "Loading more agents",
       "moreFailed": "Could not load more agents."
+    },
+    "signature": {
+      "title": "Signature",
+      "edit": "Edit signature",
+      "editTitle": "Signature of replies",
+      "empty": "No signature yet",
+      "emptyHint": "Replies of this organization end without one.",
+      "hint": "Plain text, added under every reply of this organization. Up to {max} characters.",
+      "rule": "The signature can have up to {max} characters.",
+      "save": "Save signature",
+      "saving": "Saving",
+      "done": "The signature is saved."
     }
   },
   "mail": {
     "reference": "Ref"
+  },
+  "compose": {
+    "title": "Write",
+    "kind": "What to write",
+    "kinds": {
+      "reply": "Reply",
+      "note": "Internal note"
+    },
+    "listening": "Intake is listening, so Maane sends no replies yet. You can still add internal notes.",
+    "noteHint": "Only agents see an internal note. It is never sent to the customer.",
+    "text": "Message",
+    "format": "Formatting",
+    "bold": "Bold",
+    "italic": "Italic",
+    "bulletList": "Bulleted list",
+    "orderedList": "Numbered list",
+    "quote": "Quote",
+    "signature": "Signature, added under the reply",
+    "files": "Files to attach",
+    "ticketFiles": "Files of this ticket ({count})",
+    "attach": "Attach files",
+    "waitScan": "Wait until every file is scanned.",
+    "sending": "Sending",
+    "sendReply": "Send reply",
+    "addNote": "Add note",
+    "from": "From",
+    "noFrom": "This organization has no support address to send from. Add one on its page.",
+    "to": "To",
+    "cc": "Cc",
+    "fromTicket": "From this ticket",
+    "uploading": "Uploading",
+    "upload": {
+      "scanning": "Scanning",
+      "clean": "Clean",
+      "not_fully_scanned": "Not fully scanned",
+      "not_scanned": "Not scanned",
+      "infected": "Infected",
+      "blocked_type": "Blocked type",
+      "too_large": "Too large",
+      "scanner_unavailable": "Not scanned"
+    },
+    "uploadHint": {
+      "infected": "The scanner found a threat. This file is not sent.",
+      "blocked_type": "Files of this type are blocked. This file is not sent.",
+      "too_large": "The file is larger than the file size limit. It is not sent.",
+      "scanner_unavailable": "The scanner did not answer, and the settings block unscanned files. Try again later."
+    },
+    "remove": "Remove {name}",
+    "scanTimeout": "The scan did not finish. Remove the file and try again.",
+    "empty": "Write a message or attach a file first.",
+    "toRequired": "Add at least one recipient in To.",
+    "replyQueued": "The reply is on its way. Its state shows under it.",
+    "noteAdded": "The internal note is added."
+  },
+  "delivery": {
+    "title": "Sending",
+    "state": {
+      "pending": "Waiting to send",
+      "sending": "Sending",
+      "accepted": "Sent",
+      "failed": "Not sent",
+      "unknown": "Unknown"
+    },
+    "recipient": {
+      "pending": "Not sent",
+      "accepted": "Accepted",
+      "refused": "Refused",
+      "unknown": "Unknown"
+    },
+    "provider": {
+      "smtp2go": "through SMTP2GO",
+      "failover": "through the backup server"
+    },
+    "marked": "marked as sent by an agent",
+    "unknownTitle": "Maane does not know whether this reply went out.",
+    "unknownHint": "The mail server stopped answering while it took the message. Maane does not send it again by itself. Send it again to the recipients not accepted, or mark it as sent.",
+    "refusedAll": "The mail servers refused every recipient.",
+    "problem": {
+      "listening": "Intake is listening, so Maane sent nothing.",
+      "from_not_allowed": "The From address no longer belongs to this ticket's organization, so Maane sent nothing.",
+      "author_not_allowed": "The author may no longer answer this ticket, so Maane sent nothing.",
+      "not_configured": "No mail server is set up. Set SMTP2GO or the backup server in Settings.",
+      "unreachable": "Maane could not reach or sign in to any mail server, so nothing was sent."
+    },
+    "resend": "Send again",
+    "resendTitle": "Send this reply again?",
+    "resendMessage": "It goes again to every recipient who did not accept it. One of them may get it twice.",
+    "resendDone": "The reply is on its way again.",
+    "markSent": "Mark as sent",
+    "markSentTitle": "Mark this reply as sent?",
+    "markSentMessage": "Maane records the unknown recipients as accepted and sends nothing.",
+    "markSentDone": "The reply is marked as sent."
   }
 }

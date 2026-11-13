@@ -1354,7 +1354,7 @@ describe("tickets", () => {
     download: true,
     ...over,
   })
-  const view = (version = "v1") =>
+  const view = (version = "v1", replies: object[] = [], listening = false) =>
     ok({
       ticket: {
         number: 7,
@@ -1372,6 +1372,9 @@ describe("tickets", () => {
       messages: [
         {
           id: MESSAGE,
+          direction: "in",
+          author: null,
+          delivery: null,
           receivedAt: when,
           sentAt: when,
           from: { address: "dana@example.com", name: "Dana Customer" },
@@ -1398,7 +1401,17 @@ describe("tickets", () => {
             file({ id: "f4", fileName: "copy.pdf", detectedType: "application/pdf", preview: "pdf" }),
           ],
         },
+        ...replies,
       ],
+      compose: {
+        from: ["help@example.com", "billing@example.com"],
+        defaultFrom: "help@example.com",
+        to: [{ address: "dana@example.com", name: "Dana Customer" }],
+        cc: [{ address: "ron@example.com", name: null }],
+        signature: "Alpha support",
+        senderName: "Agent Name (Alpha)",
+        listening,
+      },
     })
 
   it("lists tickets across organizations, and keeps the filters in the address", async () => {
@@ -1533,6 +1546,98 @@ describe("tickets", () => {
       ),
     )
     focusManager.setFocused(undefined)
+  })
+
+  const reply = (over: Record<string, unknown> = {}) => ({
+    id: "00000000-0000-4000-8000-0000000000aa",
+    direction: "out",
+    author: { id: "u1", name: "Agent Name" },
+    receivedAt: when,
+    sentAt: when,
+    from: { address: "help@example.com", name: null },
+    to: [{ address: "dana@example.com", name: "Dana Customer" }],
+    cc: [],
+    subject: "Re: Hello [#7]",
+    content: "parsed",
+    reviewFlags: [],
+    body: "html",
+    remoteImages: 0,
+    bodyLines: 2,
+    bodyVersion: "r1",
+    fields: [],
+    attachments: [],
+    delivery: {
+      state: "unknown",
+      problem: null,
+      recipients: [
+        {
+          address: "dana@example.com",
+          name: "Dana Customer",
+          kind: "to",
+          state: "unknown",
+          provider: "smtp2go",
+          marked: false,
+        },
+        { address: "ron@example.com", name: null, kind: "cc", state: "accepted", provider: "failover", marked: false },
+      ],
+    },
+    ...over,
+  })
+
+  it("starts the composer from the participants and the ticket's address, and writes only notes while listening", async () => {
+    await renderAt("/tickets/7", { "/api/setup/status": status(), "/api/v1/me": admin, "/api/v1/tickets/7": view() })
+    const composer = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>(".ui-composer")
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(composer.getAttribute("data-kind")).toBe("reply")
+    const fields = composer.querySelectorAll<HTMLInputElement>(".ui-composer-fields input")
+    expect(Array.from(fields).map((input) => input.value)).toEqual(["dana@example.com", "ron@example.com"])
+    expect(composer.querySelector<HTMLSelectElement>("select")?.value).toBe("help@example.com")
+    expect(composer.textContent).toContain("Agent Name (Alpha)")
+    expect(composer.textContent).toContain("Alpha support")
+    expect(composer.querySelector(".ui-editor-text")?.getAttribute("dir")).toBe("auto")
+    if (mounted) {
+      const { root, host } = mounted
+      await act(async () => root.unmount())
+      host.remove()
+      mounted = null
+    }
+
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [], true),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("compose.listening")))
+    const listening = document.querySelector<HTMLElement>(".ui-composer") as HTMLElement
+    expect(listening.getAttribute("data-kind")).toBe("note")
+    expect(listening.querySelector<HTMLButtonElement>('button[data-kind="reply"]')?.disabled).toBe(true)
+    expect(listening.querySelector(".ui-composer-fields")).toBeNull()
+  })
+
+  it("shows each recipient's state, and sends an unknown reply again only after asking", async () => {
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [reply()]),
+      "/api/v1/messages/00000000-0000-4000-8000-0000000000aa/resend": ok({ ok: true }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("delivery.unknownTitle")))
+    const card = document.querySelector('[data-direction="out"]') as HTMLElement
+    expect(card.textContent).toContain("Agent Name")
+    expect(card.querySelector('[data-recipient="dana@example.com"]')?.getAttribute("data-state")).toBe("unknown")
+    expect(card.querySelector('[data-recipient="ron@example.com"]')?.textContent).toContain(
+      he("delivery.provider.failover"),
+    )
+    // The recipients show once, in the sending list, not again in the header.
+    expect(card.querySelector<HTMLElement>(".ui-message-to")?.hidden).toBe(true)
+    await act(async () => button(he("delivery.resend"))?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
+    expect(requests.some((r) => r.url.endsWith("/resend"))).toBe(false)
+    await act(async () => document.querySelector<HTMLButtonElement>("[role=alertdialog] .ui-btn-primary")?.click())
+    await vi.waitFor(() => expect(requests.some((r) => r.method === "POST" && r.url.endsWith("/resend"))).toBe(true))
   })
 
   it("ends a PDF that finishes loading after its preview closed, and starts none once it closed", async () => {

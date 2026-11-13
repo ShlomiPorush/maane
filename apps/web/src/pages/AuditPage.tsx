@@ -38,6 +38,7 @@ export const AUDIT_ACTIONS = [
   "user.unban",
   "user.revoke_sessions",
   "user.set_password",
+  "user.rename",
   "setting.update",
   "organization.create",
   "organization.rename",
@@ -48,8 +49,14 @@ export const AUDIT_ACTIONS = [
   "organization.address_remove",
   "organization.address_default",
   "organization.memberships_clear",
+  "organization.signature",
   "file.blocked",
   "message.content_blocked",
+  "message.reply",
+  "message.note",
+  "message.resend",
+  "message.mark_sent",
+  "message.send_refused",
 ] as const
 
 const KNOWN = new Set<string>(AUDIT_ACTIONS)
@@ -201,6 +208,17 @@ export function describe(
       facts.push({ label: t("audit.fact.signature"), value: details.signature, ltr: true })
     if (typeof details.type === "string")
       facts.push({ label: t("audit.fact.blockedType"), value: details.type, ltr: true })
+  }
+  if (entry.action === "user.rename" && typeof details.name === "string")
+    facts.push({ label: t("audit.fact.displayName"), value: details.name })
+  if (entry.action.startsWith("message.")) {
+    if (typeof details.ticket === "number")
+      facts.push({ label: t("audit.fact.ticket"), value: `#${details.ticket}`, ltr: true })
+    if (typeof details.from === "string") facts.push({ label: t("audit.fact.from"), value: details.from, ltr: true })
+    if (Array.isArray(details.recipients))
+      facts.push({ label: t("audit.fact.recipients"), value: details.recipients.join(", "), ltr: true })
+    if (typeof details.problem === "string")
+      facts.push({ label: t("audit.fact.problem"), value: t(`delivery.problem.${details.problem}`) })
   }
   if (entry.action === "session.sign_in" && (details.stage === "password" || details.stage === "second_factor"))
     facts.push({ label: t("audit.fact.stage"), value: t(`audit.stage.${details.stage}`) })

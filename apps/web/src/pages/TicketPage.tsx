@@ -3,7 +3,8 @@
 // its own `sandbox` attribute and by the route's policy (sandbox, default-src 'none', images only as data: URLs until
 // "Show remote images"). What a scan blocked shows as blocked with its signature, never its content. Files show
 // their scan status in words; a clean image, PDF, or text file previews in the shared dialog, and every stored file
-// downloads. A ticket outside the user's organizations reads as not found, as the server answers.
+// downloads. A ticket outside the user's organizations reads as not found, as the server answers. Replies and internal
+// notes (plan 3.1) show their author, a reply where its sending is per recipient, and the composer comes last.
 
 import type { AttachmentView, MessageView, TicketView } from "@maane/shared"
 import { Download, Eye, Paperclip } from "lucide-react"
@@ -20,6 +21,8 @@ import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { Banner, ErrorState, Loading, StaleNote } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
 import { Tag } from "../ui/tags.tsx"
+import { Composer } from "./tickets/Composer.tsx"
+import { Delivery } from "./tickets/Delivery.tsx"
 import { FilePreview } from "./tickets/FilePreview.tsx"
 import { AddressLine, ScanTag, Sender, TicketNumber, TicketTags } from "./tickets/parts.tsx"
 
@@ -155,20 +158,40 @@ function Ticket({ view }: { view: TicketView }) {
       </section>
       <h2 className="ui-section-title">{t("ticket.messagesTitle")}</h2>
       {view.messages.map((message) => (
-        <MessageCard key={message.id} message={message} onPreview={setPreview} />
+        <MessageCard key={message.id} message={message} ticketNumber={ticket.number} onPreview={setPreview} />
       ))}
+      <Composer view={view} />
       {preview ? <FilePreview file={preview} onClose={() => setPreview(null)} /> : null}
     </>
   )
 }
 
-function MessageCard({ message, onPreview }: { message: MessageView; onPreview: (file: AttachmentView) => void }) {
+function MessageCard({
+  message,
+  ticketNumber,
+  onPreview,
+}: {
+  message: MessageView
+  ticketNumber: number
+  onPreview: (file: AttachmentView) => void
+}) {
   const { t } = useI18n()
   return (
-    <article className="ui-panel ui-message" data-message={message.id} aria-label={message.subject ?? undefined}>
+    <article
+      className="ui-panel ui-message"
+      data-message={message.id}
+      data-direction={message.direction}
+      aria-label={message.subject ?? undefined}
+    >
       <header className="ui-message-head">
         <span className="ui-message-from">
-          {message.from ? <AddressLine value={message.from} /> : <Sender sender={null} />}
+          {message.direction !== "in" ? <Tag tone="neutral">{t(`ticket.direction.${message.direction}`)}</Tag> : null}
+          {message.author ? <bdi dir="auto">{message.author.name}</bdi> : null}
+          {message.direction === "note" ? null : message.from ? (
+            <AddressLine value={message.from} />
+          ) : (
+            <Sender sender={null} />
+          )}
           {message.reviewFlags.map((flag) => (
             <Tag key={flag} tone="warn">
               {t(`flag.${flag}`)}
@@ -177,7 +200,7 @@ function MessageCard({ message, onPreview }: { message: MessageView; onPreview: 
         </span>
         <Time value={message.sentAt ?? message.receivedAt} mode="full" />
       </header>
-      <dl className="ui-message-to">
+      <dl className="ui-message-to" hidden={message.delivery !== null}>
         {message.to.length > 0 ? (
           <div>
             <dt>{t("ticket.to")}</dt>
@@ -228,6 +251,9 @@ function MessageCard({ message, onPreview }: { message: MessageView; onPreview: 
         <p className="ui-message-empty">{t("ticket.noBody")}</p>
       ) : null}
       {message.attachments.length > 0 ? <Files files={message.attachments} onPreview={onPreview} /> : null}
+      {message.delivery ? (
+        <Delivery messageId={message.id} ticketNumber={ticketNumber} delivery={message.delivery} />
+      ) : null}
     </article>
   )
 }
