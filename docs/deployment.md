@@ -107,7 +107,7 @@ The block fills in:
 
 - `POSTGRES_PASSWORD` in `postgres.env`, and the same value in `app.env`'s `DATABASE_URL`: 32 random bytes as hex. Hex keeps the URL valid, and the server refuses a password that is not random hex.
 - `MAANE_AUTH_SECRETS` and `MAANE_SETTINGS_KEYS`: `1:` and 32 random bytes as hex each, different from each other and from the password.
-- `VERSION` and `DOMAIN` in `.env`.
+- `VERSION` and `DOMAIN` in `.env`. `LINK_DOMAIN` and `GEOIP_DIR` stay empty; set them as [Link tracking](#link-tracking) describes.
 - `MAANE_TRUSTED_PROXIES`: the subnets of the `traefik` network.
 
 It refuses, and leaves no file of its own, when any of the three files exists, when a contract is missing or not as expected, when a value cannot be generated or read, or when `DOMAIN` is still the example. The files are readable by you only (mode 600). It prints no secret. It publishes the three files only when none exists; if another run published one meanwhile, it removes the ones it published itself and stops.
@@ -480,6 +480,8 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
 To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported.
 
 ## What was verified
+
+Phase 3.4 (2026-11-13): `docker compose config` accepted `docker-compose.yml` with and without `LINK_DOMAIN` and `GEOIP_DIR` (the `maane-links` rule and the `/geoip` mount resolved as described); the `maane-links` router and the mount were never run behind a real Traefik. In a stack from the development template, with the GeoLite2 test databases mounted read only at `/geoip` and the stack's Docker networks trusted as proxies, clicks and a download through the published port were redirected, served as an attachment, and recorded with the forwarded documentation addresses and their locations; with the networks not yet trusted, the forwarded header was ignored and the proxy's address recorded. Section 3's block was not run again; it copies the new empty lines of `.env.example` as they are.
 
 Phase 3.3 (2026-11-13): delivery status ran only against stand-ins, in the integration tests: the webhook through the server app with secrets generated for the test, the activity search against a stand-in HTTPS API that accepts only a key generated for the run, and failover bounces through the stand-in Graph. Nothing reached SMTP2GO. The steps of [Connect SMTP2GO's delivery status](#connect-smtp2gos-delivery-status) have not run: SMTP2GO's menus, the exact Authorization value it sends for the Bearer type, the format of its `time` field, and that its webhook's `email_id` is the queue ID in its final SMTP reply are unchecked until your first real send.
 

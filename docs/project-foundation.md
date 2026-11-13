@@ -438,6 +438,7 @@ Decisions where the plan was silent (3.4, for the owner's review):
 
 - Tracking is on by default. Off sends the agent's links as written and records no click or download; download links of history files are made either way (they are how a customer gets those files), and links already sent keep working.
 - A blockquote the agent wrote in the reply itself is the agent's text: its links are tracked. Only the history Maane quotes is left alone.
+- A history file stored not fully scanned (encrypted, or beyond a scan limit) or not scanned (the policy let it through) gets a public download link too, under the ticket view's download rule the brief named; only an infected, blocked, or waiting file never does.
 - One code per reply and file: a file named again in a later reply gets a new link, so each download shows under the reply it came from.
 - A click is early against the time a provider first accepted a recipient of the reply; a recipient an agent marked as sent does not count. 3.3's delivery time can take its place without changing what is stored.
 - The text part keeps the history's file names without links, as 3.2 builds it.
@@ -448,6 +449,8 @@ Open for the owner after 3.4:
 - `uap-core` on npm is from 2023 (0.18.0) and `uap-ref-impl` from 2021: a new browser may read as its engine or as Other until the rules are updated. No maintained uap-core parser for Node was found.
 - Real mail: how much customers' scanners inflate clicks, and whether rewritten links hurt delivery at mail providers (requirements section 10), checked with the owner's real sends.
 - The audit log's `clientIp` (1b) still takes the last `X-Forwarded-For` hop without checking the peer; the link routes use the stricter rule above. It is safe while Maane is reachable through Traefik only.
+- The user agent rules are read from the image's `node_modules` when the first click comes, not bundled; if that ever fails, the click is not recorded (a warning is logged) and the redirect still works. `scripts/verify.sh` does not request `/l/` or `/f/` in the built image; the screenshot stack did.
+- Deliverability: a link whose text is its own address now points at the link domain, a pattern some filters weigh as phishing; part of the real-mail check above.
 
 ## Required workflow contracts
 
