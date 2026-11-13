@@ -818,6 +818,11 @@ export const outboxRecipient = pgTable(
     deliveryAt: at("delivery_at"),
     /** When Maane wrote that status, by its own clock: the flag counts only a status written after the acceptance. */
     deliveryRecordedAt: at("delivery_recorded_at"),
+    /**
+     * The time of the first `delivered` event about this recipient (plan 3.4): set once, while it is empty, and never
+     * overwritten by a later status (a spam report, a bounce), so a click's "early" mark keeps its reference.
+     */
+    firstDeliveredAt: at("first_delivered_at"),
     /** The provider's reason or the report's status code, bounded. */
     deliveryDetail: text("delivery_detail"),
     /** `@maane/shared` DELIVERY_SOURCES. */

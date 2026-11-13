@@ -22,6 +22,7 @@ import {
   ticket,
   trackedLink,
 } from "../db/schema.ts"
+import { applyDeliveryEvent } from "../delivery/service.ts"
 import { storedFilePath } from "../files/paths.ts"
 import { LINK_RATE_LIMIT } from "../http/links.ts"
 import { createTestApp } from "../testing/app.ts"
@@ -127,7 +128,11 @@ async function agentMessage(
   ticketId: string,
   userId: string,
   direction: "out" | "note",
-  { acceptedAt = new Date(), deliveredAt = null }: { acceptedAt?: Date; deliveredAt?: Date | null } = {},
+  {
+    acceptedAt = new Date(),
+    deliveredAt = null,
+    providerId = null,
+  }: { acceptedAt?: Date; deliveredAt?: Date | null; providerId?: string | null } = {},
 ) {
   const [m] = await db()
     .insert(message)
@@ -161,8 +166,12 @@ async function agentMessage(
         kind: "to",
         position: 0,
         state: "accepted",
+        provider: "smtp2go",
+        providerId,
         acceptedAt,
-        ...(deliveredAt ? { delivery: "delivered", deliveryAt: deliveredAt, deliverySource: "webhook" } : {}),
+        ...(deliveredAt
+          ? { delivery: "delivered", deliveryAt: deliveredAt, deliverySource: "webhook", firstDeliveredAt: deliveredAt }
+          : {}),
         updatedAt: new Date(),
       })
   }
@@ -564,5 +573,45 @@ describe("a link a scanner keeps clicking", () => {
     // The newest first: the last one recorded, down to the CLICKS_SHOWN-th newest.
     expect(shown?.clicks[0]?.ip).toBe(`192.0.2.${total - 1}`)
     expect(shown?.clicks.at(-1)?.ip).toBe(`192.0.2.${total - CLICKS_SHOWN}`)
+  })
+})
+
+describe("the early mark after later delivery events (review L1)", () => {
+  it("keeps a click early against the first delivery when a spam report replaces the status", async () => {
+    await app.close()
+    await start({ trustedProxies: ["127.0.0.1"], geoipDir: null })
+    const { b, number, ticketId, userId } = await reply()
+    // Accepted an hour ago; SMTP2GO reports it delivered 30 seconds ago, through 3.3's own write path.
+    const queueId = `queue-${randomUUID()}`
+    const sent = await agentMessage(ticketId, userId, "out", {
+      acceptedAt: new Date(Date.now() - 3_600_000),
+      providerId: queueId,
+    })
+    const event = (status: "delivered" | "spam", at: Date) =>
+      db().transaction((tx) =>
+        applyDeliveryEvent(
+          tx,
+          { providerId: queueId },
+          { recipient: "dana@example.com", status, at, detail: null, source: "webhook" },
+        ),
+      )
+    const deliveredAt = new Date(Date.now() - 30_000)
+    expect(await event("delivered", deliveredAt)).toBe(true)
+    const link = await plant(sent, { url: "https://www.example.com/" })
+    const base = await listening()
+    await fetch(`${base}/l/${link.code}`, { redirect: "manual", headers: { "x-forwarded-for": "192.0.2.30" } })
+    // A later spam report replaces the status and its time; the first delivery stays.
+    expect(await event("spam", new Date())).toBe(true)
+    const [row] = await db().select().from(outboxRecipient).where(eq(outboxRecipient.messageId, sent))
+    expect(row).toMatchObject({ delivery: "spam", firstDeliveredAt: deliveredAt })
+    // A second delivered event does not move it either.
+    await event("delivered", new Date(Date.now() + 1000))
+    const [again] = await db().select().from(outboxRecipient).where(eq(outboxRecipient.messageId, sent))
+    expect(again?.firstDeliveredAt).toEqual(deliveredAt)
+
+    const view = (await b.call("GET", `/api/v1/tickets/${number}`)).json as TicketView
+    expect(view.messages.find((m) => m.id === sent)?.links?.[0]?.clicks).toEqual([
+      expect.objectContaining({ ip: "192.0.2.30", scanner: ["early"] }),
+    ])
   })
 })
