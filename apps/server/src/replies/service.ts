@@ -17,7 +17,6 @@ import {
   type ComposeView,
   type MailAddress,
   MESSAGES,
-  matchSupportAddress,
   outboxStateOf,
   parseExactAddress,
   RECIPIENTS_MAX,
@@ -37,7 +36,6 @@ import {
   outbox,
   outboxRecipient,
   storedFile,
-  supportAddress,
   ticket,
   ticketParticipant,
   upload,
@@ -49,6 +47,7 @@ import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
 import type { Settings } from "../settings/service.ts"
 import { wellFormedText } from "../text.ts"
+import { belongsTo, supportRules } from "./rules.ts"
 import { buildReply, htmlToText, newMessageId, type ReplyAttachment, replySubject, storedBody } from "./mail.ts"
 
 /** The user a request acts for. */
@@ -71,26 +70,6 @@ export type ReplyBodyInput = z.infer<typeof ReplyBody>
 
 /** The longest file name an upload keeps, in characters. */
 export const UPLOAD_NAME_MAX = 200
-
-type Rule = { kind: "exact" | "pattern"; value: string; isDefault: boolean; organizationId: string }
-
-/** Whether an address belongs to an organization by the shared matcher (exact first, then patterns). */
-export function belongsTo(address: string, rules: readonly Rule[], organizationId: string): boolean {
-  const match = matchSupportAddress(address, rules)
-  return match !== null && match.rule.organizationId === organizationId
-}
-
-/** Every support address, as the shared matcher reads them. */
-export async function supportRules(db: Pick<Db, "select">): Promise<Rule[]> {
-  return (await db
-    .select({
-      kind: supportAddress.kind,
-      value: supportAddress.value,
-      isDefault: supportAddress.isDefault,
-      organizationId: supportAddress.organizationId,
-    })
-    .from(supportAddress)) as Rule[]
-}
 
 /** A display name for a header or a list: one line, well formed, trimmed, bounded. */
 function cleanName(name: string | null): string | null {
