@@ -34,7 +34,8 @@ export async function prepareImage(bytes: Buffer, contentType: string): Promise<
   if (!(contentType in FORMATS)) return null
   const type = contentType as ImageType
   try {
-    const options = { limitInputPixels: INPUT_PIXELS_MAX, failOn: "error" } as const
+    // failOn "warning": the input is untrusted, as sharp recommends for it.
+    const options = { limitInputPixels: INPUT_PIXELS_MAX, failOn: "warning" } as const
     const meta = await sharp(bytes, options).metadata()
     const { width, height } = meta.autoOrient
     if (!width || !height) return null
@@ -54,4 +55,25 @@ export async function prepareImage(bytes: Buffer, contentType: string): Promise<
 export function shownSize(image: { width: number; height: number }, column: number): { width: number; height: number } {
   const width = Math.min(image.width, column)
   return { width, height: Math.max(1, Math.round((image.height * width) / image.width)) }
+}
+
+/** The most one history image and one history message may embed (as the ticket view's frame shows them). */
+export const IMAGE_MAX_BYTES = 5 * 1024 * 1024
+export const MESSAGE_IMAGES_MAX_BYTES = 20 * 1024 * 1024
+
+/**
+ * Which history images are read and embedded, decided from their stored sizes before any byte is read: newest first,
+ * each within IMAGE_MAX_BYTES, its message within MESSAGE_IMAGES_MAX_BYTES, and all of them within `budget`. The rest
+ * are shown by their names. `candidates` are in the history's order (newest message first); true means read it.
+ */
+export function imagesToRead(candidates: readonly { message: number; size: number }[], budget: number): boolean[] {
+  let total = 0
+  const perMessage = new Map<number, number>()
+  return candidates.map(({ message, size }) => {
+    const own = perMessage.get(message) ?? 0
+    if (size > IMAGE_MAX_BYTES || own + size > MESSAGE_IMAGES_MAX_BYTES || total + size > budget) return false
+    total += size
+    perMessage.set(message, own + size)
+    return true
+  })
 }

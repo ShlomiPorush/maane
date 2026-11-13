@@ -43,20 +43,21 @@ import {
 } from "../db/schema.ts"
 import { storedFilePath } from "../files/paths.ts"
 import { type JobQueue, SEND_REPLY, transactionWithJobs, UPLOAD_SCAN } from "../jobs/queue.ts"
-import { sanitizeMailHtml } from "../mail/html.ts"
+import { contentIdsIn, sanitizeMailHtml } from "../mail/html.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
 import type { Settings } from "../settings/service.ts"
 import { wellFormedText } from "../text.ts"
-import { INLINE_IMAGE_MAX_BYTES, INLINE_IMAGES_MAX_BYTES } from "../tickets/service.ts"
-import { EMBEDDABLE_TYPES, prepareImage } from "./images.ts"
+import { EMBEDDABLE_TYPES, imagesToRead, prepareImage } from "./images.ts"
 import type { Entry, EntryImage } from "./layout.ts"
 import {
   buildReply,
+  GMAIL_HTML_BUDGET,
   htmlToText,
   MessageTooLarge,
   newMessageId,
   type ReplyAttachment,
+  ReplyTooLong,
   replySubject,
   storedBody,
 } from "./mail.ts"
@@ -245,7 +246,11 @@ export class Replies {
       const attachments: ReplyAttachment[] = []
       for (const file of files) attachments.push({ ...file, content: await this.#bytes(file.sha256) })
       const authorName = await this.#agentName(user.id)
-      const history = await this.#history(t.id, found.organizationName, from)
+      // What the history's images may take: the provider's limit as raw bytes (base64 adds a third), less the reply's
+      // own files and a margin for the rest of the message.
+      const imageBudget =
+        Math.floor((MESSAGE_MAX_BYTES * 3) / 4) - files.reduce((sum, file) => sum + file.size, 0) - 1_000_000
+      const history = await this.#history(t.id, found.organizationName, from, Math.max(0, imageBudget))
       const mime = await buildReply({
         from: { address: from, name: `${authorName} (${found.organizationName})` },
         to: people.to,
@@ -268,6 +273,7 @@ export class Replies {
       }).catch((error: unknown) => {
         // Refused before anything is written or queued (plan 3.2).
         if (error instanceof MessageTooLarge) throw new Refusal("message_too_large", 400, { max: MESSAGE_MAX_BYTES })
+        if (error instanceof ReplyTooLong) throw new Refusal("reply_too_long", 400, { max: GMAIL_HTML_BUDGET })
         throw error
       })
       built = { mime, messageId, subject, inReplyTo: parent?.id ?? null, references }
@@ -371,7 +377,7 @@ export class Replies {
    * stored file clean, with an image type, within the same sizes; prepared (downscaled) with sharp, with a new content
    * ID in the From address's domain. Every other image of the stored HTML is left out when the email is drawn.
    */
-  async #history(ticketId: string, organizationName: string, from: string): Promise<Entry[]> {
+  async #history(ticketId: string, organizationName: string, from: string, imageBudget: number): Promise<Entry[]> {
     const accepted = this.db
       .select({ one: sql`1` })
       .from(outboxRecipient)
@@ -425,42 +431,49 @@ export class Replies {
         names.set(row.authorUserId, await this.#agentName(row.authorUserId))
     const domain = from.slice(from.lastIndexOf("@") + 1)
 
-    const entries: Entry[] = []
-    for (const row of rows) {
+    // The images each message's HTML refers to (by its decoded content ID) that may be embedded: a part of the same
+    // message, inline, clean as a part and as a stored file, with an image type read from the content. Which of them
+    // are read is decided from their stored sizes first (imagesToRead); the others show by their names, unread.
+    const candidates = rows.flatMap((row, index) => {
+      const referenced = row.html ? contentIdsIn(row.html) : new Set<string>()
+      const seen = new Set<string>()
+      return parts.flatMap((part) => {
+        const id = part.contentId
+        if (part.messageId !== row.id || part.kind !== "inline" || !id || !part.sha256 || seen.has(id)) return []
+        if (!referenced.has(id) || part.status !== "clean" || part.storedStatus !== "clean") return []
+        if (!EMBEDDABLE_TYPES.includes(part.detectedType as never)) return []
+        seen.add(id)
+        return [{ message: index, size: part.size ?? 0, id, sha256: part.sha256, type: part.detectedType ?? "", part }]
+      })
+    })
+    const read = imagesToRead(candidates, imageBudget)
+
+    const entries: Entry[] = rows.map((row) => {
       const own = parts.filter((part) => part.messageId === row.id)
       const files = own
         .filter((part) => part.kind === "attachment" && part.sha256 && STORED.has(part.status))
         .map((part) => cleanFileName(part.fileName ?? "file"))
-      const images = new Map<string, EntryImage>()
-      let total = 0
-      for (const part of own) {
-        const id = part.contentId
-        if (part.kind !== "inline" || !id || !part.sha256 || images.has(id) || !row.html?.includes(id)) continue
-        if (part.status !== "clean" || part.storedStatus !== "clean") continue
-        if (!EMBEDDABLE_TYPES.includes(part.detectedType as never) || (part.size ?? 0) > INLINE_IMAGE_MAX_BYTES)
-          continue
-        if (total + (part.size ?? 0) > INLINE_IMAGES_MAX_BYTES) continue
-        const bytes = await this.#bytes(part.sha256).catch(() => null)
-        const prepared = bytes ? await prepareImage(bytes, part.detectedType ?? "") : null
-        if (!prepared) continue
-        total += part.size ?? 0
-        images.set(id, {
-          ...prepared,
-          cid: `${randomUUID()}@${domain}`,
-          fileName: cleanFileName(part.fileName ?? "image"),
-        })
-      }
       const agent = row.authorUserId ? (names.get(row.authorUserId) ?? row.authorUserId) : null
       const customer = row.fromName?.trim() || row.fromAddress || "?"
-      entries.push({
+      return {
         name: agent ? `${agent} (${organizationName})` : customer,
         initialsOf: agent ?? customer,
         at: row.receivedAt,
         html: row.html !== null && row.html !== "" ? row.html : null,
         text: row.text !== null && row.text !== "" ? row.text : null,
-        images,
+        images: new Map<string, EntryImage>(),
+        imageNames: new Map<string, string>(),
         files,
-      })
+      }
+    })
+    for (const [index, candidate] of candidates.entries()) {
+      const entry = entries[candidate.message]
+      if (!entry) continue
+      const fileName = cleanFileName(candidate.part.fileName ?? "image")
+      const bytes = read[index] ? await this.#bytes(candidate.sha256).catch(() => null) : null
+      const prepared = bytes ? await prepareImage(bytes, candidate.type) : null
+      if (prepared) entry.images.set(candidate.id, { ...prepared, cid: `${randomUUID()}@${domain}`, fileName })
+      else entry.imageNames?.set(candidate.id, fileName)
     }
     return entries
   }

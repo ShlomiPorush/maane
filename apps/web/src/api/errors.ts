@@ -50,6 +50,7 @@ export const ERROR_TEXT: Record<string, string> = {
   reply_empty: "errors.code.replyEmpty",
   attachment_invalid: "errors.code.attachmentInvalid",
   message_too_large: "errors.code.messageTooLarge",
+  reply_too_long: "errors.code.replyTooLong",
   file_too_large: "errors.code.fileTooLarge",
   reply_not_retryable: "errors.code.replyNotRetryable",
   reply_not_unknown: "errors.code.replyNotUnknown",

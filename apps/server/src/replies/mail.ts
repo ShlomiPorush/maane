@@ -66,6 +66,14 @@ export class MessageTooLarge extends Error {
   }
 }
 
+/** The reply alone (its HTML with no history left) is larger than Gmail's budget: Gmail would clip it. */
+export class ReplyTooLong extends Error {
+  constructor(readonly size: number) {
+    super("the reply alone is larger than the HTML budget")
+    this.name = "ReplyTooLong"
+  }
+}
+
 /** The subject of a reply: the ticket's, with `Re:` once and `[#n]` once. */
 export function replySubject(subject: string | null, number: number): string {
   const tag = `[#${number}]`
@@ -125,16 +133,16 @@ function conversationOf(mail: ReplyMail): Conversation {
  * The lowest trim level whose HTML fits Gmail's budget, or the last one (all history left out). The HTML only shrinks
  * as the level rises, so the level is found by bisection.
  */
-function gmailTrim(conversation: Conversation, budget: number): Trim {
-  const fits = (level: number) => utf8Bytes(layout(conversation, { level, imageNames: false }).html) <= budget
-  let low = 0
-  let high = conversation.history.length * 2
+function gmailTrim(conversation: Conversation, budget: number, imageNames: boolean, from = 0): Trim {
+  const fits = (level: number) => utf8Bytes(layout(conversation, { level, imageNames }).html) <= budget
+  let low = from
+  let high = Math.max(from, conversation.history.length * 2)
   while (low < high) {
     const middle = Math.floor((low + high) / 2)
     if (fits(middle)) high = middle
     else low = middle + 1
   }
-  return { level: low, imageNames: false }
+  return { level: low, imageNames }
 }
 
 async function compose(mail: ReplyMail, conversation: Conversation, trim: Trim): Promise<Buffer> {
@@ -182,21 +190,29 @@ export interface Budget {
 
 export const BUDGET: Budget = { html: GMAIL_HTML_BUDGET, message: MESSAGE_MAX_BYTES }
 
-/** The reply's MIME, built once, within the budgets above. */
+/**
+ * The reply's MIME, built once, within the budgets above. After every trim the HTML is measured again: when even the
+ * reply alone, with no history left, is over Gmail's budget, it is refused (ReplyTooLong), as a message over the
+ * provider's limit is (MessageTooLarge).
+ */
 export async function buildReply(mail: ReplyMail, budget: Budget = BUDGET): Promise<Buffer> {
   const conversation = conversationOf(mail)
-  let trim = gmailTrim(conversation, budget.html)
-  let mime = await compose(mail, conversation, trim)
-  if (mime.length <= budget.message) return mime
-  // History images by their names first, then history in short form, then without it.
-  trim = { ...trim, imageNames: true }
-  mime = await compose(mail, conversation, trim)
   const count = conversation.history.length
-  for (const level of [count, count * 2]) {
-    if (mime.length <= budget.message || trim.level >= level) continue
-    trim = { level, imageNames: true }
+  let trim = gmailTrim(conversation, budget.html, false)
+  let mime = await compose(mail, conversation, trim)
+  if (mime.length > budget.message) {
+    // History images by their names first (the HTML is measured again: a name can be longer than its image tag), then
+    // history in short form, then without it.
+    trim = gmailTrim(conversation, budget.html, true, trim.level)
     mime = await compose(mail, conversation, trim)
+    for (const level of [count, count * 2]) {
+      if (mime.length <= budget.message || trim.level >= level) continue
+      trim = { level, imageNames: true }
+      mime = await compose(mail, conversation, trim)
+    }
   }
+  const html = utf8Bytes(layout(conversation, trim).html)
+  if (html > budget.html) throw new ReplyTooLong(html)
   if (mime.length > budget.message) throw new MessageTooLarge(mime.length)
   return mime
 }

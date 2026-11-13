@@ -155,6 +155,7 @@
       "replyEmpty": "Write a message or attach a file first.",
       "attachmentInvalid": "A file cannot be attached. Remove it and add it again.",
       "messageTooLarge": "The reply with its files is larger than the mail provider accepts ({messageMaxMb} MB). Remove a file or send a smaller one, and send again.",
+      "replyTooLong": "The reply is too long for one email: Gmail would cut it off. Shorten it, or split it into several replies.",
       "fileTooLarge": "The file is larger than the file size limit.",
       "replyNotRetryable": "This reply is already on its way again.",
       "replyNotUnknown": "This reply's state changed. Reload the page.",

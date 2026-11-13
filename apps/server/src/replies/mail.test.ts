@@ -2,9 +2,9 @@ import { MESSAGES } from "@maane/shared"
 import { simpleParser } from "mailparser"
 import { describe, expect, it } from "vitest"
 import { png } from "../testing/files.ts"
-import { COLUMN_WIDTH, IMAGE_MAX_WIDTH, prepareImage } from "./images.ts"
+import { COLUMN_WIDTH, IMAGE_MAX_WIDTH, imagesToRead, prepareImage } from "./images.ts"
 import { type Entry, type EntryImage, israelTime, LRI, layout, PDI } from "./layout.ts"
-import { BUDGET, buildReply, MessageTooLarge, type ReplyMail, storedBody } from "./mail.ts"
+import { BUDGET, buildReply, MessageTooLarge, type ReplyMail, ReplyTooLong, storedBody } from "./mail.ts"
 
 // Structural tests of the customer's email (plan 3.2). Hebrew from code points: the repository holds no literal
 // Hebrew outside he.json.
@@ -74,7 +74,10 @@ describe("the customer's email", () => {
 
   it("sets dir on the html, the body, every table, and each paragraph; never dir=auto", async () => {
     const history = [
-      entry({ html: `<p dir="auto">${SHALOM}</p><div>An English line</div><p><img src="cid:x"></p>`, text: null }),
+      entry({
+        html: `<p dir="auto">${SHALOM}</p><div>An English line</div><p><img src="cid:x"></p><p dir="auto" style="direction:rtl">styled</p><P DIR="AUTO">upper</P>`,
+        text: null,
+      }),
     ]
     const html = (await parse(await buildReply(mail({ history })))).html || ""
     expect(html).toMatch(/^<!doctype html><html dir="rtl" lang="he">/)
@@ -82,7 +85,7 @@ describe("the customer's email", () => {
     const tables = tags(html, "table")
     expect(tables.length).toBeGreaterThanOrEqual(5)
     for (const table of tables) expect(table).toMatch(/ dir="(rtl|ltr)"/)
-    expect(html).not.toContain('dir="auto"')
+    expect(html).not.toMatch(/dir="auto"/i)
     // The reply's paragraphs by their first strong character, the history's too.
     expect(html).toContain(`<p dir="rtl">${SHALOM}, ${TODA}</p>`)
     expect(html).toContain('<p dir="ltr">An English paragraph.</p>')
@@ -231,6 +234,40 @@ describe("images", () => {
 })
 
 describe("the size budget", () => {
+  it("refuses a reply that alone, with no history left, is over Gmail's budget", async () => {
+    const long = `<p>${"A long reply, written at length. ".repeat(80)}</p>`
+    const history = [entry({ text: "Earlier." })]
+    await expect(buildReply(mail({ html: long, history }), { ...BUDGET, html: 2_000 })).rejects.toBeInstanceOf(
+      ReplyTooLong,
+    )
+    // The same reply within the budget is built, its history left out first if it must be.
+    expect(await buildReply(mail({ html: long, history }), { ...BUDGET, html: 20_000 })).toBeInstanceOf(Buffer)
+  })
+
+  it("gives a long string in a message Word's own copy, cut into lines", async () => {
+    const token = "X".repeat(200)
+    const html = (await parse(await buildReply(mail({ history: [entry({ html: `<p>${token}</p>`, text: null })] }))))
+      .html
+    expect(html).toContain(`<!--[if mso]>${"X".repeat(50)}<br>`)
+    expect(html).toContain(`<!--[if !mso]><!-->${token}<!--<![endif]-->`)
+  })
+
+  it("decides from stored sizes which history images are read, newest first, before reading any", () => {
+    const mb = 1024 * 1024
+    const plan = imagesToRead(
+      [
+        { message: 0, size: 4 * mb },
+        { message: 0, size: 4 * mb },
+        { message: 1, size: 6 * mb },
+        { message: 2, size: 3 * mb },
+        { message: 3, size: 1 * mb },
+      ],
+      10 * mb,
+    )
+    // Over one image's limit, then over the budget: shown by name, never read; a smaller one still fits.
+    expect(plan).toEqual([true, true, false, false, true])
+  })
+
   const long = (n: number) =>
     entry({
       text: null,

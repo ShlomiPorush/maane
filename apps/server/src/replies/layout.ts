@@ -17,6 +17,7 @@ import { textDirection } from "../mail/bidi.ts"
 import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
 import { renderEmailHtml } from "../mail/html.ts"
 import { COLUMN_WIDTH, type PreparedImage, shownSize } from "./images.ts"
+import { wordCopies } from "./word.ts"
 
 /** The words of the email, in the default language (he.json and en.json, `mail`). */
 export interface MailWords {
@@ -44,7 +45,9 @@ export interface Entry {
   html: string | null
   text: string | null
   /** The images it embeds, by the content ID its stored HTML refers to. */
-  images: ReadonlyMap<string, EntryImage>
+  images: Map<string, EntryImage>
+  /** The images it shows by their file names only (over the size budget, or unreadable), by content ID. */
+  imageNames?: Map<string, string>
   /** The names of its files (history: names only, plan 3.2). */
   files: readonly string[]
 }
@@ -229,7 +232,10 @@ function renderContent(
   if (entry.html) {
     html = renderEmailHtml(directBlocks(entry.html, dir), (contentId) => {
       const image = entry.images.get(contentId)
-      if (!image) return null
+      if (!image) {
+        const name = entry.imageNames?.get(contentId)
+        return name === undefined ? null : { name }
+      }
       if (imageNames) return { name: image.fileName }
       images.push(image)
       return { cid: image.cid, ...shownSize(image, column) }
@@ -239,7 +245,8 @@ function renderContent(
     html +=
       `<div dir="${dir}" class="email-muted" style="margin-top:8px;font-size:12px;line-height:18px;color:${MUTED}">` +
       `${fileLine(filesWord, entry.files, dir)}</div>`
-  return { html, dir, images }
+  // Word's own copy of a text with a run longer than the column (html-email).
+  return { html: wordCopies(html), dir, images }
 }
 
 /** The files line: the names, each isolated in its own direction. */

@@ -10,6 +10,7 @@
 // images, as an https URL. Every other image is removed with its tag, so the document never asks for anything remote
 // until the agent allows it; the route's Content Security Policy blocks the rest.
 
+import { DomUtils, parseDocument } from "htmlparser2"
 import sanitizeHtml from "sanitize-html"
 
 /** The schemes a link or an image may use. Everything else, `data:` first, is dropped with its attribute. */
@@ -225,4 +226,18 @@ export function renderEmailHtml(stored: string, image: (contentId: string) => Em
       },
     },
   })
+}
+
+/**
+ * The content IDs the images of stored HTML refer to by `cid:`, decoded as the render passes decode them (RFC 2392:
+ * `cid:shot%40example.com` names the part `<shot@example.com>`).
+ */
+export function contentIdsIn(html: string): Set<string> {
+  const ids = new Set<string>()
+  for (const image of DomUtils.getElementsByTagName("img", parseDocument(html).children)) {
+    const src = image.attribs.src
+    const id = src !== undefined && schemeOf(src) === "cid" ? contentIdOf(src) : null
+    if (id) ids.add(id)
+  }
+  return ids
 }

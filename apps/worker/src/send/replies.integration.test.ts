@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto"
 import { SYSTEM } from "@maane/server/audit"
-import { auditLog, message, outbox, outboxRecipient, storedFile, supportAddress, upload } from "@maane/server/db/schema"
+import {
+  auditLog,
+  message,
+  messagePart,
+  outbox,
+  outboxRecipient,
+  storedFile,
+  supportAddress,
+  upload,
+} from "@maane/server/db/schema"
 import { type JobQueue, openJobQueue, SEND_REPLY, UPLOAD_SCAN } from "@maane/server/jobs/queue"
 import { Organizations } from "@maane/server/organizations/service"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
@@ -263,7 +272,10 @@ describe("a reply, end to end", () => {
         subject: "A screenshot",
         from: "Dana Customer <dana@example.com>",
         to: SUPPORT,
-        html: { content: `<p>${SHALOM}</p><p><img src="cid:shot@mail.example.com" alt="shot"></p>` },
+        // The screenshot named percent-encoded (RFC 2392), as some clients write it; the photo over one image's limit.
+        html: {
+          content: `<p>${SHALOM}</p><p><img src="cid:shot%40mail.example.com" alt="shot"></p><p><img src="cid:big@mail.example.com"></p>`,
+        },
         attachments: [
           {
             fileName: "shot.png",
@@ -272,6 +284,13 @@ describe("a reply, end to end", () => {
             inline: true,
             contentId: "shot@mail.example.com",
           },
+          {
+            fileName: "big.png",
+            contentType: "image/png",
+            content: png(64, 64, [200, 40, 40]),
+            inline: true,
+            contentId: "big@mail.example.com",
+          },
           { fileName: "invoice.pdf", contentType: "application/pdf", content: pdf() },
         ],
       }),
@@ -279,6 +298,15 @@ describe("a reply, end to end", () => {
     await h.round()
     const found = await h.ticketOf(graphId)
     if (!found) throw new Error("no ticket")
+    // The photo as if it were 6 MB: decided from its stored size, shown by name, never read.
+    const [big] = await h.database.db
+      .select({ sha256: messagePart.storedSha256 })
+      .from(messagePart)
+      .where(eq(messagePart.contentId, "big@mail.example.com"))
+    await h.database.db
+      .update(storedFile)
+      .set({ size: 6 * 1024 * 1024 })
+      .where(eq(storedFile.sha256, big?.sha256 ?? ""))
     const post = async (values: Record<string, unknown>) => {
       const written = await admin.call("POST", `/api/v1/tickets/${found.number}/messages`, reply(values))
       expect(written.status, JSON.stringify(written.json)).toBe(201)
@@ -307,6 +335,7 @@ describe("a reply, end to end", () => {
     expect(html).not.toContain("Nobody got this.")
     expect(html).not.toContain('dir="auto"')
     expect(html).toContain('<span dir="ltr">invoice.pdf</span>')
+    expect(html).toContain("<span>[big.png]</span>")
     // The screenshot, downscaled and embedded, shown no wider than the history's column; an image alone stays right to left.
     const image =
       /<p dir="rtl"><img alt="shot" src="cid:([^"]+)" width="586" height="147" style="width:586px;max-width:100%;height:auto;border:0" \/><\/p>/.exec(
