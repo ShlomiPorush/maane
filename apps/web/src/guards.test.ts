@@ -24,14 +24,21 @@ import {
   MESSAGE_CONTENTS,
   MESSAGE_FLAGS,
   MESSAGES,
+  OUTBOX_STATES,
   PART_STATUSES,
+  PROVIDERS,
+  RECIPIENT_STATES,
   ROLES,
   SCANNER_CHECKS,
   SCANNER_POLICIES,
+  SEND_PROBLEMS,
   SETTING_KEYS,
+  SMTP_PROBLEMS,
+  SMTP_SECURITIES,
   TEXT_FIELDS,
   TICKET_FLAGS,
   TICKET_STATUSES,
+  UPLOAD_STATUSES,
 } from "@maane/shared"
 import { describe, expect, it } from "vitest"
 import { ERROR_TEXT, STATUS_TEXT } from "./api/errors.ts"
@@ -310,6 +317,20 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "intake.outcome.": INTAKE_OUTCOMES,
   "intake.outcomeWould.": INTAKE_OUTCOMES,
   "intake.reason.": INTAKE_REASONS,
+  "ticket.direction.": ["out", "note"],
+  "compose.kinds.": ["reply", "note"],
+  "compose.upload.": UPLOAD_STATUSES,
+  "compose.uploadHint.": ["infected", "blocked_type", "too_large", "scanner_unavailable"],
+  "delivery.state.": OUTBOX_STATES,
+  "delivery.recipient.": RECIPIENT_STATES,
+  "delivery.provider.": PROVIDERS,
+  "delivery.problem.": SEND_PROBLEMS,
+  "settings.sending.": SETTING_ROWS.filter(
+    (key) => key.startsWith("smtp2go.") || key.startsWith("failover.") || key === "mail.bounceAddress",
+  ).flatMap((key) => [`${key}.label`, `${key}.hint`]),
+  "settings.sending.security.": SMTP_SECURITIES,
+  "settings.sending.problem.": SMTP_PROBLEMS,
+  "settings.sending.test.": PROVIDERS,
 }
 
 // --- Language policy: Hebrew only in he.json, bidirectional controls only as escapes ---

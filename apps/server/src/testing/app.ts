@@ -25,6 +25,9 @@ const NO_JOBS: JobQueue = {
   send: async () => {
     throw new Error("this test has no job queue")
   },
+  sendIn: async () => {
+    throw new Error("this test has no job queue")
+  },
   job: async () => null,
   stop: async () => {},
 }

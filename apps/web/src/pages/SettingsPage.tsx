@@ -10,7 +10,9 @@
 // worker runs: the page queues it and reads its state until it is done (the server never calls the scanner). Microsoft
 // Graph (phase 2.3) holds the tenant, the application, its client secret (write only: the page shows whether one is
 // set, never the value, and an empty field keeps it), and the intake mailbox, and a connection test the worker runs the
-// same way: it reads only the mailbox's Inbox folder details and reports Graph's error code.
+// same way: it reads only the mailbox's Inbox folder details and reports Graph's error code. Sending (phase 3.1) holds
+// SMTP2GO's SMTP server and API key, the failover server, and the bounce address, with a connection test of each
+// server that the worker runs the same way (it connects with TLS and logs in, and sends nothing).
 
 import {
   BLOCKED_TYPE,
@@ -21,6 +23,7 @@ import {
   type GraphTestResult,
   INTAKE_MODES,
   isClientId,
+  isHostName,
   isMailbox,
   isTenantId,
   LOCALES,
@@ -34,6 +37,8 @@ import {
   SETTINGS,
   type SettingKey,
   type SettingView,
+  SMTP_SECURITIES,
+  type SmtpTestResult,
 } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react"
@@ -69,7 +74,32 @@ export const SETTING_ROWS: readonly SettingKey[] = [
   "scanner.scanTimeoutSeconds",
   "files.maxBytes",
   "files.blockedTypes",
+  "smtp2go.host",
+  "smtp2go.port",
+  "smtp2go.user",
+  "smtp2go.password",
+  "smtp2go.apiKey",
+  "failover.host",
+  "failover.port",
+  "failover.security",
+  "failover.user",
+  "failover.password",
+  "mail.bounceAddress",
 ]
+
+/** The sending settings of each SMTP server, in the order the page shows them; the connection test reads them saved. */
+const SMTP2GO_KEYS: readonly SettingKey[] = ["smtp2go.host", "smtp2go.port", "smtp2go.user", "smtp2go.password"]
+const FAILOVER_KEYS: readonly SettingKey[] = [
+  "failover.host",
+  "failover.port",
+  "failover.security",
+  "failover.user",
+  "failover.password",
+]
+/** Secrets of sending: write only, like Graph's client secret. */
+const SENDING_SECRETS: readonly SettingKey[] = ["smtp2go.password", "smtp2go.apiKey", "failover.password"]
+/** Values that are code-like: shown left to right in a mono font. */
+const SENDING_CODE: readonly SettingKey[] = ["smtp2go.host", "smtp2go.user", "failover.host", "failover.user"]
 
 const SESSION_DAYS_MIN = 1
 const SESSION_DAYS_MAX = 90
@@ -84,6 +114,21 @@ type Draft = Partial<Record<SettingKey, string>>
 
 /** The Graph fields: the connection test uses their saved values, so it waits while one of them is unsaved. */
 const GRAPH_KEYS: readonly SettingKey[] = ["graph.tenantId", "graph.clientId", "graph.clientSecret", "graph.mailbox"]
+
+/** Fields without a default to go back to: empty until the owner sets them. */
+const NO_DEFAULT: readonly SettingKey[] = [
+  ...GRAPH_KEYS,
+  "smtp2go.user",
+  "smtp2go.password",
+  "smtp2go.apiKey",
+  "failover.host",
+  "failover.user",
+  "failover.password",
+  "mail.bounceAddress",
+]
+
+/** A secret's text: one line without white space at either end, as the registry takes it. */
+const secretText = (text: string) => (text.length <= GRAPH_SECRET_MAX && /^\S(?:[^\r\n]*\S)?$/.test(text) ? text : null)
 
 /** A value as its field shows it: the size in MB, the blocked types one list. */
 export function settingText(key: SettingKey, value: unknown): string {
@@ -120,8 +165,19 @@ export function parseSetting(key: SettingKey, text: string): unknown {
   if (key === "graph.tenantId") return text.trim() === "" || isTenantId(text.trim()) ? text.trim() : null
   if (key === "graph.clientId") return text.trim() === "" || isClientId(text.trim()) ? text.trim() : null
   if (key === "graph.mailbox") return text.trim() === "" || isMailbox(text.trim()) ? text.trim().toLowerCase() : null
-  if (key === "graph.clientSecret")
-    return text.length <= GRAPH_SECRET_MAX && /^\S(?:[^\r\n]*\S)?$/.test(text) ? text : null
+  if (key === "graph.clientSecret" || SENDING_SECRETS.includes(key)) return secretText(text)
+  if (key === "smtp2go.port" || key === "failover.port") {
+    if (!/^\d{1,5}$/.test(text.trim())) return null
+    const port = Number(text.trim())
+    return port >= 1 && port <= 65535 ? port : null
+  }
+  if (key === "smtp2go.host" || key === "failover.host")
+    return text.trim() === "" || isHostName(text.trim()) ? text.trim() : null
+  if (key === "smtp2go.user" || key === "failover.user")
+    return text.trim().length <= 255 && !/[\r\n]/.test(text) ? text.trim() : null
+  if (key === "mail.bounceAddress")
+    return text.trim() === "" || isMailbox(text.trim()) ? text.trim().toLowerCase() : null
+  if (key === "failover.security") return (SMTP_SECURITIES as readonly string[]).includes(text) ? text : null
   if (key === "scanner.unavailablePolicy") return (SCANNER_POLICIES as readonly string[]).includes(text) ? text : null
   if (key === "intake.mode") return (INTAKE_MODES as readonly string[]).includes(text) ? text : null
   return (LOCALES as readonly string[]).includes(text) ? text : null
@@ -169,7 +225,18 @@ function Settings() {
     "graph.clientId": useRef<HTMLInputElement>(null),
     "graph.clientSecret": useRef<HTMLInputElement>(null),
     "graph.mailbox": useRef<HTMLInputElement>(null),
+    "smtp2go.host": useRef<HTMLInputElement>(null),
+    "smtp2go.port": useRef<HTMLInputElement>(null),
+    "smtp2go.user": useRef<HTMLInputElement>(null),
+    "smtp2go.password": useRef<HTMLInputElement>(null),
+    "smtp2go.apiKey": useRef<HTMLInputElement>(null),
+    "failover.host": useRef<HTMLInputElement>(null),
+    "failover.port": useRef<HTMLInputElement>(null),
+    "failover.user": useRef<HTMLInputElement>(null),
+    "failover.password": useRef<HTMLInputElement>(null),
+    "mail.bounceAddress": useRef<HTMLInputElement>(null),
   }
+  const sendingIds = useId()
   const views = new Map((query.data?.settings ?? []).map((view) => [view.key, view]))
 
   // Only what differs from the saved value counts as a change.
@@ -245,7 +312,7 @@ function Settings() {
   /** A value that differs from its default: Changed, and Reset puts the default in the draft (FS-6). */
   const resetOf = (key: SettingKey) => {
     // A Graph field has no default to go back to: it is empty until the owner sets it.
-    if (lockOf(key) || !views.has(key) || GRAPH_KEYS.includes(key)) return null
+    if (lockOf(key) || !views.has(key) || NO_DEFAULT.includes(key)) return null
     const fallback = SETTINGS[key].defaultValue
     if (sameValue(key, value(key), fallback)) return null
     const fallbackText = settingText(key, fallback)
@@ -256,9 +323,11 @@ function Settings() {
           ? t(`settings.intakeMode.mode.${fallbackText}`)
           : key === "scanner.unavailablePolicy"
             ? t(`settings.scannerPolicy.mode.${fallbackText}`)
-            : key === "files.blockedTypes"
-              ? t("settings.blockedTypes.defaultList")
-              : fallbackText
+            : key === "failover.security"
+              ? t(`settings.sending.security.${fallbackText}`)
+              : key === "files.blockedTypes"
+                ? t("settings.blockedTypes.defaultList")
+                : fallbackText
     return { label, onReset: () => edit(key, fallbackText) }
   }
 
@@ -313,6 +382,53 @@ function Settings() {
     const clientSecret = "graph.clientSecret" as const
     const mailbox = "graph.mailbox" as const
     const secret = views.get(clientSecret)
+    /** One sending setting's row: a write-only secret, the security choice, or a text or number field. */
+    const sendingRow = (key: SettingKey) => {
+      const id = `${sendingIds}-${key}`
+      const label = t(labelKey(key))
+      const hint = t(`settings.sending.${key}.hint`, { example: "example.com" })
+      if (key === "failover.security")
+        return (
+          <Row key={key} label={label} hint={hint} lock={lockOf(key)} reset={resetOf(key)}>
+            <fieldset className="ui-seg" aria-label={label}>
+              {SMTP_SECURITIES.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  data-security={option}
+                  aria-pressed={value(key) === option}
+                  disabled={Boolean(lockOf(key))}
+                  onClick={() => edit(key, option)}
+                >
+                  {t(`settings.sending.security.${option}`)}
+                </button>
+              ))}
+            </fieldset>
+          </Row>
+        )
+      const stored = views.get(key)
+      const isSecret = SENDING_SECRETS.includes(key)
+      const isPort = key === "smtp2go.port" || key === "failover.port"
+      return (
+        <Row key={key} label={label} hint={hint} htmlFor={id} lock={lockOf(key)} reset={resetOf(key)}>
+          {isSecret ? (
+            <span className="ui-scanner-line">
+              <Tag tone={stored?.set ? "ok" : "neutral"}>
+                {stored?.set ? t("settings.graphSecret.set") : t("settings.graphSecret.notSet")}
+              </Tag>
+            </span>
+          ) : null}
+          {field(key, id, {
+            className: isPort ? "ui-input-num" : isSecret || SENDING_CODE.includes(key) ? "ui-mono" : undefined,
+            ltr: true,
+            numeric: isPort ? { min: 1, max: 65535 } : undefined,
+            secret: isSecret
+              ? { placeholder: stored?.set ? t("settings.graphSecret.replace") : t("settings.sending.enterSecret") }
+              : undefined,
+          })}
+        </Row>
+      )
+    }
     body = (
       <>
         <StaleNote failed={query.isError} />
@@ -510,6 +626,20 @@ function Settings() {
             />
           </Row>
         </Group>
+        <Group id="settings-smtp2go" title={t("settings.sending.smtp2goTitle")} intro={t("settings.sending.intro")}>
+          <SmtpRow provider="smtp2go" fieldsChanged={changed.some((key) => SMTP2GO_KEYS.includes(key))} />
+          {SMTP2GO_KEYS.map(sendingRow)}
+          {sendingRow("smtp2go.apiKey")}
+        </Group>
+        <Group
+          id="settings-failover"
+          title={t("settings.sending.failoverTitle")}
+          intro={t("settings.sending.failoverIntro")}
+        >
+          <SmtpRow provider="failover" fieldsChanged={changed.some((key) => FAILOVER_KEYS.includes(key))} />
+          {FAILOVER_KEYS.map(sendingRow)}
+          {sendingRow("mail.bounceAddress")}
+        </Group>
         {error ? <FormError>{error.text}</FormError> : null}
       </>
     )
@@ -625,6 +755,107 @@ function GraphRow({ fieldsChanged }: { fieldsChanged: boolean }) {
         {testing ? t("settings.graph.test.testing") : t("settings.graph.test.button")}
       </button>
       {fieldsChanged ? <span className="ui-hint">{t("settings.graph.test.saveFirst")}</span> : null}
+    </Row>
+  )
+}
+
+/**
+ * The SMTP connection test of one server: the worker connects with TLS and logs in with the saved settings
+ * (nodemailer's transporter.verify()), sends nothing, and the page reads the job's state until it is done. It waits
+ * while one of that server's fields is unsaved.
+ */
+function SmtpRow({ provider, fieldsChanged }: { provider: "smtp2go" | "failover"; fieldsChanged: boolean }) {
+  const { t } = useI18n()
+  const [testing, setTesting] = useState(false)
+  const [result, setResult] = useState<SmtpTestResult | null>(null)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
+  const test = async () => {
+    setTesting(true)
+    try {
+      const { id } = await api.testSmtp(provider)
+      const until = Date.now() + TEST_WAIT_MS
+      while (mounted.current && Date.now() < until) {
+        await new Promise((resolve) => setTimeout(resolve, TEST_POLL_MS))
+        if (!mounted.current) return
+        const job = await api.smtpTest(id)
+        if (job.state === "done" && job.result) {
+          const done = job.result
+          setResult(done)
+          if (done.ok) showToast(t("settings.sending.test.okToast"), "success")
+          else
+            showToast(
+              t("settings.sending.test.failedToast", {
+                problem: t(`settings.sending.problem.${done.problem ?? "error"}`),
+              }),
+              "error",
+            )
+          return
+        }
+        if (job.state === "failed") break
+      }
+      if (mounted.current) showToast(t("settings.graph.test.noAnswer"), "error")
+    } catch (failure) {
+      if (mounted.current) showToast(errorText(t, failure), "error")
+    } finally {
+      if (mounted.current) setTesting(false)
+    }
+  }
+
+  return (
+    <Row label={t("settings.graph.test.label")} hint={t("settings.sending.test.hint")}>
+      <div className="ui-scanner" aria-live="polite" data-smtp-test={provider}>
+        {result ? (
+          <>
+            <span className="ui-scanner-line">
+              <Tag tone={result.ok ? "ok" : "fail"}>
+                {result.ok ? t("settings.graph.test.passed") : t("settings.graph.test.failed")}
+              </Tag>
+              <span className="ui-scanner-note">
+                {t("settings.graph.test.checked")} <Time value={result.checkedAt} mode="ago" />
+              </span>
+            </span>
+            {result.problem ? (
+              <span className="ui-scanner-fail">{t(`settings.sending.problem.${result.problem}`)}</span>
+            ) : null}
+            {result.code ? (
+              <span className="ui-scanner-note">
+                {t("settings.graph.test.code")} <bdi className="ui-mono">{result.code}</bdi>
+              </span>
+            ) : null}
+            {result.response ? (
+              <span className="ui-scanner-note">
+                <bdi className="ui-mono" dir="ltr">
+                  {result.response}
+                </bdi>
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <span className="ui-scanner-line">
+              <Tag tone="neutral">{t("settings.graph.test.notTested")}</Tag>
+            </span>
+            <span className="ui-scanner-note">{t("settings.graph.test.notTestedNote")}</span>
+          </>
+        )}
+      </div>
+      <button
+        type="button"
+        className="ui-btn ui-btn-sm"
+        disabled={testing || fieldsChanged}
+        aria-busy={testing || undefined}
+        onClick={() => void test()}
+      >
+        {testing ? t("settings.graph.test.testing") : t(`settings.sending.test.${provider}`)}
+      </button>
+      {fieldsChanged ? <span className="ui-hint">{t("settings.sending.test.saveFirst")}</span> : null}
     </Row>
   )
 }
@@ -760,5 +991,7 @@ export function labelKey(key: SettingKey): string {
   if (key === "graph.clientId") return "settings.graphClient.label"
   if (key === "graph.clientSecret") return "settings.graphSecret.label"
   if (key === "graph.mailbox") return "settings.graphMailbox.label"
+  if (key.startsWith("smtp2go.") || key.startsWith("failover.") || key === "mail.bounceAddress")
+    return `settings.sending.${key}.label`
   return "settings.sessionDays.label"
 }

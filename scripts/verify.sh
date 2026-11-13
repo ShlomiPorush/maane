@@ -200,6 +200,8 @@ RUN_ID="$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 STACK_PROJECT="maane-verify-stack-$RUN_ID"
 STACK_TAG="verify-$RUN_ID"
 STACK_DIR=""
+# The container of the sending worker (start_sender), while it runs.
+SENDER=""
 stack() {
   env -u COMPOSE_ENV_FILES MAANE_DATA_DIR="$STACK_DIR" MAANE_IMAGE_TAG="$STACK_TAG" MAANE_PORT=0 \
     MAANE_PUBLIC_URL=http://127.0.0.1:8095 \
@@ -211,6 +213,7 @@ stack() {
 # project is left: data a running container still uses is kept and reported instead.
 cleanup_stack() {
   local left
+  [ -z "$SENDER" ] || docker rm -f "$SENDER" >/dev/null 2>&1 || true
   [ -z "$STACK_DIR" ] || stack down --remove-orphans >/dev/null 2>&1 || true
   if ! left="$(docker ps -aq --filter "label=com.docker.compose.project=$STACK_PROJECT")" || [ -n "$left" ]; then
     echo "error: $STACK_PROJECT did not stop, so its data (${STACK_DIR:-none}) and maane:$STACK_TAG were kept." >&2
@@ -263,6 +266,39 @@ run_intake_checks() {
   echo "$out"
 }
 
+# The worker that sends the end-to-end tests' replies: apps/worker/src/testing/stack-worker.ts (bundled by
+# run_file_checks), the worker as index.ts starts it, in a container of the worker service, with two stand-in SMTP
+# servers inside that container (their certificates trusted there only, their credentials generated for the run). The
+# stack's own worker stops meanwhile, so only this one takes the queue's jobs, and nothing reaches a real server.
+start_sender() {
+  info "Sending: the worker with stand-in SMTP servers in its own process ($STACK_PROJECT)"
+  stack stop worker >/dev/null 2>&1 || fail_stack "the stack's worker did not stop"
+  SENDER="$STACK_PROJECT-sender"
+  stack run -d --name "$SENDER" --no-deps -v "$REPO_ROOT/apps/worker/dist/stack-check:/check:ro" worker node /check/stack-worker.js >/dev/null || fail_stack "the sending worker did not start"
+  for _ in $(seq 90); do
+    if docker logs "$SENDER" 2>&1 | grep -qx 'stack worker ready'; then
+      echo "    the sending worker is ready"
+      return 0
+    fi
+    sleep 1
+  done
+  docker logs "$SENDER" 2>&1 | tail -20
+  fail_stack "the sending worker did not get ready"
+}
+
+# What the stand-ins received while the end-to-end tests ran: the Hebrew reply with an English paragraph and an
+# attachment (e2e/replies.spec.ts) reached SMTP2GO's stand-in, with the reference line and the ticket number.
+check_sends() {
+  local out line
+  docker stop -t 30 "$SENDER" >/dev/null 2>&1 || true
+  out="$(docker logs "$SENDER" 2>&1 | grep '^received ' || true)"
+  docker rm -f "$SENDER" >/dev/null 2>&1 || true
+  SENDER=""
+  while IFS= read -r line; do echo "    $line"; done <<<"$out"
+  grep -qE '^received smtp2go .* hebrew=yes english=yes attachments=1 reference=yes subject-number=yes dropped=no$' <<<"$out" ||
+    die "the stand-in SMTP2GO did not receive the Hebrew reply of the end-to-end tests"
+}
+
 fail_stack() {
   stack ps -a || true
   stack logs --tail 60 || true
@@ -306,8 +342,11 @@ run_stack() {
 
   run_intake_checks
 
+  start_sender
   info "End-to-end: the web UI against the stack (Playwright, $PLAYWRIGHT_IMAGE)"
   run_e2e || fail_stack "end-to-end tests failed"
+  info "Sending: what the stand-in SMTP servers received"
+  check_sends
 
   info "Stopping $STACK_PROJECT"
   trap - EXIT

@@ -23,6 +23,7 @@ import {
   intakeRecord,
   intakeTicketPending,
   message,
+  outbox,
   setting,
   supportAddress,
   ticket,
@@ -265,6 +266,21 @@ export class IntakeProcessor {
     }
 
     if (msg.content !== "parsed") return finish({}, { outcome: "unreadable", reason: msg.content })
+
+    // Maane's own reply coming back into the mailbox (a support address among its recipients, a copy a provider kept):
+    // its own Message-ID from its own From address (plan 3.1). It opens, joins, and reopens nothing, in either mode.
+    if (msg.messageIdHeader && msg.fromAddress) {
+      const [own] = await tx
+        .select({ id: outbox.messageId, ticketId: message.ticketId })
+        .from(outbox)
+        .innerJoin(message, eq(message.id, outbox.messageId))
+        .where(and(eq(outbox.messageIdHeader, msg.messageIdHeader), eq(outbox.fromAddress, msg.fromAddress)))
+      if (own)
+        return finish(
+          { duplicateOf: own.id },
+          { outcome: "copy", matchedMessageId: own.id, matchedTicketId: own.ticketId, reason: "sent_by_maane" },
+        )
+    }
 
     // A copy (P7): the same Message-ID, From, Date, and decoded content as an earlier message. Recorded, nothing else.
     if (msg.messageIdHeader) {

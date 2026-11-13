@@ -2,11 +2,13 @@
 // below). An admin creates a user with a username, a role and a first password; the user sets up two-factor at
 // their first sign-in. Per user: make admin or agent (/admin/set-role), set a new password
 // (/admin/set-user-password), end their sessions (/admin/revoke-user-sessions), disable or enable the account
-// (/admin/ban-user, /admin/unban-user). A role change, a new password and a disable each end the user's sessions.
+// (/admin/ban-user, /admin/unban-user), and set the display name replies show as their sender (Maane's own
+// /api/v1/admin/users/:id/name). A role change, a new password and a disable each end the user's sessions.
 // The first admin, made at setup, is protected: the server refuses to demote or disable it, so it shows no such
 // action; nor does the acting admin's own row. A refusal is explained in words (api/errors.ts).
 
 import {
+  AGENT_NAME_MAX,
   isValidUsername,
   PASSWORD_MAX,
   PASSWORD_MIN,
@@ -17,10 +19,10 @@ import {
   userEmail,
 } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
-import { Ellipsis, KeyRound, LogOut, ShieldCheck, ShieldOff, UserCheck, UserPlus, UserX } from "lucide-react"
+import { Ellipsis, IdCard, KeyRound, LogOut, ShieldCheck, ShieldOff, UserCheck, UserPlus, UserX } from "lucide-react"
 import { type FormEvent, useId, useRef, useState } from "react"
 import { authClient, authData } from "../api/auth.ts"
-import { qk } from "../api/endpoints.ts"
+import { api, qk } from "../api/endpoints.ts"
 import { errorText } from "../api/errors.ts"
 import { formatNumber } from "../format/number.ts"
 import { useI18n } from "../i18n/i18n.tsx"
@@ -95,6 +97,7 @@ function Users() {
   })
   const [creating, setCreating] = useState(false)
   const [passwordFor, setPasswordFor] = useState<ListedUser | null>(null)
+  const [nameFor, setNameFor] = useState<ListedUser | null>(null)
   const users = query.data?.users ?? []
   const total = query.data?.total ?? 0
 
@@ -122,7 +125,13 @@ function Users() {
         <StaleNote failed={query.isError && Boolean(query.data)} />
         {query.data && users.length === 0 ? <Empty title={t("users.empty")} /> : null}
         {users.map((user) => (
-          <UserRow key={user.id} user={user} meId={me.data?.id} onSetPassword={() => setPasswordFor(user)} />
+          <UserRow
+            key={user.id}
+            user={user}
+            meId={me.data?.id}
+            onSetPassword={() => setPasswordFor(user)}
+            onRename={() => setNameFor(user)}
+          />
         ))}
         {total > users.length ? (
           <p className="ui-list-note">{t("users.more", { shown: users.length, total })}</p>
@@ -130,6 +139,7 @@ function Users() {
       </section>
       {creating ? <CreateUserDialog onClose={() => setCreating(false)} /> : null}
       {passwordFor ? <SetPasswordDialog user={passwordFor} onClose={() => setPasswordFor(null)} /> : null}
+      {nameFor ? <NameDialog user={nameFor} onClose={() => setNameFor(null)} /> : null}
     </div>
   )
 }
@@ -138,10 +148,12 @@ function UserRow({
   user,
   meId,
   onSetPassword,
+  onRename,
 }: {
   user: ListedUser
   meId: string | undefined
   onSetPassword: () => void
+  onRename: () => void
 }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
@@ -168,7 +180,14 @@ function UserRow({
     await queryClient.invalidateQueries({ queryKey: qk.users })
   }
 
-  const entries: MenuEntry[] = []
+  const entries: MenuEntry[] = [
+    {
+      kind: "item",
+      label: t("users.setName"),
+      icon: <IdCard aria-hidden="true" />,
+      onSelect: onRename,
+    },
+  ]
   if (can.changeRole)
     entries.push({
       kind: "item",
@@ -254,6 +273,14 @@ function UserRow({
           {!user.banned && !user.twoFactorEnabled ? <Tag tone="warn">{t("users.noTwoFactor")}</Tag> : null}
         </span>
         <span className="ui-item-meta">
+          {user.name && user.name !== name ? (
+            <>
+              <bdi dir="auto" data-display-name="">
+                {user.name}
+              </bdi>
+              {" · "}
+            </>
+          ) : null}
           {t("users.created")}{" "}
           <Time
             value={typeof user.createdAt === "string" ? user.createdAt : user.createdAt.toISOString()}
@@ -411,6 +438,79 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
           invalid={error?.field === "repeat"}
         />
         {error ? <FormError>{error.text}</FormError> : null}
+      </form>
+    </Dialog>
+  )
+}
+
+/**
+ * The name replies show as the sender, `Name (Organization)` (plan 3.1): Maane's own endpoint sets it through Better
+ * Auth's documented adminUpdateUser, with the name only.
+ */
+function NameDialog({ user, onClose }: { user: ListedUser; onClose: () => void }) {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+  const formId = useId()
+  const fieldId = useId()
+  const hintId = useId()
+  const name = nameOf(user)
+  const [value, setValue] = useState(user.name)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const guardedClose = useDiscardGuard(value !== user.name, onClose)
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    const trimmed = value.trim()
+    if (trimmed.length === 0 || [...trimmed].length > AGENT_NAME_MAX)
+      return setError(t("users.nameRule", { max: AGENT_NAME_MAX }))
+    setBusy(true)
+    setError(null)
+    try {
+      await api.setAgentName(user.id, trimmed)
+      guardedClose.dismiss()
+      onClose()
+      showToast(t("users.setNameDone", { name, display: trimmed }), "success")
+      await queryClient.invalidateQueries({ queryKey: qk.users })
+    } catch (failure) {
+      setError(errorText(t, failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog
+      title={t("users.setNameTitle", { name })}
+      size="sm"
+      onClose={() => void guardedClose()}
+      foot={
+        <button type="submit" form={formId} className="ui-btn ui-btn-primary" disabled={busy}>
+          {busy ? t("users.setNameBusy") : t("users.setName")}
+        </button>
+      }
+    >
+      <form id={formId} className="ui-form-stack" onSubmit={(event) => void submit(event)} noValidate>
+        <div className="ui-field">
+          <label className="ui-label" htmlFor={fieldId}>
+            {t("users.displayName")}
+          </label>
+          <input
+            id={fieldId}
+            className="ui-input"
+            dir="auto"
+            autoComplete="off"
+            maxLength={AGENT_NAME_MAX * 2}
+            value={value}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={hintId}
+            onChange={(event) => setValue(event.target.value)}
+          />
+          <p id={hintId} className="ui-hint">
+            {t("users.nameHint", { max: AGENT_NAME_MAX })}
+          </p>
+        </div>
+        {error ? <FormError>{error}</FormError> : null}
       </form>
     </Dialog>
   )

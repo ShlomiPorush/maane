@@ -5,15 +5,18 @@ import type {
   GraphTestView,
   IntakeLog,
   Locale,
+  ReplyInput,
   Role,
   ScannerStatusView,
   ScannerTestView,
   SettingKey,
   SettingView,
+  SmtpTestView,
   TicketList,
   TicketView,
+  UploadView,
 } from "@maane/shared"
-import { query, request } from "./client.ts"
+import { query, request, sendFile } from "./client.ts"
 
 export type SetupStatus = {
   hasUser: boolean
@@ -58,7 +61,7 @@ export type SupportAddress = { id: string; kind: AddressKind; value: string; isD
 export type OrganizationMember = { userId: string; username: string; role: string; banned: boolean; createdAt: string }
 
 export type OrganizationDetail = {
-  organization: { id: string; name: string; createdAt: string }
+  organization: { id: string; name: string; signature: string; createdAt: string }
   addresses: SupportAddress[]
   members: OrganizationMember[]
 }
@@ -117,6 +120,9 @@ export const api = {
   /** Queues a Graph connection test the worker runs; graphTest reads where it is. */
   testGraph: () => request<{ id: string }>("POST", "/settings/graph/test"),
   graphTest: (id: string) => request<GraphTestView>("GET", `/settings/graph/test/${encodeURIComponent(id)}`),
+  /** Queues an SMTP connection test of one server the worker runs; smtpTest reads where it is. */
+  testSmtp: (provider: "smtp2go" | "failover") => request<{ id: string }>("POST", `/settings/smtp/${provider}/test`),
+  smtpTest: (id: string) => request<SmtpTestView>("GET", `/settings/smtp/test/${encodeURIComponent(id)}`),
   audit: (before: number | null) =>
     request<AuditPage>("GET", `/audit${query({ before: before ?? undefined, limit: AUDIT_PAGE_SIZE })}`),
   organizations: () => request<{ organizations: OrganizationSummary[] }>("GET", ORGANIZATIONS),
@@ -145,6 +151,17 @@ export const api = {
       "GET",
       `/intake${query({ mode: filters.mode, flagged: filters.flagged ? 1 : undefined, after })}`,
     ),
+  /** A reply or an internal note; the same submission ID again finds the same message. */
+  writeMessage: (number: number, input: ReplyInput) =>
+    request<{ id: string }>("POST", `/tickets/${number}/messages`, input),
+  resend: (messageId: string) => request<{ ok: true }>("POST", `/messages/${encodeURIComponent(messageId)}/resend`),
+  markSent: (messageId: string, address: string) =>
+    request<{ ok: true }>("POST", `/messages/${encodeURIComponent(messageId)}/mark-sent`, { address }),
+  upload: (file: File) => sendFile<UploadView>("/uploads", file),
+  uploadState: (id: string) => request<UploadView>("GET", `/uploads/${encodeURIComponent(id)}`),
+  setSignature: (id: string, signature: string) => request<{ ok: true }>("PUT", `${at(id)}/signature`, { signature }),
+  setAgentName: (userId: string, name: string) =>
+    request<{ ok: true }>("PUT", `/admin/users/${encodeURIComponent(userId)}/name`, { name }),
   checkAddress: (address: string) =>
     request<AddressCheck>("GET", `${ORGANIZATIONS}/address-check${query({ address })}`),
 }

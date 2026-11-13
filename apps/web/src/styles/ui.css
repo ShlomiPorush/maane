@@ -2560,3 +2560,203 @@ textarea.ui-input.ui-textarea {
     min-height: var(--ui-touch);
   }
 }
+
+/* ---------- Replies and notes (plan 3.1) ---------- */
+
+/* An internal note: never sent, so it reads apart from mail on a faint warning tint. */
+.ui-message[data-direction="note"] {
+  background: color-mix(in srgb, var(--ui-warn) 7%, var(--ui-panel));
+}
+
+/* Where a reply's sending is: its state, then each recipient with its own. */
+.ui-delivery {
+  display: grid;
+  gap: 8px;
+}
+.ui-delivery-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.ui-delivery-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ui-delivery-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ui-fs-sm);
+}
+.ui-delivery-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--ui-line);
+}
+.ui-delivery-kind {
+  min-width: 2.5em;
+  color: var(--ui-muted);
+  font-weight: 600;
+}
+
+/* The composer: the fields, the editor with its tools, the signature, files, and the actions at its end. */
+.ui-composer-body {
+  display: grid;
+  gap: 12px;
+  padding: 4px var(--ui-pad-x) 16px;
+}
+.ui-composer[data-kind="note"] {
+  background: color-mix(in srgb, var(--ui-warn) 7%, var(--ui-panel));
+}
+.ui-composer .ui-panel-head {
+  justify-content: space-between;
+}
+.ui-composer-note {
+  margin: 0;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+}
+.ui-composer-fields {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 12px;
+}
+.ui-composer-from {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+.ui-composer-from .ui-select {
+  width: auto;
+  max-width: 100%;
+}
+.ui-composer-sender {
+  font-weight: 650;
+}
+.ui-editor {
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+}
+.ui-editor:focus-within {
+  border-color: var(--ui-accent);
+}
+.ui-editor-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px;
+  border-bottom: 1px solid var(--ui-line);
+}
+.ui-editor-tool[aria-pressed="true"] {
+  background: var(--ui-fill);
+  color: var(--ui-ink);
+}
+/* TipTap's own stylesheet is off (the UI's policy allows no inline style element): ProseMirror's needs, here. */
+.ui-editor-text {
+  min-height: 160px;
+  max-height: 60dvh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  outline: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  font-variant-ligatures: none;
+  line-height: 1.55;
+}
+.ui-editor-text p {
+  margin: 0 0 0.6em;
+}
+.ui-editor-text p:last-child {
+  margin-bottom: 0;
+}
+.ui-editor-text ul,
+.ui-editor-text ol {
+  margin: 0 0 0.6em;
+  padding-inline-start: 1.4em;
+}
+.ui-editor-text blockquote {
+  margin: 0 0 0.6em;
+  padding-inline-start: 12px;
+  border-inline-start: 3px solid var(--ui-line);
+  color: var(--ui-muted);
+}
+.ui-editor-text a {
+  color: var(--ui-info);
+}
+.ui-composer-signature {
+  display: grid;
+  gap: 4px;
+  white-space: pre-wrap;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+}
+.ui-composer-files {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ui-composer-ticket-files {
+  font-size: var(--ui-fs-sm);
+}
+.ui-composer-ticket-files summary {
+  color: var(--ui-muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+.ui-composer-ticket-files ul {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.ui-composer-ticket-files label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.ui-composer-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 10px;
+}
+.ui-composer-acts .ui-btn-primary {
+  margin-inline-start: auto;
+}
+
+/* An organization's signature as the customer reads it. */
+.ui-signature {
+  margin: 0;
+  padding: 4px var(--ui-pad-x) 16px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 760px) {
+  .ui-composer-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ui-composer-fields .ui-input,
+  .ui-editor-text {
+    font-size: var(--ui-fs-field-phone);
+  }
+  .ui-composer-acts .ui-btn {
+    min-height: 44px;
+  }
+}

@@ -67,7 +67,8 @@ export type TicketStatus = (typeof TICKET_STATUSES)[number]
 
 /**
  * What processing did with a message (live) or would have done (listening):
- * - `copy`: a copy of an earlier message (Message-ID, From, Date, and content all equal); nothing else changes.
+ * - `copy`: a copy of an earlier message (Message-ID, From, Date, and content all equal), or of a reply Maane sent
+ *   (its own Message-ID from its own From address, reason `sent_by_maane`); nothing else changes.
  * - `automated`: automated mail; it never opens, joins, or reopens a ticket.
  * - `unreadable`: only Graph metadata was kept (see MESSAGE_CONTENTS).
  * - `no_address`: it needed a new ticket, but no support address matched and no default exists.
@@ -104,6 +105,7 @@ export type AutomatedSign = (typeof AUTOMATED_SIGNS)[number]
  */
 export const INTAKE_REASONS = [
   "copy",
+  "sent_by_maane",
   "process_failed",
   "unavailable",
   "unparsed",
