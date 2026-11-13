@@ -439,7 +439,13 @@ export class Replies {
   /** A reply of a ticket in the scope, locked, with its outbox row; a refusal otherwise. */
   async #reply(tx: Pick<Db, "select">, scope: OrganizationScope, messageId: string) {
     const [row] = await tx
-      .select({ id: message.id, organizationId: ticket.organizationId, number: ticket.number, state: outbox.state })
+      .select({
+        id: message.id,
+        ticketId: ticket.id,
+        organizationId: ticket.organizationId,
+        number: ticket.number,
+        state: outbox.state,
+      })
       .from(message)
       .innerJoin(ticket, eq(ticket.id, message.ticketId))
       .innerJoin(outbox, eq(outbox.messageId, message.id))
@@ -482,10 +488,17 @@ export class Replies {
     await this.db.transaction(async (tx) => {
       const row = await this.#reply(tx, scope, messageId)
       if (row.state !== "unknown") throw new Refusal("reply_not_unknown", 409)
-      await tx
+      const marked = await tx
         .update(outboxRecipient)
         .set({ state: "accepted", markedBy: user.id, updatedAt: new Date() })
         .where(and(eq(outboxRecipient.messageId, messageId), eq(outboxRecipient.state, "unknown")))
+        .returning({ address: outboxRecipient.address, name: outboxRecipient.name })
+      // Accepted by the agent's decision: they become participants, as a recipient a provider accepted does.
+      if (marked.length)
+        await tx
+          .insert(ticketParticipant)
+          .values(marked.map((entry) => ({ ticketId: row.ticketId, address: entry.address, name: entry.name })))
+          .onConflictDoNothing()
       await tx.update(outbox).set({ state: "accepted", updatedAt: new Date() }).where(eq(outbox.messageId, messageId))
       await writeAudit(tx, user.actor, {
         action: "message.mark_sent",

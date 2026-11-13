@@ -441,6 +441,10 @@ describe("what each provider's answer means", () => {
     expect((await result.admin.call("POST", `/api/v1/messages/${result.id}/mark-sent`)).json).toEqual({
       error: "reply_not_unknown",
     })
+    // Marked as sent, Ron (whom the agent added) is a participant, as one a provider accepted would be.
+    expect(await h.participantsOf((await h.tickets())[0]?.id ?? "")).toEqual(
+      expect.arrayContaining(["drop.dana@example.com", "ron@example.com"]),
+    )
     const actions = await h.database.db.select({ action: auditLog.action }).from(auditLog)
     expect(actions.map((row) => row.action)).toEqual(
       expect.arrayContaining(["message.reply", "message.resend", "message.mark_sent"]),

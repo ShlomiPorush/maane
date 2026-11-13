@@ -2752,7 +2752,8 @@ textarea.ui-input.ui-textarea {
   .ui-composer-fields {
     grid-template-columns: minmax(0, 1fr);
   }
-  .ui-composer-fields .ui-input {
+  .ui-composer-fields .ui-input,
+  .ui-editor-text {
     font-size: var(--ui-fs-field-phone);
   }
   .ui-composer-acts .ui-btn {

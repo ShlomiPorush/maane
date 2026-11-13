@@ -35,7 +35,9 @@ export const SMTP_TEST = "smtp-test"
  * an earlier run may have sent).
  */
 export const QUEUE_OPTIONS: Record<string, QueueOptions> = {
-  [SEND_REPLY]: { retryLimit: 3, retryDelay: 30, retryBackoff: true, expireInSeconds: 15 * 60 },
+  // Longer than the slowest run (two providers, each up to SMTP_TIMEOUTS' setup and send deadlines, about 23 minutes),
+  // so pg-boss never retries a run that still sends.
+  [SEND_REPLY]: { retryLimit: 3, retryDelay: 30, retryBackoff: true, expireInSeconds: 45 * 60 },
   [UPLOAD_SCAN]: { retryLimit: 3, retryDelay: 15, retryBackoff: true, expireInSeconds: 15 * 60 },
 }
 

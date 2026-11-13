@@ -92,6 +92,22 @@ describe("one attempt", () => {
     expect(starttls.received.at(-1)?.dropped).toBe(true)
   })
 
+  it("is unknown when the server took the data and never gave its final reply, by the socket's or the step's deadline", async () => {
+    for (const timeouts of [QUICK, { ...QUICK, socket: 20_000, send: 1500 }]) {
+      const before = starttls.received.length
+      const started = Date.now()
+      const result = await deliver(
+        configOf(starttls),
+        { from: "help@example.com", to: ["stall@example.com"] },
+        MIME,
+        timeouts,
+      )
+      expect(result).toMatchObject({ kind: "unknown", code: "ETIMEDOUT" })
+      expect(Date.now() - started).toBeLessThan(Math.min(timeouts.socket, timeouts.send) + 2000)
+      expect(starttls.received.length).toBe(before + 1)
+    }
+  })
+
   it("sends nothing when the login fails", async () => {
     const before = starttls.received.length
     const result = await send(configOf(starttls, { password: `${starttls.password}x` }), ["dana@example.com"])

@@ -13,6 +13,7 @@ import { trustCertificate } from "./graph.ts"
 // - `refuse...`: RCPT TO answers 550; `defer...`: RCPT TO answers 451.
 // - `drop...`: the message's data is read and kept, then the connection is cut before the final reply.
 // - `reject...`: the final reply after the data is 554; `tempfail...`: 451.
+// - `stall...`: the message's data is read and kept, and the final reply never comes; the connection stays open.
 // Any other recipient is accepted, and the final reply is `250 OK id=<queue id>`, as SMTP2GO answers.
 
 export interface ReceivedMessage {
@@ -108,6 +109,7 @@ export async function startStandInSmtp(options: StandInSmtpOptions = {}): Promis
         const dropped = locals.some((local) => local.startsWith("drop"))
         const from = session.envelope.mailFrom ? session.envelope.mailFrom.address.toLowerCase() : ""
         received.push({ from, to, raw: Buffer.concat(chunks), queueId, dropped })
+        if (locals.some((local) => local.startsWith("stall"))) return
         if (dropped) {
           // Stored, then the connection is cut before the final reply: the client cannot know.
           sockets.get(session.remotePort)?.destroy()
