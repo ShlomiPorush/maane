@@ -10,6 +10,7 @@ import { type Actor, writeAudit } from "../audit.ts"
 import type { VersionedKey } from "../config.ts"
 import type { Db } from "../db/client.ts"
 import { authAccount, authRateLimit, authSession, authTwoFactor, authUser, authVerification } from "../db/schema.ts"
+import { clientIp } from "../http/client.ts"
 import { errorFacts, log } from "../log.ts"
 import { clearMemberships } from "../organizations/service.ts"
 import type { SetupWindow } from "./setup-window.ts"
@@ -157,10 +158,8 @@ function actorOf(context: HookContext): Actor | null {
   return { userId: user.id, label: String(user.username ?? user.name ?? user.id) }
 }
 
-/** The client address Better Auth computed, for the audit row. */
-function ipOf(request: Request | undefined): string | null {
-  return request?.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() || null
-}
+/** The client address of the request behind a hook, for the audit row: the one rule of http/client.ts. */
+const ipOf = (request: Request | undefined): string | null => clientIp(request)
 
 /** A password within Better Auth's configured limits. */
 function validPassword(value: unknown): boolean {
@@ -435,6 +434,7 @@ export function createAuth(options: AuthOptions) {
               action: data.twoFactorEnabled ? "account.totp_enable" : "account.totp_disable",
               entityType: "user",
               entityId: actor.userId,
+              ipAddress: ipOf((context as HookContext)?.request),
             })
           },
         },

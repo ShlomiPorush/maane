@@ -12,7 +12,5 @@ export type ApiEnv = {
   }
 }
 
-/** The client address as the proxy reported it: the last X-Forwarded-For hop (Traefik replaces client headers). */
-export function clientIp(request: Request): string | null {
-  return request.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() || null
-}
+/** The client address of a request: the TCP peer, or X-Forwarded-For only behind the trusted proxies (client.ts). */
+export { clientIp } from "./client.ts"

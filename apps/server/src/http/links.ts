@@ -15,11 +15,11 @@ import { type Context, Hono } from "hono"
 import { createMiddleware } from "hono/factory"
 import { rateLimiter } from "hono-rate-limiter"
 import { storedFilePath } from "../files/paths.ts"
-import { clientAddress, type Trust } from "../links/client.ts"
 import type { Links } from "../links/service.ts"
 import { errorFacts, log } from "../log.ts"
 import { escapeHtml } from "../replies/layout.ts"
 import type { Settings } from "../settings/service.ts"
+import { clientIp } from "./client.ts"
 import { FILE_HEADERS, type SecurityHeaders, safeFileName } from "./tickets.ts"
 
 /** Requests per client address per window, over both routes together. */
@@ -31,7 +31,7 @@ const UNKNOWN_CLIENT = "unknown"
 
 type LinkEnv = { Bindings: Partial<HttpBindings>; Variables: { security?: SecurityHeaders; client: string | null } }
 
-export function linkRoutes(links: Links, settings: Settings, filesDir: string, trust: Trust): Hono<LinkEnv> {
+export function linkRoutes(links: Links, settings: Settings, filesDir: string): Hono<LinkEnv> {
   const routes = new Hono<LinkEnv>()
 
   /** A short plain page in the default language. */
@@ -50,7 +50,7 @@ export function linkRoutes(links: Links, settings: Settings, filesDir: string, t
   // Every answer of these routes, the redirect, a download, a refusal, and a rate limit included, is never stored. The
   // middleware is given per route: mounted at the root, a "*" middleware would reach every path of the app.
   const noStore = createMiddleware<LinkEnv>(async (c, next) => {
-    c.set("client", clientAddress(c.env?.incoming, trust))
+    c.set("client", clientIp(c.req.raw))
     await next()
     c.header("Cache-Control", "no-store")
   })
