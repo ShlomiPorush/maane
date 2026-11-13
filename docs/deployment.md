@@ -269,6 +269,27 @@ A passing Test Graph shows that Maane can read the intake mailbox; it does not s
 
    Each case passes when the address is the one the rule meant (or the default address where the original recipient is not kept), a message to two support addresses that arrives twice shows one record and one `copy`, and the bounce and the automatic reply show `automated`. Compare the records with what Zendesk did with the same messages.
 
+### Connect SMTP2GO's delivery status
+
+Maane learns what happened to a reply after SMTP2GO accepted it (delivered, bounced, rejected, or reported as spam) in two ways: SMTP2GO calls Maane's webhook on each event, and every ten minutes the worker asks SMTP2GO's activity search about recipients that still have no final status. Both only change what the ticket view shows; neither sends anything. You set them up at SMTP2GO; Maane changes nothing there.
+
+1. **Turn off SMTP2GO's own tracking.** Maane tracks links itself (in a later version) and does not track opens. At SMTP2GO, open the SMTP user Maane sends with (Sending, SMTP Users, the user, Tracking & Status in SMTP2GO's current menus) and turn off Open Tracking and Click Tracking. SMTP2GO's menu names change from time to time; the settings are per SMTP user.
+2. **Make the webhook's address and token.** In Maane, open Settings, SMTP2GO, and press Make address and token under Delivery webhook. Maane shows the webhook URL (`https://maane.example.com/hooks/smtp2go/<secret part>`) and a Bearer token once. Copy both now; Maane keeps them encrypted and never shows them again. Make new ones whenever either may have leaked: the old ones stop working at once.
+3. **Add the webhook at SMTP2GO** (Settings, Webhooks, Add webhook):
+   - URL: the webhook URL from step 2.
+   - Output format: JSON (form also works).
+   - Authorization header: the type Bearer, and the token from step 2 as its value.
+   - Events: Delivered, Bounce, Reject, and Spam. Maane ignores the others.
+   - Usernames: the SMTP user Maane sends with.
+
+   A request without the right address answers as an address that does not exist; the right address without the right token is refused. SMTP2GO retries a refused or failed call for up to 48 hours.
+4. **Give Maane an API key for the activity search.** At SMTP2GO (Sending, API Keys), add a key for Maane and limit its permissions to the activity search (`/activity/search`) where SMTP2GO offers that, and paste it into Settings, SMTP2GO, API key (or `MAANE_SMTP2GO_API_KEY` in `app.env`, which locks the field). It is stored encrypted and never shown again. Without a key the activity search does not run, and only the webhook reports delivery status.
+5. **Keep the secret address out of logs.** Maane never logs the webhook's path, its header, or its body. Traefik's access log, when it is on, records each request's path, the webhook's secret part included: keep the access log off for Maane's router, or make sure it drops the request path. If a log ever recorded it, make new webhook secrets (step 2) and update SMTP2GO (step 3).
+
+Replies sent through the backup server have no webhook: their bounces come back to the bounce address, which reaches the intake mailbox, and Maane reads each delivery report there. Only the recipients a report names as `failed` count as bounced; a report that does not say which recipient failed shows on the reply.
+
+Check it once with a real send (your test, not part of Maane's verification): reply to a test ticket at an address of yours, and within a minute the reply's recipient shows Delivered. A reply to an address that does not exist shows Bounced, and the ticket shows Delivery failed until a later reply to that address is accepted.
+
 ## 5. Back up
 
 Your backup must hold:
@@ -430,6 +451,8 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
 To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported.
 
 ## What was verified
+
+Phase 3.3 (2026-11-13): delivery status ran only against stand-ins, in the integration tests: the webhook through the server app with secrets generated for the test, the activity search against a stand-in HTTPS API that accepts only a key generated for the run, and failover bounces through the stand-in Graph. Nothing reached SMTP2GO. The steps of [Connect SMTP2GO's delivery status](#connect-smtp2gos-delivery-status) have not run: SMTP2GO's menus, the exact Authorization value it sends for the Bearer type, the format of its `time` field, and that its webhook's `email_id` is the queue ID in its final SMTP reply are unchecked until your first real send.
 
 Phase 2.3 (2026-11-12): Graph intake ran only against a stand-in Entra and Graph, in the integration tests and in the stack stage of `scripts/verify.sh` (a message became a ticket in live mode and an intake record in listening mode, scanned by the real ClamAV). Nothing reached Microsoft. The steps of [Connect Microsoft Graph](#connect-microsoft-graph) and the checks against the real tenant have not run.
 
