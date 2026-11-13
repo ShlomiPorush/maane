@@ -1,9 +1,11 @@
 // Where a reply's sending is (plan 3.1): its state, each recipient's (accepted, refused, unknown, or not sent yet) and
 // the server that answered, and, when its fate is unknown or nothing went out, what the agent can do: send it again
 // to the recipients not accepted, or mark one recipient whose fate is unknown as sent (each on its own: one of them
-// may have been refused before the connection dropped). Both ask first: a second copy cannot be called back.
+// may have been refused before the connection dropped). Both ask first: a second copy cannot be called back. Once a
+// provider or a delivery report said what the recipient's server did (plan 3.3), that status shows with its time and the
+// provider's reason, and a report that names no recipient shows above the list.
 
-import type { DeliveryView, OutboxState, RecipientState } from "@maane/shared"
+import type { DeliveryStatus, DeliveryView, OutboxState, RecipientState } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { api, qk } from "../../api/endpoints.ts"
@@ -11,6 +13,7 @@ import { errorText } from "../../api/errors.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { confirmDialog } from "../../ui/confirm.tsx"
 import { Banner } from "../../ui/states.tsx"
+import { Time } from "../../ui/Time.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag, type Tone } from "../../ui/tags.tsx"
 import { AddressLine } from "./parts.tsx"
@@ -27,6 +30,14 @@ const RECIPIENT_TONE: Record<RecipientState, Tone> = {
   accepted: "ok",
   refused: "fail",
   unknown: "warn",
+}
+/** What the recipient's server did (plan 3.3): delivered, or a bounce, a rejection, or a spam report. */
+const STATUS_TONE: Record<DeliveryStatus, Tone> = {
+  delivered: "ok",
+  soft_bounce: "warn",
+  hard_bounce: "fail",
+  rejected: "fail",
+  spam: "fail",
 }
 
 export function Delivery({
@@ -96,6 +107,7 @@ export function Delivery({
           action={actions}
         />
       ) : null}
+      {delivery.reportWithoutRecipient ? <Banner tone="warn" title={t("delivery.reportWithoutRecipient")} /> : null}
       <ul className="ui-delivery-list">
         {delivery.recipients.map((recipient) => (
           <li key={recipient.address} data-recipient={recipient.address} data-state={recipient.state}>
@@ -106,6 +118,17 @@ export function Delivery({
               <span className="ui-muted">{t(`delivery.provider.${recipient.provider}`)}</span>
             ) : null}
             {recipient.marked ? <span className="ui-muted">{t("delivery.marked")}</span> : null}
+            {recipient.delivery ? (
+              <span className="ui-delivery-status" data-delivery={recipient.delivery}>
+                <Tag tone={STATUS_TONE[recipient.delivery]}>{t(`delivery.status.${recipient.delivery}`)}</Tag>
+                <Time value={recipient.deliveryAt} />
+                {recipient.deliveryDetail ? (
+                  <bdi className="ui-delivery-detail ui-mono" dir="ltr">
+                    {recipient.deliveryDetail}
+                  </bdi>
+                ) : null}
+              </span>
+            ) : null}
             {recipient.state === "unknown" && delivery.state === "unknown" ? (
               <button
                 type="button"

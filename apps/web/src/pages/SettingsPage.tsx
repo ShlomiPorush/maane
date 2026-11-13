@@ -39,6 +39,7 @@ import {
   type SettingView,
   SMTP_SECURITIES,
   type SmtpTestResult,
+  type WebhookSecretsView,
 } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react"
@@ -49,6 +50,8 @@ import { useI18n } from "../i18n/i18n.tsx"
 import { PageHead } from "../shell/chrome.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { nativeName } from "../shell/ShellTools.tsx"
+import { Copyable } from "../ui/Copyable.tsx"
+import { confirmDialog } from "../ui/confirm.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { SaveBar } from "../ui/SaveBar.tsx"
 import { ErrorState, Loading, StaleNote } from "../ui/states.tsx"
@@ -79,6 +82,8 @@ export const SETTING_ROWS: readonly SettingKey[] = [
   "smtp2go.user",
   "smtp2go.password",
   "smtp2go.apiKey",
+  "smtp2go.webhookPath",
+  "smtp2go.webhookToken",
   "failover.host",
   "failover.port",
   "failover.security",
@@ -630,6 +635,10 @@ function Settings() {
           <SmtpRow provider="smtp2go" fieldsChanged={changed.some((key) => SMTP2GO_KEYS.includes(key))} />
           {SMTP2GO_KEYS.map(sendingRow)}
           {sendingRow("smtp2go.apiKey")}
+          <WebhookRow
+            set={Boolean(views.get("smtp2go.webhookPath")?.set && views.get("smtp2go.webhookToken")?.set)}
+            onMade={() => void queryClient.invalidateQueries({ queryKey: qk.settings })}
+          />
         </Group>
         <Group
           id="settings-failover"
@@ -756,6 +765,89 @@ function GraphRow({ fieldsChanged }: { fieldsChanged: boolean }) {
       </button>
       {fieldsChanged ? <span className="ui-hint">{t("settings.graph.test.saveFirst")}</span> : null}
     </Row>
+  )
+}
+
+/**
+ * SMTP2GO's delivery webhook (plan 3.3): its secret address and Authorization token are made by the server from a
+ * cryptographically secure generator, never typed. The page says only whether they exist; making them shows both
+ * this once, to copy into SMTP2GO, and making new ones (after asking) replaces the old ones at once.
+ */
+function WebhookRow({ set, onMade }: { set: boolean; onMade: () => void }) {
+  const { t } = useI18n()
+  const [busy, setBusy] = useState(false)
+  const [made, setMade] = useState<WebhookSecretsView | null>(null)
+
+  const make = async () => {
+    if (set || made) {
+      const yes = await confirmDialog({
+        title: t("settings.sending.webhook.replaceTitle"),
+        message: t("settings.sending.webhook.replaceMessage"),
+        confirmText: t("settings.sending.webhook.replace"),
+      })
+      if (!yes) return
+    }
+    setBusy(true)
+    try {
+      const secrets = await api.generateWebhook()
+      setMade(secrets)
+      showToast(t("settings.sending.webhook.done"), "success")
+      onMade()
+    } catch (failure) {
+      showToast(errorText(t, failure), "error")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <Row
+        label={t("settings.sending.smtp2go.webhookPath.label")}
+        hint={t("settings.sending.smtp2go.webhookPath.hint")}
+      >
+        <div className="ui-scanner" aria-live="polite" data-webhook={set || made ? "set" : "not-set"}>
+          <span className="ui-scanner-line">
+            <Tag tone={set || made ? "ok" : "neutral"}>
+              {set || made ? t("settings.sending.webhook.set") : t("settings.sending.webhook.notSet")}
+            </Tag>
+          </span>
+          <span className="ui-scanner-note">
+            {made
+              ? t("settings.sending.webhook.shownOnce")
+              : set
+                ? t("settings.sending.webhook.setNote")
+                : t("settings.sending.webhook.notSetNote")}
+          </span>
+          {made ? (
+            <span className="ui-secret" data-webhook-url="">
+              <span className="ui-label">{t("settings.sending.webhook.url")}</span>{" "}
+              <Copyable value={made.url} dir="ltr" />
+            </span>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className="ui-btn ui-btn-sm"
+          disabled={busy}
+          aria-busy={busy || undefined}
+          onClick={() => void make()}
+        >
+          {set || made ? t("settings.sending.webhook.replace") : t("settings.sending.webhook.generate")}
+        </button>
+      </Row>
+      {made ? (
+        <Row
+          label={t("settings.sending.smtp2go.webhookToken.label")}
+          hint={t("settings.sending.smtp2go.webhookToken.hint")}
+        >
+          <span className="ui-secret" data-webhook-token="">
+            <span className="ui-label">{t("settings.sending.webhook.token")}</span>{" "}
+            <Copyable value={made.token} dir="ltr" />
+          </span>
+        </Row>
+      ) : null}
+    </>
   )
 }
 

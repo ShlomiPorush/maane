@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url"
 import {
   ADDRESS_KINDS,
   AUTOMATED_SIGNS,
+  DELIVERY_STATUSES,
   GRAPH_PROBLEMS,
   INTAKE_MODES,
   INTAKE_OUTCOMES,
@@ -325,6 +326,7 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "delivery.recipient.": RECIPIENT_STATES,
   "delivery.provider.": PROVIDERS,
   "delivery.problem.": SEND_PROBLEMS,
+  "delivery.status.": DELIVERY_STATUSES,
   "settings.sending.": SETTING_ROWS.filter(
     (key) => key.startsWith("smtp2go.") || key.startsWith("failover.") || key === "mail.bounceAddress",
   ).flatMap((key) => [`${key}.label`, `${key}.hint`]),
