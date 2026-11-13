@@ -8,14 +8,14 @@
 
 import { randomBytes } from "node:crypto"
 import {
-  type ClickView,
+  CLICKS_SHOWN,
   DEVICE_TYPES,
   type DeviceType,
   STORED_STATUSES,
   TRACKED_URL_MAX,
   type TrackedLinkView,
 } from "@maane/shared"
-import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm"
+import { and, asc, count, desc, eq, inArray, isNotNull, lte, sql } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
 import { linkClick, message, messagePart, storedFile, ticket, trackedLink } from "../db/schema.ts"
 import type { Settings } from "../settings/service.ts"
@@ -131,7 +131,9 @@ const isDevice = (value: string | null): value is DeviceType =>
 
 /**
  * The clicked links and downloaded files of replies, for the ticket view: per reply, each link with at least one click,
- * its clicks newest first, each with its scanner reasons against `since` (the delivery or sending time of the reply).
+ * how many clicks it has, and its newest CLICKS_SHOWN clicks, newest first, each with its scanner reasons against
+ * `since` (the delivery or acceptance time of the reply). Every click stays recorded; only the read is bounded, so a
+ * scanner that keeps clicking cannot make the view grow without end.
  */
 export async function linkViews(
   db: Pick<Db, "select">,
@@ -139,8 +141,8 @@ export async function linkViews(
 ): Promise<Map<string, TrackedLinkView[]>> {
   const result = new Map<string, TrackedLinkView[]>()
   if (replies.length === 0) return result
-  const rows = await db
-    .select({ link: trackedLink, fileName: messagePart.fileName, click: linkClick })
+  const links = await db
+    .select({ link: trackedLink, fileName: messagePart.fileName, total: count(linkClick.id) })
     .from(trackedLink)
     .innerJoin(linkClick, eq(linkClick.linkId, trackedLink.id))
     .leftJoin(messagePart, eq(messagePart.id, trackedLink.partId))
@@ -150,6 +152,7 @@ export async function linkViews(
         replies.map((reply) => reply.id),
       ),
     )
+    .groupBy(trackedLink.id, messagePart.fileName)
     // Links first, then files; each in the order the reply wrote them, then by target (a reply writes all at once).
     .orderBy(
       desc(trackedLink.kind),
@@ -157,25 +160,48 @@ export async function linkViews(
       asc(trackedLink.url),
       asc(messagePart.fileName),
       asc(trackedLink.id),
-      desc(linkClick.at),
-      desc(linkClick.id),
     )
+  if (links.length === 0) return result
+  const ranked = db
+    .select({
+      id: linkClick.id,
+      rank: sql<number>`row_number() over (partition by ${linkClick.linkId} order by ${linkClick.at} desc, ${linkClick.id} desc)`.as(
+        "rank",
+      ),
+    })
+    .from(linkClick)
+    .where(
+      inArray(
+        linkClick.linkId,
+        links.map(({ link }) => link.id),
+      ),
+    )
+    .as("ranked")
+  const clicks = await db
+    .select({ click: linkClick })
+    .from(linkClick)
+    .innerJoin(ranked, eq(ranked.id, linkClick.id))
+    .where(lte(ranked.rank, CLICKS_SHOWN))
+    .orderBy(desc(linkClick.at), desc(linkClick.id))
   const since = new Map(replies.map((reply) => [reply.id, reply.since]))
   const byLink = new Map<string, TrackedLinkView>()
-  for (const { link, fileName, click } of rows) {
-    let view = byLink.get(link.id)
-    if (!view) {
-      view = {
-        id: link.id,
-        kind: link.kind === "file" ? "file" : "url",
-        target: link.url ?? fileName ?? "file",
-        clicks: [],
-      }
-      byLink.set(link.id, view)
-      result.set(link.messageId, [...(result.get(link.messageId) ?? []), view])
+  for (const { link, fileName, total } of links) {
+    const view: TrackedLinkView = {
+      id: link.id,
+      kind: link.kind === "file" ? "file" : "url",
+      target: link.url ?? fileName ?? "file",
+      total,
+      clicks: [],
     }
+    byLink.set(link.id, view)
+    result.set(link.messageId, [...(result.get(link.messageId) ?? []), view])
+  }
+  const replyOf = new Map(links.map(({ link }) => [link.id, link.messageId]))
+  for (const { click } of clicks) {
+    const view = byLink.get(click.linkId)
+    if (!view) continue
     const device = isDevice(click.device) ? click.device : null
-    const entry: ClickView = {
+    view.clicks.push({
       id: click.id,
       at: click.at.toISOString(),
       ip: click.ip,
@@ -188,9 +214,11 @@ export async function linkViews(
       os: click.os,
       browser: click.browser,
       userAgent: click.userAgent,
-      scanner: scannerReasons({ at: click.at, asn: click.asn, device }, since.get(link.messageId) ?? null),
-    }
-    view.clicks.push(entry)
+      scanner: scannerReasons(
+        { at: click.at, asn: click.asn, device },
+        since.get(replyOf.get(click.linkId) ?? "") ?? null,
+      ),
+    })
   }
   return result
 }

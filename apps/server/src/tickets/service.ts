@@ -400,11 +400,18 @@ export class Tickets {
       .orderBy(asc(other.number))
 
     // The links each reply carried that were clicked, and its history files that were downloaded (plan 3.4). A click is
-    // early against the time a provider accepted the reply (no delivery time is known yet).
-    const sentAt = (id: string) =>
-      recipients
-        .filter((r) => r.messageId === id && r.state === "accepted" && r.markedBy === null)
-        .reduce<Date | null>((first, r) => (first === null || r.updatedAt < first ? r.updatedAt : first), null)
+    // early against the first delivery of the reply (3.3's `delivery_at` of a `delivered` recipient), else against the
+    // first time a provider accepted it (`accepted_at`; an agent's Mark as sent does not count). Never `updated_at`,
+    // which delivery events write too.
+    const earliest = (dates: (Date | null)[]) =>
+      dates.reduce<Date | null>((first, date) => (date && (first === null || date < first) ? date : first), null)
+    const sentAt = (id: string) => {
+      const own = recipients.filter((r) => r.messageId === id)
+      return (
+        earliest(own.filter((r) => r.delivery === "delivered").map((r) => r.deliveryAt)) ??
+        earliest(own.filter((r) => r.state === "accepted" && r.markedBy === null).map((r) => r.acceptedAt))
+      )
+    }
     const clicked = await linkViews(
       this.db,
       replyIds.map((id) => ({ id, since: sentAt(id) })),

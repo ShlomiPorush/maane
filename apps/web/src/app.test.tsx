@@ -1824,6 +1824,8 @@ describe("tickets", () => {
       {
         id: "link-1",
         kind: "url",
+        // A scanner kept clicking: the server sent only the newest clicks, with the total.
+        total: 120,
         target: "https://www.example.com/guide",
         clicks: [
           click({
@@ -1843,10 +1845,11 @@ describe("tickets", () => {
         id: "link-2",
         kind: "file",
         target: "invoice.pdf",
+        total: 1,
         clicks: [click({ id: 3, device: "bot", scanner: ["agent"] })],
       },
       // Two history files of one name (image001.png is common in mail): each its own row.
-      { id: "link-3", kind: "file", target: "invoice.pdf", clicks: [click({ id: 4 })] },
+      { id: "link-3", kind: "file", target: "invoice.pdf", total: 1, clicks: [click({ id: 4 })] },
     ]
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
@@ -1865,7 +1868,9 @@ describe("tickets", () => {
     expect(guide?.getAttribute("data-kind")).toBe("url")
     expect(guide?.querySelector(".ui-clicks-target")?.getAttribute("dir")).toBe("ltr")
     expect(guide?.textContent).toContain("https://www.example.com/guide")
-    expect(guide?.textContent).toContain(translateCount("he", "links.count", 2))
+    expect(guide?.textContent).toContain(translateCount("he", "links.count", 120))
+    expect(guide?.querySelector(".ui-clicks-shown")?.textContent).toBe(he("links.shown", { shown: "2", total: "120" }))
+    expect(file?.querySelector(".ui-clicks-shown")).toBeNull()
     const rows = Array.from(guide?.querySelectorAll<HTMLElement>(".ui-clicks-list > li") ?? [])
     // The newest first, as the server orders them: a scanner's click with no country, then the customer's.
     expect(rows[0]?.getAttribute("data-scanner")).toBe("yes")

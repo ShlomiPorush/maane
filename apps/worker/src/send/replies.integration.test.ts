@@ -403,9 +403,16 @@ describe("a reply, end to end", () => {
         id: expect.any(String),
         kind: "url",
         target: "https://www.example.com/guide",
+        total: 1,
         clicks: [expect.objectContaining({ ip: null })],
       },
-      { id: expect.any(String), kind: "file", target: "invoice.pdf", clicks: [expect.objectContaining({ ip: null })] },
+      {
+        id: expect.any(String),
+        kind: "file",
+        target: "invoice.pdf",
+        total: 1,
+        clicks: [expect.objectContaining({ ip: null })],
+      },
     ])
 
     // With a link domain and tracking off: the agent's link as written, the history file's link on that domain.

@@ -1152,6 +1152,7 @@
       "two": "{count} times",
       "other": "{count} times"
     },
+    "shown": "Showing the newest {shown} of {total}.",
     "noIp": "No address",
     "country": "Country {code}",
     "unknownPlace": "Location unknown",

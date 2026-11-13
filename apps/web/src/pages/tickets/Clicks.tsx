@@ -2,10 +2,12 @@
 // was downloaded, with how many times and when; then each click, newest first: the country's flag first in reading
 // order (flag-icons, served from Maane's own origin), the address isolated left to right, the time, the device, and a
 // "possibly a scanner" mark that states a doubt, not a verdict. The city, region, and ISP are the address's tooltip,
-// and also written under it, so a phone, which shows no tooltip, reads them too (v3 MO-4).
+// and also written under it, so a phone, which shows no tooltip, reads them too (v3 MO-4). The server sends at most the
+// newest 50 clicks of a link with its total, and the list says when it shows only those.
 
 import "flag-icons/css/flag-icons.min.css"
 import type { ClickView, TrackedLinkView } from "@maane/shared"
+import { formatNumber } from "../../format/number.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { Time } from "../../ui/Time.tsx"
 import { Tag } from "../../ui/tags.tsx"
@@ -77,9 +79,14 @@ export function Clicks({ links }: { links: TrackedLinkView[] }) {
               ) : (
                 <bdi className="ui-clicks-target">{link.target}</bdi>
               )}
-              <span className="ui-muted">{tc("links.count", link.clicks.length)}</span>
+              <span className="ui-muted">{tc("links.count", link.total)}</span>
               <Time value={link.clicks[0]?.at} mode="full" />
             </div>
+            {link.total > link.clicks.length ? (
+              <p className="ui-muted ui-clicks-shown">
+                {t("links.shown", { shown: formatNumber(link.clicks.length), total: formatNumber(link.total) })}
+              </p>
+            ) : null}
             <ul className="ui-clicks-list">
               {link.clicks.map((click) => (
                 <Click key={click.id} click={click} />

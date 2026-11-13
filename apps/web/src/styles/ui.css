@@ -2653,6 +2653,10 @@ textarea.ui-input.ui-textarea {
   overflow-wrap: anywhere;
   font-weight: 600;
 }
+.ui-clicks-shown {
+  margin: 0;
+  font-size: var(--ui-fs-sm);
+}
 .ui-clicks-list li {
   display: flex;
   flex-wrap: wrap;

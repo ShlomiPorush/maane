@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { serve } from "@hono/node-server"
-import { CLICK_BOUNDS, MESSAGES, REFERENCE_ALPHABET, type TicketView } from "@maane/shared"
+import { CLICK_BOUNDS, CLICKS_SHOWN, MESSAGES, REFERENCE_ALPHABET, type TicketView } from "@maane/shared"
 import { parse as parseDisposition } from "content-disposition"
 import { eq } from "drizzle-orm"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -118,8 +118,17 @@ async function customerMessage() {
   return { ticketId: t?.id ?? "", number: t?.number ?? 0, messageId: m?.id ?? "" }
 }
 
-/** A message an agent wrote (`out` or `note`), with an outbox row whose recipient was accepted at `acceptedAt`. */
-async function agentMessage(ticketId: string, userId: string, direction: "out" | "note", acceptedAt = new Date()) {
+/**
+ * A message an agent wrote (`out` or `note`); a reply with an outbox row whose recipient a provider accepted at
+ * `acceptedAt` and, with `deliveredAt`, SMTP2GO reported delivered then (plan 3.3). The row's `updated_at` is always
+ * now, as a delivery event leaves it: the scanner mark must not read it.
+ */
+async function agentMessage(
+  ticketId: string,
+  userId: string,
+  direction: "out" | "note",
+  { acceptedAt = new Date(), deliveredAt = null }: { acceptedAt?: Date; deliveredAt?: Date | null } = {},
+) {
   const [m] = await db()
     .insert(message)
     .values({
@@ -144,14 +153,18 @@ async function agentMessage(ticketId: string, userId: string, direction: "out" |
         fromAddress: "help@example.com",
         state: "accepted",
       })
-    await db().insert(outboxRecipient).values({
-      messageId: id,
-      address: "dana@example.com",
-      kind: "to",
-      position: 0,
-      state: "accepted",
-      updatedAt: acceptedAt,
-    })
+    await db()
+      .insert(outboxRecipient)
+      .values({
+        messageId: id,
+        address: "dana@example.com",
+        kind: "to",
+        position: 0,
+        state: "accepted",
+        acceptedAt,
+        ...(deliveredAt ? { delivery: "delivered", deliveryAt: deliveredAt, deliverySource: "webhook" } : {}),
+        updatedAt: new Date(),
+      })
   }
   return id
 }
@@ -452,8 +465,8 @@ describe("the ticket view", () => {
     await app.close()
     await start({ trustedProxies: ["127.0.0.1"], geoipDir: GEOIP })
     const { b, number, messageId, userId, ticketId } = await reply()
-    // A reply a provider accepted ten minutes ago.
-    const sent = await agentMessage(ticketId, userId, "out", new Date(Date.now() - 600_000))
+    // A reply a provider accepted ten minutes ago, its row written again just now by a delivery event.
+    const sent = await agentMessage(ticketId, userId, "out", { acceptedAt: new Date(Date.now() - 600_000) })
     const guide = await plant(sent, { url: "https://www.example.com/guide" })
     const file = await plant(sent, { partId: await filePart(messageId) })
     await plant(sent, { url: "https://www.example.com/never-clicked" })
@@ -470,9 +483,16 @@ describe("the ticket view", () => {
     )
     await open(`/f/${file.code}`, "2001:db8::5")
     // A click right after sending.
-    const early = await agentMessage(ticketId, userId, "out", new Date())
+    const early = await agentMessage(ticketId, userId, "out", { acceptedAt: new Date() })
     const fresh = await plant(early, { url: "https://www.example.com/fresh" })
     await open(`/l/${fresh.code}`, "192.0.2.11")
+    // Accepted long ago but delivered only now (a queue at the provider): the delivery time counts.
+    const late = await agentMessage(ticketId, userId, "out", {
+      acceptedAt: new Date(Date.now() - 3_600_000),
+      deliveredAt: new Date(),
+    })
+    const delivered = await plant(late, { url: "https://www.example.com/late" })
+    await open(`/l/${delivered.code}`, "192.0.2.12")
 
     const answer = await b.call("GET", `/api/v1/tickets/${number}`)
     expect(answer.status).toBe(200)
@@ -483,6 +503,7 @@ describe("the ticket view", () => {
         id: guide.id,
         kind: "url",
         target: "https://www.example.com/guide",
+        total: 2,
         clicks: [
           expect.objectContaining({ ip: "192.0.2.10", country: "il", device: "bot", scanner: ["agent"] }),
           expect.objectContaining({
@@ -499,6 +520,7 @@ describe("the ticket view", () => {
         id: file.id,
         kind: "file",
         target: "invoice\r\n2026.pdf",
+        total: 1,
         clicks: [expect.objectContaining({ ip: "2001:db8::5", country: "de", scanner: [] })],
       },
     ])
@@ -507,10 +529,40 @@ describe("the ticket view", () => {
         id: fresh.id,
         kind: "url",
         target: "https://www.example.com/fresh",
+        total: 1,
         clicks: [expect.objectContaining({ scanner: ["early"] })],
       },
     ])
+    expect(view.messages.find((m) => m.id === late)?.links?.[0]?.clicks).toEqual([
+      expect.objectContaining({ ip: "192.0.2.12", scanner: ["early"] }),
+    ])
     // Incoming messages carry none.
     expect(view.messages.find((m) => m.id === messageId)?.links).toEqual([])
+  })
+})
+
+describe("a link a scanner keeps clicking", () => {
+  it("keeps every click, and the ticket view shows the newest CLICKS_SHOWN with the total", async () => {
+    const { b, number, replyId } = await reply()
+    const link = await plant(replyId, { url: "https://www.example.com/" })
+    const start = Date.now() - 3_600_000
+    const total = CLICKS_SHOWN + 25
+    await db()
+      .insert(linkClick)
+      .values(
+        Array.from({ length: total }, (_, i) => ({
+          linkId: link.id,
+          at: new Date(start + i * 1000),
+          ip: `192.0.2.${i}`,
+        })),
+      )
+    expect(await clicks(link.id)).toHaveLength(total)
+    const view = (await b.call("GET", `/api/v1/tickets/${number}`)).json as TicketView
+    const [shown] = view.messages.find((m) => m.id === replyId)?.links ?? []
+    expect(shown?.total).toBe(total)
+    expect(shown?.clicks).toHaveLength(CLICKS_SHOWN)
+    // The newest first: the last one recorded, down to the CLICKS_SHOWN-th newest.
+    expect(shown?.clicks[0]?.ip).toBe(`192.0.2.${total - 1}`)
+    expect(shown?.clicks.at(-1)?.ip).toBe(`192.0.2.${total - CLICKS_SHOWN}`)
   })
 })

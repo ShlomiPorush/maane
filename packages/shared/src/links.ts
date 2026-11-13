@@ -46,6 +46,9 @@ export type DeviceType = (typeof DEVICE_TYPES)[number]
 export const SCANNER_REASONS = ["early", "agent", "network"] as const
 export type ScannerReason = (typeof SCANNER_REASONS)[number]
 
+/** The clicks the ticket view shows per link, newest first; every click stays recorded. */
+export const CLICKS_SHOWN = 50
+
 /** One click on a link, or one download of a file. */
 export interface ClickView {
   id: number
@@ -71,5 +74,7 @@ export interface TrackedLinkView {
   kind: "url" | "file"
   /** The original URL, or the file's name. */
   target: string
+  /** Every click or download recorded; `clicks` holds only the newest CLICKS_SHOWN of them. */
+  total: number
   clicks: ClickView[]
 }

@@ -86,6 +86,7 @@ export {
 } from "./intake.ts"
 export {
   CLICK_BOUNDS,
+  CLICKS_SHOWN,
   type ClickView,
   DEVICE_TYPES,
   type DeviceType,

@@ -1152,6 +1152,7 @@
       "two": "פעמיים",
       "other": "{count} פעמים"
     },
+    "shown": "מוצגות {shown} האחרונות מתוך {total}.",
     "noIp": "אין כתובת",
     "country": "מדינה {code}",
     "unknownPlace": "מיקום לא ידוע",
