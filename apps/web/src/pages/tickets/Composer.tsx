@@ -306,9 +306,10 @@ export function Composer({ view }: { view: TicketView }) {
             <ul>
               {ticketFiles.map((part) => (
                 <li key={part.id}>
-                  <label className="ui-check">
+                  <label className="ui-check-label">
                     <input
                       type="checkbox"
+                      className="ui-check"
                       checked={files.some((entry) => entry.key === part.id)}
                       onChange={() => togglePart(part)}
                     />

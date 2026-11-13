@@ -200,28 +200,30 @@ function MessageCard({
         </span>
         <Time value={message.sentAt ?? message.receivedAt} mode="full" />
       </header>
-      <dl className="ui-message-to" hidden={message.delivery !== null}>
-        {message.to.length > 0 ? (
-          <div>
-            <dt>{t("ticket.to")}</dt>
-            <dd>
-              {message.to.map((address) => (
-                <AddressLine key={address.address} value={address} />
-              ))}
-            </dd>
-          </div>
-        ) : null}
-        {message.cc.length > 0 ? (
-          <div>
-            <dt>{t("ticket.cc")}</dt>
-            <dd>
-              {message.cc.map((address) => (
-                <AddressLine key={address.address} value={address} />
-              ))}
-            </dd>
-          </div>
-        ) : null}
-      </dl>
+      {message.delivery ? null : (
+        <dl className="ui-message-to">
+          {message.to.length > 0 ? (
+            <div>
+              <dt>{t("ticket.to")}</dt>
+              <dd>
+                {message.to.map((address) => (
+                  <AddressLine key={address.address} value={address} />
+                ))}
+              </dd>
+            </div>
+          ) : null}
+          {message.cc.length > 0 ? (
+            <div>
+              <dt>{t("ticket.cc")}</dt>
+              <dd>
+                {message.cc.map((address) => (
+                  <AddressLine key={address.address} value={address} />
+                ))}
+              </dd>
+            </div>
+          ) : null}
+        </dl>
+      )}
       {message.content !== "parsed" ? <Banner tone="warn" title={t(`ticket.content.${message.content}`)} /> : null}
       {message.fields.map((notice) => (
         <div className="ui-message-notice" key={notice.field} data-field={notice.field}>

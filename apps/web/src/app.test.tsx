@@ -1632,7 +1632,7 @@ describe("tickets", () => {
       he("delivery.provider.failover"),
     )
     // The recipients show once, in the sending list, not again in the header.
-    expect(card.querySelector<HTMLElement>(".ui-message-to")?.hidden).toBe(true)
+    expect(card.querySelector(".ui-message-to")).toBeNull()
     await act(async () => button(he("delivery.resend"))?.click())
     await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
     expect(requests.some((r) => r.url.endsWith("/resend"))).toBe(false)
