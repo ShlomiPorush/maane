@@ -17,6 +17,11 @@ export interface SettingDefinition<T> {
   env: string | null
   /** Parses the text of the environment variable. */
   fromEnv: ((text: string) => unknown) | null
+  /**
+   * Made by Maane from a cryptographically secure generator when the admin asks (plan 3.3), never typed in: the
+   * settings update refuses it, and no variable sets it.
+   */
+  generated?: boolean
 }
 
 /** Listening records what intake would do and opens no ticket; live opens tickets (requirements 6.2). */
@@ -168,6 +173,9 @@ const secretText = z
   .max(GRAPH_SECRET_MAX)
   .regex(/^\S(?:[^\r\n]*\S)?$/)
 
+/** A generated webhook secret: 32 bytes as base64url, 43 characters. */
+export const WEBHOOK_SECRET = /^[A-Za-z0-9_-]{43}$/
+
 export const SETTINGS = {
   "general.defaultLocale": define({
     schema: z.enum(LOCALES),
@@ -309,6 +317,24 @@ export const SETTINGS = {
     secret: true,
     env: "MAANE_SMTP2GO_API_KEY",
     fromEnv: (text) => text.trim(),
+  }),
+  // SMTP2GO's delivery webhook (plan 3.3): the secret part of its path and the token of its Authorization header. Both
+  // are app-owned secrets Maane generates (32 random bytes each, base64url), stored encrypted, shown once.
+  "smtp2go.webhookPath": define({
+    schema: z.string().regex(WEBHOOK_SECRET),
+    defaultValue: "",
+    secret: true,
+    env: null,
+    fromEnv: null,
+    generated: true,
+  }),
+  "smtp2go.webhookToken": define({
+    schema: z.string().regex(WEBHOOK_SECRET),
+    defaultValue: "",
+    secret: true,
+    env: null,
+    fromEnv: null,
+    generated: true,
   }),
   "failover.host": define({
     schema: smtpText(isHostName),

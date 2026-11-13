@@ -8,6 +8,8 @@ import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import {
   type AttachmentView,
+  DELIVERY_STATUSES,
+  type DeliveryStatus,
   type FieldNotice,
   type IntakeEntry,
   type IntakeLog,
@@ -332,7 +334,12 @@ export class Tickets {
     const replyIds = messages.filter((m) => m.direction === "out").map((m) => m.id)
     const outboxes = replyIds.length
       ? await this.db
-          .select({ messageId: outbox.messageId, state: outbox.state, problem: outbox.problem })
+          .select({
+            messageId: outbox.messageId,
+            state: outbox.state,
+            problem: outbox.problem,
+            reportWithoutRecipient: outbox.reportWithoutRecipient,
+          })
           .from(outbox)
           .where(inArray(outbox.messageId, replyIds))
       : []
@@ -378,7 +385,13 @@ export class Tickets {
             state: r.state as RecipientState,
             provider: r.provider as Provider | null,
             marked: r.markedBy !== null,
+            delivery: (DELIVERY_STATUSES as readonly string[]).includes(r.delivery ?? "")
+              ? (r.delivery as DeliveryStatus)
+              : null,
+            deliveryAt: r.deliveryAt?.toISOString() ?? null,
+            deliveryDetail: r.deliveryDetail,
           })),
+        reportWithoutRecipient: sent.reportWithoutRecipient !== null,
       }
     }
     const views: MessageView[] = messages.map((m) => {

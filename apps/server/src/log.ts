@@ -26,3 +26,16 @@ export function errorFacts(error: unknown): Fields {
     ...(typeof e.status === "number" || typeof e.status === "string" ? { status: String(e.status) } : {}),
   }
 }
+
+/** A request's path as a log line may name it: nothing under /hooks/, whose path holds a secret (plan 3.3). */
+export function loggedPath(pathname: string): string {
+  let decoded = pathname
+  try {
+    // The router reads a percent-encoded path decoded: "/%68ooks/..." reaches the webhook too.
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    // Not decodable: judged as it is.
+  }
+  const hidden = (path: string) => /^\/+hooks(?:\/|$)/i.test(path)
+  return hidden(pathname) || hidden(decoded) ? "/hooks/[hidden]" : pathname
+}

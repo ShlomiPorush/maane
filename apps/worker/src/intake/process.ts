@@ -44,6 +44,7 @@ import {
   type TicketFlag,
 } from "@maane/shared"
 import { and, asc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from "drizzle-orm"
+import { applyDeliveryReport } from "../delivery/reports.ts"
 import type { Tx } from "../files/types.ts"
 import { type AutomatedSign, type Classification, classify } from "./classify.ts"
 import type { StoredContentType } from "./content.ts"
@@ -377,9 +378,18 @@ export class IntakeProcessor {
       automatedReasons: classification.signs,
     }
 
-    // Automated mail never opens, joins, or reopens a thread (requirements 2.2). A report keeps its original Message-ID.
-    if (classification.automated)
-      return finish(patch, { ...base, outcome: "automated", reason: classification.signs.join(",") })
+    // Automated mail never opens, joins, or reopens a thread (requirements 2.2). A report keeps its original Message-ID;
+    // a delivery report about one of Maane's replies updates its recipients' delivery status (plan 3.3), in either mode:
+    // it is delivery information about a reply that went out, not intake's threading.
+    if (classification.automated) {
+      const report = await applyDeliveryReport(tx, msg)
+      return finish(patch, {
+        ...base,
+        outcome: "automated",
+        reason: classification.signs.join(","),
+        ...(report ? { matchedMessageId: report.messageId, matchedTicketId: report.ticketId } : {}),
+      })
+    }
 
     const sender = msg.fromAddress
     let links: Thread[] = []

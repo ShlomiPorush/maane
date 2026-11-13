@@ -71,6 +71,13 @@
       "when": 1794575920573,
       "tag": "0009_outbox_attempt",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794582841354,
+      "tag": "0010_delivery",
+      "breakpoints": true
     }
   ]
 }

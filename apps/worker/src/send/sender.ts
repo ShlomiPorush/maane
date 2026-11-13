@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto"
 import { SYSTEM, writeAudit } from "@maane/server/audit"
 import type { Db } from "@maane/server/db/client"
 import { authUser, message, outbox, outboxRecipient, ticket, ticketParticipant } from "@maane/server/db/schema"
+import { queueIdOf, refreshDeliveryFlag } from "@maane/server/delivery/service"
 import { errorFacts, log } from "@maane/server/log"
 import { inScope, visibleOrganizations } from "@maane/server/organizations/scope"
 import { belongsTo, supportRules } from "@maane/server/replies/rules"
@@ -210,9 +211,12 @@ export class ReplySender {
       const now = this.#now()
       const set = async (addresses: string[], state: string, response: string | null) => {
         if (addresses.length === 0) return
+        // SMTP2GO's queue ID, from its final 250, finds the recipient for its delivery events (plan 3.3). The delivery
+        // columns themselves are only ever written by those events.
+        const providerId = state === "accepted" && config.provider === "smtp2go" ? queueIdOf(response) : null
         await tx
           .update(outboxRecipient)
-          .set({ state, provider: config.provider, response, updatedAt: now })
+          .set({ state, provider: config.provider, response, providerId, updatedAt: now })
           .where(and(eq(outboxRecipient.messageId, messageId), inArray(outboxRecipient.address, addresses)))
       }
       if (result.kind === "unknown") {
@@ -243,6 +247,12 @@ export class ReplySender {
           .insert(ticketParticipant)
           .values(joined.map((entry) => ({ ticketId: claim.ticketId, address: entry.address, name: entry.name })))
           .onConflictDoNothing()
+      // A reply a recipient accepted may clear the ticket's delivery flag (plan 3.3). In a savepoint: the flag must
+      // never keep the provider's answer from being recorded.
+      if (joined.length)
+        await tx
+          .transaction((inner) => refreshDeliveryFlag(inner, claim.ticketId))
+          .catch((error) => log.warn("the ticket's delivery flag was not refreshed", errorFacts(error)))
       return true
     })
   }

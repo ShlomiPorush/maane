@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { SETTING_KEYS, SETTINGS, type SettingKey, type SettingValue, type SettingView } from "@maane/shared"
 import { inArray } from "drizzle-orm"
 import { type Actor, writeAudit } from "../audit.ts"
@@ -66,6 +67,8 @@ export class Settings {
       const settingKey = key as SettingKey
       const definition = SETTINGS[settingKey]
       if (this.overrides[settingKey] !== undefined) throw new SettingsError("setting_locked", key)
+      // A generated secret (the SMTP2GO webhook's) is only ever made by generate().
+      if (definition.generated) throw new SettingsError("setting_invalid", key)
       const parsed = definition.schema.safeParse(raw)
       if (!parsed.success) throw new SettingsError("setting_invalid", key)
       rows.push(
@@ -102,6 +105,42 @@ export class Settings {
         )
       }
     })
+  }
+
+  /**
+   * Makes a new value for each generated secret given (32 bytes from the CSPRNG, base64url), stores it encrypted with
+   * one audit row each (never the value), and returns the values once, for the admin to copy.
+   */
+  async generate<K extends SettingKey>(
+    keys: K[],
+    actor: Actor,
+    ipAddress: string | null = null,
+  ): Promise<Record<K, string>> {
+    const values = {} as Record<K, string>
+    for (const key of keys) {
+      if (!SETTINGS[key].generated) throw new SettingsError("setting_invalid", key)
+      values[key] = randomBytes(32).toString("base64url")
+    }
+    await this.db.transaction(async (tx) => {
+      for (const key of keys) {
+        const ciphertext = this.cipher.encrypt(key, JSON.stringify(values[key]))
+        await tx
+          .insert(setting)
+          .values({ key, value: null, ciphertext, updatedBy: actor.label })
+          .onConflictDoUpdate({
+            target: setting.key,
+            set: { value: null, ciphertext, updatedAt: new Date(), updatedBy: actor.label },
+          })
+        await writeAudit(tx, actor, {
+          action: "setting.update",
+          entityType: "setting",
+          entityId: key,
+          details: { secret: true, generated: true },
+          ipAddress,
+        })
+      }
+    })
+    return values
   }
 
   async #effective(

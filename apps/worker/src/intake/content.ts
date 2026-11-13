@@ -13,7 +13,7 @@ import type { Db } from "@maane/server/db/client"
 import { type FieldScan, type PartStatus, STORED_STATUSES, type TextField } from "@maane/shared"
 import { type FileService, FileTooLargeError } from "../files/service.ts"
 import { classify } from "./classify.ts"
-import type { MailAddress, ParsedMessage } from "./parse.ts"
+import type { MailAddress, ParsedMessage, ReportRecipient } from "./parse.ts"
 import { wellFormed } from "./text.ts"
 
 /** Graph's metadata of a message, as a record keeps it. */
@@ -59,6 +59,7 @@ export interface MessageContent {
     sentAt: Date | null
     contentType: StoredContentType
     reportOriginalMessageId: string | null
+    deliveryReport: ReportRecipient[] | null
     graph: Omit<GraphMeta, "subject" | "from"> & { fromAddress: string | null }
   }
   /** The header block: what the scan of `headers` decides about. */
@@ -89,6 +90,7 @@ export function contentOf(parsed: ParsedMessage, meta: GraphMeta): MessageConten
       to: parsed.to.map((entry) => entry.address),
       cc: parsed.cc.map((entry) => entry.address),
       reportOriginalMessageId: parsed.reportOriginalMessageId,
+      deliveryReport: parsed.deliveryReport,
       graph: {
         id: meta.id,
         folder: meta.folder,
@@ -196,6 +198,7 @@ export function columnsOf(content: MessageContent, scans: Partial<Record<TextFie
     sentAt: s.sentAt,
     contentType: s.contentType,
     reportOriginalMessageId: s.reportOriginalMessageId,
+    deliveryReport: s.deliveryReport,
     subject: headersOk ? h.subject : null,
     headers: headersOk ? h.lines : [],
     graph: {

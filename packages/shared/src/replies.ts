@@ -2,6 +2,7 @@
 // states of an outgoing message and of each recipient, why a send did not happen, uploads, and the shapes the composer
 // and the ticket view use.
 
+import type { DeliveryStatus } from "./delivery.ts"
 import type { MailAddress } from "./tickets.ts"
 
 /** `in` came through intake; `out` is an agent's reply; `note` is an internal note, never sent. */
@@ -118,6 +119,12 @@ export interface RecipientView extends MailAddress {
   provider: Provider | null
   /** An agent marked this unknown recipient as sent. */
   marked: boolean
+  /** What the recipient's server did with it, once a provider or a delivery report said (plan 3.3). */
+  delivery: DeliveryStatus | null
+  /** When that happened, by the provider's or the report's time. */
+  deliveryAt: string | null
+  /** The provider's reason or the report's status code, bounded. */
+  deliveryDetail: string | null
 }
 
 /** Where an outgoing message is. */
@@ -125,6 +132,8 @@ export interface DeliveryView {
   state: OutboxState
   problem: SendProblem | null
   recipients: RecipientView[]
+  /** A delivery report about this reply arrived that names none of its recipients as failed (plan 3.3). */
+  reportWithoutRecipient: boolean
 }
 
 /** What the composer of a ticket starts from. */
