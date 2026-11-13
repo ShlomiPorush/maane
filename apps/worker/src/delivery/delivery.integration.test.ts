@@ -875,7 +875,7 @@ describe("review of 3.3, round 2", () => {
     expect(await possibleSends(reply.id)).toEqual([1])
   })
 
-  it("D8: the backfill never lets an old unknown recipient, or one sent again, match by Message-ID", async () => {
+  it("D8, D9: the backfill never lets an old unknown, resent, or mid-send recipient match by Message-ID", async () => {
     await firstAdmin()
     const number = await customerTicket()
     const unknown = await sentReply(number, ["drop.dana@example.com"], { "failover.host": "" })
@@ -883,6 +883,9 @@ describe("review of 3.3, round 2", () => {
     const resent = await sentReply(number, ["drop.ron@example.com"], { "failover.host": "" })
     expect((await admin.call("POST", `/api/v1/messages/${resent.id}/resend`)).status).toBe(200)
     expect(await sender(viaFailover()).send(resent.id)).toBe("accepted")
+    // D9: a reply in the middle of its attempt when the upgrade runs (the run stopped after SMTP2GO took the data).
+    const midway = await written(number, ["dana@example.com"])
+    await expect(sender({ "failover.host": "" }, { afterSend: async () => crash() }).send(midway.id)).rejects.toThrow()
     // As rows sent before 0010.
     await h.database.db.update(outboxRecipient).set({ possibleSends: 0, acceptedAt: null })
     const file = readFileSync(join(MIGRATIONS_DIR, "0012_delivery_backfill.sql"), "utf8")
@@ -891,5 +894,11 @@ describe("review of 3.3, round 2", () => {
     expect(await possibleSends(unknown.id)).toEqual([2])
     expect(await possibleSends(once.id)).toEqual([1])
     expect(await possibleSends(resent.id)).toEqual([2])
+    const [row] = await h.database.db.select().from(outbox).where(eq(outbox.messageId, midway.id))
+    expect(row?.state).toBe("sending")
+    expect(await possibleSends(midway.id)).toEqual([2])
+    // Its recovery counts nothing, so it stays out of reach of a match by Message-ID.
+    expect(await sender({ "failover.host": "" }).send(midway.id)).toBe("unknown")
+    expect(await possibleSends(midway.id)).toEqual([2])
   })
 })

@@ -15,6 +15,13 @@ SET "possible_sends" = CASE WHEN "r"."state" = 'unknown' OR "o"."attempts" > 1 T
 FROM "outbox" AS "o"
 WHERE "o"."message_id" = "r"."message_id" AND "r"."possible_sends" = 0 AND "r"."state" IN ('accepted', 'unknown');
 --> statement-breakpoint
+-- A reply still being sent when this version started: its attempt may have reached every recipient not accepted yet,
+-- and recovering it counts nothing, so each of them gets 2 as well.
+UPDATE "outbox_recipient" AS "r" SET "possible_sends" = 2
+FROM "outbox" AS "o"
+WHERE "o"."message_id" = "r"."message_id" AND "o"."state" = 'sending' AND "r"."possible_sends" = 0
+  AND "r"."state" <> 'accepted';
+--> statement-breakpoint
 UPDATE "outbox_recipient" SET "delivery_recorded_at" = "delivery_at"
 WHERE "delivery_recorded_at" IS NULL AND "delivery" IS NOT NULL;
 --> statement-breakpoint
