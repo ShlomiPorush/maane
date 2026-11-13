@@ -80,6 +80,9 @@ function walk(nodes: readonly Node[], around: Direction, senderSet: boolean): vo
     if (own !== null) {
       dir = own
       inSender = true
+      // A direction the sender stated by style, beside dir="auto" (or any other value), becomes the attribute: what is
+      // sent never holds dir="auto".
+      if (node.attribs.dir !== undefined) node.attribs.dir = own
     } else if (node.attribs.dir !== undefined || (!senderSet && BLOCKS.has(node.name))) {
       // dir="auto" (or a value that is not a direction) anywhere, and every block outside the sender's own.
       dir = firstStrong(node.children) ?? around

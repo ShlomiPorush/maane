@@ -39,6 +39,15 @@ describe("directBlocks", () => {
     expect(dirs(html)).toEqual(["p:rtl", "p:ltr", "div:ltr", "span:rtl"])
   })
 
+  it("turns dir=auto beside a direction style, in any case, into that direction", () => {
+    const html = directBlocks(
+      `<p dir="auto" style="direction:rtl">hello</p><P DIR="AUTO">${SHALOM}</P><span dir="Auto" style="direction: ltr">x</span>`,
+      "ltr",
+    )
+    expect(html).not.toMatch(/dir="auto"/i)
+    expect(dirs(html)).toEqual(["p:rtl", "p:rtl", "span:ltr"])
+  })
+
   it("keeps the sender's direction and leaves the blocks inside it to inherit it", () => {
     const html = directBlocks(`<div dir="ltr"><p>${SHALOM}</p></div><p style="direction:ltr">${SHALOM}</p>`, "rtl")
     expect(dirs(html)).toEqual(["div:ltr"])
