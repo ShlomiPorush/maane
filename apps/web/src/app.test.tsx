@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { noteAuthStatus } from "./api/auth.ts"
 import { setTransport, type TransportRequest, type TransportResponse } from "./api/client.ts"
 import { ERROR_VARS } from "./api/errors.ts"
-import { I18nProvider, translate } from "./i18n/i18n.tsx"
+import { I18nProvider, translate, translateCount } from "./i18n/i18n.tsx"
 import { ROUTES } from "./routes.tsx"
 
 /** pdf.js, as the PDF preview loads it (pages/tickets/pdf.ts): component tests never run it. */
@@ -1801,6 +1801,105 @@ describe("tickets", () => {
       he("delivery.status.delivered"),
     )
     expect(card.querySelector('[data-recipient="lea@example.com"] [data-delivery]')).toBeNull()
+  })
+
+  it("shows a reply's clicked links and downloaded files: the flag first, the address left to right (plan 3.4)", async () => {
+    const click = (over: Record<string, unknown>) => ({
+      id: 1,
+      at: when,
+      ip: "192.0.2.10",
+      country: "il",
+      city: "Tel Aviv",
+      region: "Tel Aviv District",
+      isp: "Example Net",
+      asn: 64496,
+      device: "desktop",
+      os: "Windows 10",
+      browser: "Chrome 131",
+      userAgent: "Mozilla/5.0",
+      scanner: [],
+      ...over,
+    })
+    const links = [
+      {
+        id: "link-1",
+        kind: "url",
+        // A scanner kept clicking: the server sent only the newest clicks, with the total.
+        total: 120,
+        target: "https://www.example.com/guide",
+        clicks: [
+          click({
+            id: 2,
+            ip: "2001:db8::5",
+            country: null,
+            city: null,
+            region: null,
+            isp: null,
+            asn: 8075,
+            scanner: ["early", "network"],
+          }),
+          click({ id: 1 }),
+        ],
+      },
+      {
+        id: "link-2",
+        kind: "file",
+        target: "invoice.pdf",
+        total: 1,
+        clicks: [click({ id: 3, device: "bot", scanner: ["agent"] })],
+      },
+      // Two history files of one name (image001.png is common in mail): each its own row.
+      { id: "link-3", kind: "file", target: "invoice.pdf", total: 1, clicks: [click({ id: 4 })] },
+    ]
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [reply({ links })]),
+    })
+    const section = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-direction="out"] .ui-clicks')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(section.getAttribute("aria-label")).toBe(he("links.title"))
+    const [guide, file, same] = Array.from(section.querySelectorAll<HTMLElement>(".ui-clicks-links > li"))
+    expect(same?.textContent).toContain("invoice.pdf")
+    expect(section.querySelectorAll(".ui-clicks-links > li")).toHaveLength(3)
+    expect(guide?.getAttribute("data-kind")).toBe("url")
+    expect(guide?.querySelector(".ui-clicks-target")?.getAttribute("dir")).toBe("ltr")
+    expect(guide?.textContent).toContain("https://www.example.com/guide")
+    expect(guide?.textContent).toContain(translateCount("he", "links.count", 120))
+    expect(guide?.querySelector(".ui-clicks-shown")?.textContent).toBe(he("links.shown", { shown: "2", total: "120" }))
+    expect(file?.querySelector(".ui-clicks-shown")).toBeNull()
+    const rows = Array.from(guide?.querySelectorAll<HTMLElement>(".ui-clicks-list > li") ?? [])
+    // The newest first, as the server orders them: a scanner's click with no country, then the customer's.
+    expect(rows[0]?.getAttribute("data-scanner")).toBe("yes")
+    expect(rows[0]?.textContent).toContain(he("links.scanner"))
+    expect(rows[0]?.textContent).toContain(he("links.scannerReason.early"))
+    expect(rows[0]?.querySelector(".ui-click-flag-none")).not.toBeNull()
+    const customer = rows[1] as HTMLElement
+    expect(customer.getAttribute("data-scanner")).toBe("no")
+    // The flag is the first thing in reading order, then the address isolated left to right.
+    const [first, second] = Array.from(customer.children)
+    expect(first?.className).toContain("fi fi-il")
+    expect(first?.getAttribute("aria-label")).toBe(he("links.country", { code: "IL" }))
+    expect(second?.tagName).toBe("BDI")
+    expect(second?.getAttribute("dir")).toBe("ltr")
+    expect(second?.textContent).toBe("192.0.2.10")
+    // The city, region, and ISP: the address's tooltip, and written under it for a phone.
+    const place = [
+      he("links.city", { value: "Tel Aviv" }),
+      he("links.region", { value: "Tel Aviv District" }),
+      he("links.isp", { value: `Example Net (${he("links.asn", { value: "64496" })})` }),
+    ]
+    expect(second?.getAttribute("title")).toBe(place.join("\n"))
+    expect(customer.querySelector(".ui-click-place")?.textContent).toBe(place.join(" · "))
+    expect(customer.textContent).toContain(he("links.device.desktop"))
+    expect(file?.getAttribute("data-kind")).toBe("file")
+    expect(file?.textContent).toContain("invoice.pdf")
+    expect(file?.textContent).toContain(he("links.scannerReason.agent"))
+    // A reply nobody clicked shows no section.
+    expect(document.querySelectorAll(".ui-clicks")).toHaveLength(1)
   })
 
   it("ends a PDF that finishes loading after its preview closed, and starts none once it closed", async () => {

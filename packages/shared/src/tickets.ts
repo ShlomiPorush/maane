@@ -2,6 +2,7 @@
 // UI share: which detected types preview and how, and the shapes the API answers with.
 
 import type { IntakeOutcome, MatchLayer, MessageContent, PartStatus, TextField, TicketStatus } from "./intake.ts"
+import type { TrackedLinkView } from "./links.ts"
 import type { ComposeView, DeliveryView, MessageDirection } from "./replies.ts"
 
 /**
@@ -115,6 +116,8 @@ export interface MessageView {
   bodyVersion: string
   fields: FieldNotice[]
   attachments: AttachmentView[]
+  /** A reply: its links that were clicked and its history files that were downloaded (plan 3.4). */
+  links: TrackedLinkView[]
 }
 
 export interface TicketView {

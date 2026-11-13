@@ -52,6 +52,7 @@ import {
   ticketParticipant,
 } from "../db/schema.ts"
 import { storedFilePath } from "../files/paths.ts"
+import { linkViews } from "../links/service.ts"
 import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
 import { renderMailHtml } from "../mail/html.ts"
 import type { OrganizationScope } from "../organizations/scope.ts"
@@ -398,6 +399,23 @@ export class Tickets {
       )
       .orderBy(asc(other.number))
 
+    // The links each reply carried that were clicked, and its history files that were downloaded (plan 3.4). A click is
+    // early against the reply's first delivery (the earliest `first_delivered_at` of its recipients, set once and never
+    // moved by a later status), else against the first time a provider accepted it (`accepted_at`; an agent's Mark as
+    // sent does not count). Never the current status's `delivery_at`, nor `updated_at`: later events rewrite both.
+    const earliest = (dates: (Date | null)[]) =>
+      dates.reduce<Date | null>((first, date) => (date && (first === null || date < first) ? date : first), null)
+    const sentAt = (id: string) => {
+      const own = recipients.filter((r) => r.messageId === id)
+      return (
+        earliest(own.map((r) => r.firstDeliveredAt)) ??
+        earliest(own.filter((r) => r.state === "accepted" && r.markedBy === null).map((r) => r.acceptedAt))
+      )
+    }
+    const clicked = await linkViews(
+      this.db,
+      replyIds.map((id) => ({ id, since: sentAt(id) })),
+    )
     const authorOf = new Map(authors.map((a) => [a.id, { id: a.id, name: a.name || a.username || a.id }]))
     const deliveryOf = (id: string): MessageView["delivery"] => {
       const sent = outboxes.find((o) => o.messageId === id)
@@ -468,6 +486,7 @@ export class Tickets {
         ),
         fields: fieldNotices(m.fieldScans),
         attachments,
+        links: clicked.get(m.id) ?? [],
       }
     })
 

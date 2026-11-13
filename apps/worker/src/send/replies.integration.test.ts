@@ -351,6 +351,84 @@ describe("a reply, end to end", () => {
     expect(text).not.toContain("internal note")
   })
 
+  it("carries tracked links and history download links that lead back through Maane (plan 3.4)", async () => {
+    const admin = await firstAdmin()
+    const graphId = h.graph.add(
+      mime({
+        messageId: `${randomUUID()}@mail.example.com`,
+        subject: "An invoice",
+        from: "Dana Customer <dana@example.com>",
+        to: SUPPORT,
+        text: { content: "See the invoice." },
+        attachments: [{ fileName: "invoice.pdf", contentType: "application/pdf", content: pdf() }],
+      }),
+    )
+    await h.round()
+    const found = await h.ticketOf(graphId)
+    if (!found) throw new Error("no ticket")
+    const html =
+      '<p dir="auto">Read <a href="https://www.example.com/guide">the guide</a> or <a href="mailto:help@example.com">mail us</a>.</p>'
+    const written = await admin.call("POST", `/api/v1/tickets/${found.number}/messages`, reply({ html }))
+    expect(written.status, JSON.stringify(written.json)).toBe(201)
+    expect(await sender().send(written.json.id)).toBe("accepted")
+    const sent = smtp2go.received.at(-1)
+    if (!sent) throw new Error("nothing reached the stand-in")
+    const parsed = await simpleParser(sent.raw)
+    const out = parsed.html || ""
+    // The public URL's origin, as no link domain is set.
+    const tracked = /<a href="(http:\/\/127\.0\.0\.1:8090\/l\/[A-Za-z0-9_-]{22})"[^>]*>the guide<\/a>/.exec(out)
+    const download =
+      /<a href="(http:\/\/127\.0\.0\.1:8090\/f\/[A-Za-z0-9_-]{22})"[^>]*><span dir="ltr">invoice\.pdf<\/span><\/a>/.exec(
+        out,
+      )
+    expect(tracked, out).not.toBeNull()
+    expect(download, out).not.toBeNull()
+    expect(out).toContain('href="mailto:help@example.com"')
+    expect(out).not.toContain("https://www.example.com/guide")
+    // The text part keeps the agent's link and names the file only.
+    expect(parsed.text).toContain("https://www.example.com/guide")
+    expect(parsed.text).not.toContain("127.0.0.1:8090/")
+
+    const redirect = await app.fetch(new Request(tracked?.[1] ?? ""))
+    expect(redirect.status).toBe(302)
+    expect(redirect.headers.get("location")).toBe("https://www.example.com/guide")
+    const file = await app.fetch(new Request(download?.[1] ?? ""))
+    expect(file.status).toBe(200)
+    expect(file.headers.get("content-disposition")).toContain("attachment")
+    expect(Buffer.from(await file.arrayBuffer())).toEqual(pdf())
+
+    const after = await view(admin, found.number)
+    expect(after.messages.find((m) => m.id === written.json.id)?.links).toEqual([
+      {
+        id: expect.any(String),
+        kind: "url",
+        target: "https://www.example.com/guide",
+        total: 1,
+        clicks: [expect.objectContaining({ ip: null })],
+      },
+      {
+        id: expect.any(String),
+        kind: "file",
+        target: "invoice.pdf",
+        total: 1,
+        clicks: [expect.objectContaining({ ip: null })],
+      },
+    ])
+
+    // With a link domain and tracking off: the agent's link as written, the history file's link on that domain.
+    const settings = await admin.call("PUT", "/api/v1/settings", {
+      "links.tracking": "off",
+      "links.domain": "links.example.com",
+    })
+    expect(settings.status).toBe(200)
+    const again = await admin.call("POST", `/api/v1/tickets/${found.number}/messages`, reply({ html }))
+    expect(await sender().send(again.json.id)).toBe("accepted")
+    const second = (await simpleParser(smtp2go.received.at(-1)?.raw ?? Buffer.alloc(0))).html || ""
+    expect(second).toContain('<a href="https://www.example.com/guide"')
+    expect(second).not.toMatch(/\/l\/[A-Za-z0-9_-]{22}/)
+    expect(second).toMatch(/<a href="https:\/\/links\.example\.com\/f\/[A-Za-z0-9_-]{22}"/)
+  })
+
   it("refuses a reply whose own files are larger than the provider takes, before anything is written", async () => {
     const admin = await firstAdmin()
     const graphId = h.graph.add(

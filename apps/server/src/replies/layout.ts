@@ -48,8 +48,19 @@ export interface Entry {
   images: Map<string, EntryImage>
   /** The images it shows by their file names only (over the size budget, or unreadable), by content ID. */
   imageNames?: Map<string, string>
-  /** The names of its files (history: names only, plan 3.2). */
-  files: readonly string[]
+  /** Its files: their names, and their download links (history, plan 3.4; null without one). */
+  files: readonly EntryFile[]
+  /**
+   * The address the email carries for an http or https link the message holds (a tracked link, plan 3.4); without it
+   * links stay as they are. Only the new message has one: links in the quoted history are never tracked.
+   */
+  link?: (href: string) => string
+}
+
+/** A file a message names. */
+export interface EntryFile {
+  name: string
+  href: string | null
 }
 
 export interface Conversation {
@@ -232,16 +243,20 @@ function renderContent(
   }
   let html = ""
   if (entry.html) {
-    html = renderEmailHtml(directBlocks(entry.html, dir), (contentId) => {
-      const image = entry.images.get(contentId)
-      if (!image) {
-        const name = entry.imageNames?.get(contentId)
-        return name === undefined ? null : { name }
-      }
-      if (imageNames) return { name: image.fileName }
-      images.push(image)
-      return { cid: image.cid, ...shownSize(image, column) }
-    })
+    html = renderEmailHtml(
+      directBlocks(entry.html, dir),
+      (contentId) => {
+        const image = entry.images.get(contentId)
+        if (!image) {
+          const name = entry.imageNames?.get(contentId)
+          return name === undefined ? null : { name }
+        }
+        if (imageNames) return { name: image.fileName }
+        images.push(image)
+        return { cid: image.cid, ...shownSize(image, column) }
+      },
+      entry.link,
+    )
   } else if (entry.text) html = linesHtml(entry.text, dir)
   if (entry.files.length)
     html +=
@@ -251,10 +266,18 @@ function renderContent(
   return { html: wordCopies(html), dir, images }
 }
 
-/** The files line: the names, each isolated in its own direction. */
-const fileLine = (filesWord: string, names: readonly string[], dir: Direction) => {
+/**
+ * The files line: the names, each isolated in its own direction, a name with a download link as that link (its underline
+ * inline with !important, as html-email asks of the links an app makes).
+ */
+const fileLine = (filesWord: string, files: readonly EntryFile[], dir: Direction) => {
   const [before = "", after = ""] = filesWord.split("{names}")
-  return `${escapeHtml(before)}${names.map((name) => isolated(name, dir)).join(", ")}${escapeHtml(after)}`
+  const names = files.map((file) =>
+    file.href
+      ? `<a href="${escapeHtml(file.href)}" style="text-decoration:underline !important">${isolated(file.name, dir)}</a>`
+      : isolated(file.name, dir),
+  )
+  return `${escapeHtml(before)}${names.join(", ")}${escapeHtml(after)}`
 }
 
 /** One conversation block: the avatar cell, the name and the time, then the content. */
@@ -359,7 +382,8 @@ function textPart(conversation: Conversation, forms: readonly Form[], omitted: n
   const block = (entry: Entry, form: Form) => {
     const body = form === "short" ? shortText(entry) : textOf(entry)
     const out = [`${entry.name} | ${israelTime(entry.at)}`, ...body.replace(/\r\n?/g, "\n").split("\n")]
-    if (form === "full" && entry.files.length) out.push(fill(words.files, { names: entry.files.join(", ") }))
+    if (form === "full" && entry.files.length)
+      out.push(fill(words.files, { names: entry.files.map((file) => file.name).join(", ") }))
     return out
   }
   lines.push(...block(conversation.current, "full"))

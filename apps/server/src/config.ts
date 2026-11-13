@@ -21,6 +21,8 @@ export type ServerConfig = {
   webDir: string
   /** MAANE_FILES_DIR: the content-addressed store the server and the worker share (default /data/files). */
   filesDir: string
+  /** MAANE_GEOIP_DIR: the read-only directory of the GeoLite2 City and ASN files (deployment wiring), or null. */
+  geoipDir: string | null
   version: string
   /** Settings the environment sets: each overrides the stored value, and the UI shows the field locked. */
   overrides: Partial<Record<SettingKey, string>>
@@ -200,6 +202,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     migrationsDir: env.MAANE_MIGRATIONS_DIR || "drizzle",
     webDir: env.MAANE_WEB_DIR || "dist/web",
     filesDir: env.MAANE_FILES_DIR || "/data/files",
+    geoipDir: env.MAANE_GEOIP_DIR?.trim() || null,
     version: env.MAANE_VERSION || "dev",
     overrides,
   }

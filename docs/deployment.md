@@ -25,7 +25,7 @@ docker network inspect traefik --format '{{.Name}}: {{range .IPAM.Config}}{{.Sub
 
 It prints the network's name and subnets, for example `traefik: 192.0.2.0/24`. If it fails, create the network and attach Traefik to it as your Traefik setup describes. Maane does not run Traefik.
 
-The shipped labels on `server` ask Traefik for one router:
+The shipped labels on `server` ask Traefik for two routers to the same service: `maane` for everything on `DOMAIN`, and `maane-links` for the tracked links and download links (`/l/` and `/f/` only) on `LINK_DOMAIN` ([Link tracking](#link-tracking)):
 
 | Label | Shipped value | Change it when |
 |---|---|---|
@@ -34,6 +34,8 @@ The shipped labels on `server` ask Traefik for one router:
 | `traefik.http.routers.maane.rule` | ``Host(`${DOMAIN}`)`` | Never: set `DOMAIN` in `.env` instead |
 | `traefik.http.routers.maane.tls` | `true` | Add `traefik.http.routers.maane.tls.certresolver=<resolver>` if your Traefik needs a resolver per router |
 | `traefik.http.routers.maane.middlewares` | `default@file` | Your middleware chain has another name |
+| `traefik.http.routers.maane-links.rule` | ``Host(`${LINK_DOMAIN:-${DOMAIN}}`) && (PathPrefix(`/l/`) \|\| PathPrefix(`/f/`))`` | Never: set `LINK_DOMAIN` in `.env` instead |
+| `traefik.http.routers.maane-links.entrypoints`, `.tls`, `.middlewares` | as for `maane` | As for `maane` |
 | `traefik.http.services.maane.loadbalancer.server.port` | `8080` | Never |
 
 Two conditions make the client address safe to trust, and Maane's rate limits depend on it. Keep both:
@@ -41,7 +43,7 @@ Two conditions make the client address safe to trust, and Maane's rate limits de
 - Maane is reachable only through Traefik. The Compose file publishes no port; do not add one.
 - Traefik replaces the forwarding headers that clients send. Do not set `forwardedHeaders.insecure` or `forwardedHeaders.trustedIPs` on the entry point Maane uses.
 
-The agent UI, the setup screen, and later the tracked links, the download links, and the SMTP2GO webhook are all public. Serve them only over HTTPS with a certificate browsers trust: with an `https://` public URL the sign-in cookies are `Secure`, so plain HTTP does not work.
+The agent UI, the setup screen, the tracked links and the download links, and later the SMTP2GO webhook are all public. Serve them only over HTTPS with a certificate browsers trust: with an `https://` public URL the sign-in cookies are `Secure`, so plain HTTP does not work.
 
 ## 2. Create the deployment folder
 
@@ -95,7 +97,7 @@ Three files sit beside `docker-compose.yml`:
 
 | File | Read by | Holds |
 |---|---|---|
-| `.env` | Compose only, to fill in `docker-compose.yml`; no container receives it | `VERSION` and `DOMAIN`. No secret. |
+| `.env` | Compose only, to fill in `docker-compose.yml`; no container receives it | `VERSION`, `DOMAIN`, and optionally `LINK_DOMAIN` and `GEOIP_DIR`. No secret. |
 | `postgres.env` | The `postgres` service only | The database user, name, and password |
 | `app.env` | `server` and `worker` | `DATABASE_URL` with the same password, `MAANE_AUTH_SECRETS`, `MAANE_SETTINGS_KEYS`, `MAANE_TRUSTED_PROXIES` |
 
@@ -105,7 +107,7 @@ The block fills in:
 
 - `POSTGRES_PASSWORD` in `postgres.env`, and the same value in `app.env`'s `DATABASE_URL`: 32 random bytes as hex. Hex keeps the URL valid, and the server refuses a password that is not random hex.
 - `MAANE_AUTH_SECRETS` and `MAANE_SETTINGS_KEYS`: `1:` and 32 random bytes as hex each, different from each other and from the password.
-- `VERSION` and `DOMAIN` in `.env`.
+- `VERSION` and `DOMAIN` in `.env`. `LINK_DOMAIN` and `GEOIP_DIR` stay empty; set them as [Link tracking](#link-tracking) describes.
 - `MAANE_TRUSTED_PROXIES`: the subnets of the `traefik` network.
 
 It refuses, and leaves no file of its own, when any of the three files exists, when a contract is missing or not as expected, when a value cannot be generated or read, or when `DOMAIN` is still the example. The files are readable by you only (mode 600). It prints no secret. It publishes the three files only when none exists; if another run published one meanwhile, it removes the ones it published itself and stops.
@@ -273,7 +275,7 @@ A passing Test Graph shows that Maane can read the intake mailbox; it does not s
 
 Maane learns what happened to a reply after SMTP2GO accepted it (delivered, bounced, rejected, or reported as spam) in two ways: SMTP2GO calls Maane's webhook on each event, and every ten minutes the worker asks SMTP2GO's activity search about recipients that still have no final status. Both only change what the ticket view shows; neither sends anything. You set them up at SMTP2GO; Maane changes nothing there.
 
-1. **Turn off SMTP2GO's own tracking.** Maane tracks links itself (in a later version) and does not track opens. At SMTP2GO, open the SMTP user Maane sends with (Sending, SMTP Users, the user, Tracking & Status in SMTP2GO's current menus) and turn off Open Tracking and Click Tracking. SMTP2GO's menu names change from time to time; the settings are per SMTP user.
+1. **Turn off SMTP2GO's own tracking.** Maane tracks links itself ([Link tracking](#link-tracking)) and does not track opens. At SMTP2GO, open the SMTP user Maane sends with (Sending, SMTP Users, the user, Tracking & Status in SMTP2GO's current menus) and turn off Open Tracking and Click Tracking. SMTP2GO's menu names change from time to time; the settings are per SMTP user.
 2. **Make the webhook's address and token.** In Maane, open Settings, SMTP2GO, and press Make address and token under Delivery webhook. Maane shows the webhook URL (`https://maane.example.com/hooks/smtp2go/<secret part>`) and a Bearer token once. Copy both now; Maane keeps them encrypted and never shows them again. Make new ones whenever either may have leaked: the old ones stop working at once.
 3. **Add the webhook at SMTP2GO** (Settings, Webhooks, Add webhook):
    - URL: the webhook URL from step 2.
@@ -290,6 +292,33 @@ Replies sent through the backup server have no webhook: their bounces come back 
 
 Check it once with a real send (your test, not part of Maane's verification): reply to a test ticket at an address of yours, and within a minute the reply's recipient shows Delivered. A reply to an address that does not exist shows Bounced, and the ticket shows Delivery failed until a later reply to that address is accepted.
 
+### Link tracking
+
+While Settings, Link tracking, Track links is on (the default), the links an agent writes in a reply lead through Maane as `https://<link domain>/l/<code>`, and each click is recorded with its address, its location, and its browser before the customer is sent on. Files of earlier messages in a reply's history always get a download link, `https://<link domain>/f/<code>`. Turn tracking off there (or with `MAANE_LINK_TRACKING=off` in `app.env`) to send links as written and record nothing; links in replies already sent keep working either way. Keep SMTP2GO's own click tracking off.
+
+**The link domain.** By default links use `DOMAIN`, and nothing more is needed. To use another host name, for example `links.example.com`:
+
+1. Point its DNS record at your Traefik, as for `DOMAIN`, and make sure Traefik has a certificate for it.
+2. Set `LINK_DOMAIN=links.example.com` in `.env`. The `maane-links` router then answers on that name, for `/l/` and `/f/` only; the agent UI stays on `DOMAIN`.
+3. Set Settings, Link tracking, Link domain to the same name (or `MAANE_LINK_DOMAIN` in `app.env`).
+4. `cd "$HOME/maane" && docker compose up -d`, then open `https://links.example.com/l/test` in a browser: Maane answers that the link does not work. That page proves the route; a reply's real links work the same way.
+
+Change the link domain only while the old name still reaches Maane: replies already sent keep their old links.
+
+**Location (GeoLite2).** Maane reads the location of a click from MaxMind GeoLite2 files on the host, never from an outside service. Your existing updater keeps them current; Maane only reads them. `docker-compose.yml` mounts the folder `GEOIP_DIR` from `.env` (default `./geoip` next to it) read only at `/geoip` in `server`, and reads `GeoLite2-City.mmdb` (country, city, region) and `GeoLite2-ASN.mmdb` (ISP and AS number) from it. Each file is optional and fails alone: without one, its part of the location stays empty and clicks are still recorded. Maane looks at the files at most once a minute and reads a file again when its modification time changes, so an update needs no restart; a file that cannot be read (for example one your updater is still writing) leaves the last good copy in use until the next look. Set the folder:
+
+```bash
+cd "$HOME/maane" && grep -E '^GEOIP_DIR=' .env
+```
+
+When it prints nothing or `GEOIP_DIR=`, add your updater's folder to `.env` (for example `GEOIP_DIR=/srv/geoip`, where `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb` sit), then `docker compose up -d`. The folder must be readable by UID 1000; the server never writes to it. Check what the server sees:
+
+```bash
+cd "$HOME/maane" && docker compose exec -T server ls -l /geoip
+```
+
+**The client address** of a click and of the rate limits (60 requests a minute per address over both routes) comes from `X-Forwarded-For` only when the request came from one of `MAANE_TRUSTED_PROXIES`; set it to the subnets of the `traefik` network as section 3 does. Without it every click records Traefik's own address.
+
 ## 5. Back up
 
 Your backup must hold:
@@ -298,7 +327,7 @@ Your backup must hold:
 |---|---|---|
 | The database | `./postgres-data`, copied while the stack is stopped, or a dump (below) | All of Maane's data: users, settings, the audit log, and the job queue |
 | `app.env` and `postgres.env` | `~/maane/app.env`, `~/maane/postgres.env` | `MAANE_AUTH_SECRETS` decrypts every user's two-factor secret and backup codes: without it nobody can sign in after a restore. `MAANE_SETTINGS_KEYS` decrypts the secrets stored in Settings. The database password opens the database. Keep every key version you ever used. |
-| `.env` | `~/maane/.env` | `VERSION` and `DOMAIN`; no secret |
+| `.env` | `~/maane/.env` | `VERSION`, `DOMAIN`, `LINK_DOMAIN`, and `GEOIP_DIR`; no secret |
 | `docker-compose.yml` | `~/maane/docker-compose.yml` | Your copy, with any label you changed |
 | Attachments | `./data` | Attachments and inline images are stored as files, named by their SHA-256, not in the database. Copy it after the dump: a dump taken after the copy of `./data` can name a file the copy lacks. |
 | The VAPID key pair (from phase 4) | `app.env` | Push notifications stop for every device when it changes |
@@ -451,6 +480,8 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
 To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported.
 
 ## What was verified
+
+Phase 3.4 (2026-11-13): `docker compose config` accepted `docker-compose.yml` with and without `LINK_DOMAIN` and `GEOIP_DIR` (the `maane-links` rule and the `/geoip` mount resolved as described); the `maane-links` router and the mount were never run behind a real Traefik. In a stack from the development template, with the GeoLite2 test databases mounted read only at `/geoip` and the stack's Docker networks trusted as proxies, clicks and a download through the published port were redirected, served as an attachment, and recorded with the forwarded documentation addresses and their locations; with the networks not yet trusted, the forwarded header was ignored and the proxy's address recorded. Section 3's block was not run again; it copies the new empty lines of `.env.example` as they are.
 
 Phase 3.3 (2026-11-13): delivery status ran only against stand-ins, in the integration tests: the webhook through the server app with secrets generated for the test, the activity search against a stand-in HTTPS API that accepts only a key generated for the run, and failover bounces through the stand-in Graph. Nothing reached SMTP2GO. The steps of [Connect SMTP2GO's delivery status](#connect-smtp2gos-delivery-status) have not run: SMTP2GO's menus, the exact Authorization value it sends for the Bearer type, the format of its `time` field, and that its webhook's `email_id` is the queue ID in its final SMTP reply are unchecked until your first real send.
 

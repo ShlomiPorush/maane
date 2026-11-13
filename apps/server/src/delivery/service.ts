@@ -125,6 +125,13 @@ export async function applyDeliveryEvent(tx: Tx, target: DeliveryTarget, event: 
         )
       : sql`false`,
   )
+  // The first delivery (plan 3.4, review L1): set once, while empty, whatever status the recipient holds or gets next,
+  // so a later spam report or bounce never moves the reference of a click's "early" mark.
+  if (event.status === "delivered")
+    await tx
+      .update(outboxRecipient)
+      .set({ firstDeliveredAt: event.at })
+      .where(and(which, eq(outboxRecipient.address, event.recipient), isNull(outboxRecipient.firstDeliveredAt)))
   const changed = await tx
     .update(outboxRecipient)
     .set({

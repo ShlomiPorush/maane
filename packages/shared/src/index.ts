@@ -84,6 +84,20 @@ export {
   type TicketFlag,
   type TicketStatus,
 } from "./intake.ts"
+export {
+  CLICK_BOUNDS,
+  CLICKS_SHOWN,
+  type ClickView,
+  DEVICE_TYPES,
+  type DeviceType,
+  isLinkDomain,
+  LINK_TRACKING,
+  type LinkTracking,
+  SCANNER_REASONS,
+  type ScannerReason,
+  TRACKED_URL_MAX,
+  type TrackedLinkView,
+} from "./links.ts"
 export { DEFAULT_LOCALE, direction, LOCALES, type Locale, MESSAGES, type Messages } from "./locales.ts"
 export {
   AGENT_NAME_MAX,

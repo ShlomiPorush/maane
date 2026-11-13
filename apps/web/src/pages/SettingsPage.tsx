@@ -12,7 +12,8 @@
 // set, never the value, and an empty field keeps it), and the intake mailbox, and a connection test the worker runs the
 // same way: it reads only the mailbox's Inbox folder details and reports Graph's error code. Sending (phase 3.1) holds
 // SMTP2GO's SMTP server and API key, the failover server, and the bounce address, with a connection test of each
-// server that the worker runs the same way (it connects with TLS and logs in, and sends nothing).
+// server that the worker runs the same way (it connects with TLS and logs in, and sends nothing). Link tracking (phase
+// 3.4) turns tracking on or off and sets the link domain.
 
 import {
   BLOCKED_TYPE,
@@ -24,8 +25,10 @@ import {
   INTAKE_MODES,
   isClientId,
   isHostName,
+  isLinkDomain,
   isMailbox,
   isTenantId,
+  LINK_TRACKING,
   LOCALES,
   MEGABYTE,
   normalizeBlockedTypes,
@@ -90,6 +93,8 @@ export const SETTING_ROWS: readonly SettingKey[] = [
   "failover.user",
   "failover.password",
   "mail.bounceAddress",
+  "links.tracking",
+  "links.domain",
 ]
 
 /** The sending settings of each SMTP server, in the order the page shows them; the connection test reads them saved. */
@@ -130,6 +135,8 @@ const NO_DEFAULT: readonly SettingKey[] = [
   "failover.user",
   "failover.password",
   "mail.bounceAddress",
+  // Empty means the public URL's own host.
+  "links.domain",
 ]
 
 /** A secret's text: one line without white space at either end, as the registry takes it. */
@@ -183,6 +190,9 @@ export function parseSetting(key: SettingKey, text: string): unknown {
   if (key === "mail.bounceAddress")
     return text.trim() === "" || isMailbox(text.trim()) ? text.trim().toLowerCase() : null
   if (key === "failover.security") return (SMTP_SECURITIES as readonly string[]).includes(text) ? text : null
+  if (key === "links.tracking") return (LINK_TRACKING as readonly string[]).includes(text) ? text : null
+  if (key === "links.domain")
+    return text.trim() === "" || isLinkDomain(text.trim().toLowerCase()) ? text.trim().toLowerCase() : null
   if (key === "scanner.unavailablePolicy") return (SCANNER_POLICIES as readonly string[]).includes(text) ? text : null
   if (key === "intake.mode") return (INTAKE_MODES as readonly string[]).includes(text) ? text : null
   return (LOCALES as readonly string[]).includes(text) ? text : null
@@ -240,8 +250,10 @@ function Settings() {
     "failover.user": useRef<HTMLInputElement>(null),
     "failover.password": useRef<HTMLInputElement>(null),
     "mail.bounceAddress": useRef<HTMLInputElement>(null),
+    "links.domain": useRef<HTMLInputElement>(null),
   }
   const sendingIds = useId()
+  const linkDomainId = useId()
   const views = new Map((query.data?.settings ?? []).map((view) => [view.key, view]))
 
   // Only what differs from the saved value counts as a change.
@@ -330,9 +342,11 @@ function Settings() {
             ? t(`settings.scannerPolicy.mode.${fallbackText}`)
             : key === "failover.security"
               ? t(`settings.sending.security.${fallbackText}`)
-              : key === "files.blockedTypes"
-                ? t("settings.blockedTypes.defaultList")
-                : fallbackText
+              : key === "links.tracking"
+                ? t(`settings.linkTracking.mode.${fallbackText}`)
+                : key === "files.blockedTypes"
+                  ? t("settings.blockedTypes.defaultList")
+                  : fallbackText
     return { label, onReset: () => edit(key, fallbackText) }
   }
 
@@ -386,6 +400,8 @@ function Settings() {
     const client = "graph.clientId" as const
     const clientSecret = "graph.clientSecret" as const
     const mailbox = "graph.mailbox" as const
+    const tracking = "links.tracking" as const
+    const linkDomain = "links.domain" as const
     const secret = views.get(clientSecret)
     /** One sending setting's row: a write-only secret, the security choice, or a text or number field. */
     const sendingRow = (key: SettingKey) => {
@@ -648,6 +664,41 @@ function Settings() {
           <SmtpRow provider="failover" fieldsChanged={changed.some((key) => FAILOVER_KEYS.includes(key))} />
           {FAILOVER_KEYS.map(sendingRow)}
           {sendingRow("mail.bounceAddress")}
+        </Group>
+        <Group id="settings-links" title={t("settings.linksGroup")} intro={t("settings.linksIntro")}>
+          <Row
+            label={t(labelKey(tracking))}
+            hint={LINK_TRACKING.map((option) => (
+              <span key={option} className="ui-set-desc-line">
+                {t(`settings.linkTracking.explain.${option}`)}
+              </span>
+            ))}
+            lock={lockOf(tracking)}
+            reset={resetOf(tracking)}
+          >
+            <fieldset className="ui-seg" aria-label={t(labelKey(tracking))}>
+              {LINK_TRACKING.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  data-tracking={option}
+                  aria-pressed={value(tracking) === option}
+                  disabled={Boolean(lockOf(tracking))}
+                  onClick={() => edit(tracking, option)}
+                >
+                  {t(`settings.linkTracking.mode.${option}`)}
+                </button>
+              ))}
+            </fieldset>
+          </Row>
+          <Row
+            label={t(labelKey(linkDomain))}
+            hint={t("settings.linkDomain.hint", { example: "links.example.com" })}
+            htmlFor={linkDomainId}
+            lock={lockOf(linkDomain)}
+          >
+            {field(linkDomain, linkDomainId, { className: "ui-mono", ltr: true })}
+          </Row>
         </Group>
         {error ? <FormError>{error.text}</FormError> : null}
       </>
@@ -1084,6 +1135,8 @@ export function labelKey(key: SettingKey): string {
   if (key === "graph.clientId") return "settings.graphClient.label"
   if (key === "graph.clientSecret") return "settings.graphSecret.label"
   if (key === "graph.mailbox") return "settings.graphMailbox.label"
+  if (key === "links.tracking") return "settings.linkTracking.label"
+  if (key === "links.domain") return "settings.linkDomain.label"
   if (key.startsWith("smtp2go.") || key.startsWith("failover.") || key === "mail.bounceAddress")
     return `settings.sending.${key}.label`
   return "settings.sessionDays.label"

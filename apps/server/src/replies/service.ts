@@ -39,11 +39,13 @@ import {
   storedFile,
   ticket,
   ticketParticipant,
+  trackedLink,
   upload,
 } from "../db/schema.ts"
 import { refreshDeliveryFlag } from "../delivery/service.ts"
 import { storedFilePath } from "../files/paths.ts"
 import { type JobQueue, SEND_REPLY, transactionWithJobs, UPLOAD_SCAN } from "../jobs/queue.ts"
+import { linkBase, ReplyLinks } from "../links/service.ts"
 import { contentIdsIn, sanitizeMailHtml } from "../mail/html.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
@@ -137,6 +139,8 @@ export class Replies {
     private readonly settings: Settings,
     private readonly jobs: JobQueue,
     private readonly filesDir: string,
+    /** The public URL: tracked links and download links use its origin when no link domain is set. */
+    private readonly publicUrl: URL,
   ) {}
 
   /** The agent's display name: the name an admin set, else the username. */
@@ -234,6 +238,7 @@ export class Replies {
       inReplyTo: string | null
       references: string[]
     } | null = null
+    let links: ReplyLinks | null = null
     if (isReply && from) {
       const parent = await this.#parent(t.id)
       const locale = await this.settings.get("general.defaultLocale")
@@ -251,7 +256,13 @@ export class Replies {
       // own files and a margin for the rest of the message.
       const imageBudget =
         Math.floor((MESSAGE_MAX_BYTES * 3) / 4) - files.reduce((sum, file) => sum + file.size, 0) - 1_000_000
-      const history = await this.#history(t.id, found.organizationName, from, Math.max(0, imageBudget))
+      // Links (plan 3.4): the agent's http and https links become tracked links while tracking is on; each file the
+      // history names gets a download link either way. Their rows are written with the reply below.
+      links = new ReplyLinks(
+        linkBase(await this.settings.get("links.domain"), this.publicUrl),
+        (await this.settings.get("links.tracking")) === "on",
+      )
+      const history = await this.#history(t.id, found.organizationName, from, Math.max(0, imageBudget), links)
       const mime = await buildReply({
         from: { address: from, name: `${authorName} (${found.organizationName})` },
         to: people.to,
@@ -271,6 +282,7 @@ export class Replies {
         fallbackDirection: locale === "he" ? "rtl" : "ltr",
         attachments,
         history,
+        link: links.url,
       }).catch((error: unknown) => {
         // Refused before anything is written or queued (plan 3.2).
         if (error instanceof MessageTooLarge) throw new Refusal("message_too_large", 400, { max: MESSAGE_MAX_BYTES })
@@ -338,6 +350,16 @@ export class Replies {
             position: people.to.length + position,
           })),
         ])
+        if (links?.rows.length)
+          await tx
+            .insert(trackedLink)
+            .values(
+              links.rows.map((link) =>
+                link.kind === "url"
+                  ? { messageId: row.id, code: link.code, kind: link.kind, url: link.url }
+                  : { messageId: row.id, code: link.code, kind: link.kind, partId: link.partId },
+              ),
+            )
         await this.jobs.sendIn(jobs, SEND_REPLY, { messageId: row.id })
       }
       await tx
@@ -378,7 +400,13 @@ export class Replies {
    * stored file clean, with an image type, within the same sizes; prepared (downscaled) with sharp, with a new content
    * ID in the From address's domain. Every other image of the stored HTML is left out when the email is drawn.
    */
-  async #history(ticketId: string, organizationName: string, from: string, imageBudget: number): Promise<Entry[]> {
+  async #history(
+    ticketId: string,
+    organizationName: string,
+    from: string,
+    imageBudget: number,
+    links: ReplyLinks,
+  ): Promise<Entry[]> {
     const accepted = this.db
       .select({ one: sql`1` })
       .from(outboxRecipient)
@@ -407,6 +435,7 @@ export class Replies {
     if (rows.length === 0) return []
     const parts = await this.db
       .select({
+        id: messagePart.id,
         messageId: messagePart.messageId,
         kind: messagePart.kind,
         fileName: messagePart.fileName,
@@ -451,9 +480,10 @@ export class Replies {
 
     const entries: Entry[] = rows.map((row) => {
       const own = parts.filter((part) => part.messageId === row.id)
+      // Each with its download link (plan 3.4): history holds no internal note, so no note's file gets one.
       const files = own
         .filter((part) => part.kind === "attachment" && part.sha256 && STORED.has(part.status))
-        .map((part) => cleanFileName(part.fileName ?? "file"))
+        .map((part) => ({ name: cleanFileName(part.fileName ?? "file"), href: links.file(part.id) }))
       const agent = row.authorUserId ? (names.get(row.authorUserId) ?? row.authorUserId) : null
       const customer = row.fromName?.trim() || row.fromAddress || "?"
       return {

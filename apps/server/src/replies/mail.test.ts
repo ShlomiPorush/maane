@@ -154,7 +154,13 @@ describe("the customer's email", () => {
 
   it("names the files of earlier messages without links, and gives the links in a message their underline", async () => {
     const history = [
-      entry({ html: '<p>See <a href="https://www.example.com/x">this</a></p>', files: ["invoice.pdf", "photo.jpg"] }),
+      entry({
+        html: '<p>See <a href="https://www.example.com/x">this</a></p>',
+        files: [
+          { name: "invoice.pdf", href: null },
+          { name: "photo.jpg", href: null },
+        ],
+      }),
     ]
     const html = (await parse(await buildReply(mail({ history }, "en")))).html || ""
     expect(html).toContain('Files: <span dir="ltr">invoice.pdf</span>, <span dir="ltr">photo.jpg</span>')
@@ -326,5 +332,64 @@ describe("the size budget", () => {
       { fileName: "big.bin", contentType: "application/octet-stream", content: Buffer.alloc(250_000) },
     ]
     await expect(buildReply(mail({ history, attachments }), limit)).rejects.toBeInstanceOf(MessageTooLarge)
+  })
+})
+
+describe("links in the customer's email (plan 3.4)", () => {
+  const tracked = (url: string) => `https://links.example.com/l/${encodeURIComponent(url).length}`
+
+  it("gives the agent's http and https links their tracked address in the HTML part only, keeping their look", async () => {
+    const html = `<p>Read <a href="https://www.example.com/guide?a=1&amp;b=2">the guide</a> or <a href="http://example.com/x">this</a>.</p><p><a href="mailto:help@example.com">mail us</a> <a href="tel:+15550100">call</a></p><blockquote><p><a href="https://example.com/quoted">quoted by the agent</a></p></blockquote>`
+    const seen: string[] = []
+    const link = (href: string) => {
+      seen.push(href)
+      return tracked(href)
+    }
+    const text = "Read the guide [https://www.example.com/guide?a=1&b=2] or this [http://example.com/x]."
+    const history = [entry({ html: '<p>Earlier: <a href="https://example.com/history">a link</a></p>' })]
+    const parsed = await parse(await buildReply(mail({ html, text, link, history }, "en")))
+    const out = parsed.html || ""
+    // The agent's own links, a blockquote it wrote included; never mailto or tel; never the quoted history.
+    expect(seen.sort()).toEqual(
+      ["https://www.example.com/guide?a=1&b=2", "http://example.com/x", "https://example.com/quoted"].sort(),
+    )
+    expect(out).toContain(
+      `<a href="${tracked("https://www.example.com/guide?a=1&b=2")}" style="text-decoration:underline !important">the guide</a>`,
+    )
+    expect(out).toContain('<a href="mailto:help@example.com" style="text-decoration:underline !important">mail us</a>')
+    expect(out).not.toContain("https://www.example.com/guide")
+    expect(out).toContain(
+      '<a href="https://example.com/history" style="text-decoration:underline !important">a link</a>',
+    )
+    // The text part keeps the links as written.
+    expect(parsed.text).toContain(text)
+    expect(parsed.text).not.toContain("links.example.com")
+  })
+
+  it("leaves the text part as it was without links, and the HTML links as written when nothing tracks them", async () => {
+    const html = '<p><a href="https://example.com/a">a</a></p>'
+    const text = "a [https://example.com/a]"
+    const plain = await parse(await buildReply(mail({ html, text }, "en")))
+    const withLinks = await parse(await buildReply(mail({ html, text, link: tracked }, "en")))
+    expect(withLinks.text).toBe(plain.text)
+    expect(plain.html).toContain('href="https://example.com/a"')
+  })
+
+  it("names history files with their download links in the HTML part, and by name only in the text part", async () => {
+    const history = [
+      entry({
+        text: "With files.",
+        files: [
+          { name: "invoice.pdf", href: "https://links.example.com/f/AAAAAAAAAAAAAAAAAAAAAA" },
+          { name: "notes.txt", href: null },
+        ],
+      }),
+    ]
+    const parsed = await parse(await buildReply(mail({ history }, "en")))
+    expect(parsed.html).toContain(
+      'Files: <a href="https://links.example.com/f/AAAAAAAAAAAAAAAAAAAAAA" style="text-decoration:underline !important"><span dir="ltr">invoice.pdf</span></a>, <span dir="ltr">notes.txt</span>',
+    )
+    expect(parsed.text).toContain("> Files: invoice.pdf, notes.txt")
+    expect(parsed.text).not.toContain("links.example.com")
   })
 })

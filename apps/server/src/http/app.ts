@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
+import type { HttpBindings } from "@hono/node-server"
 import { serveStatic } from "@hono/node-server/serve-static"
 import {
   AGENT_NAME_MAX,
@@ -23,15 +24,19 @@ import type { SetupWindow } from "../auth/setup-window.ts"
 import type { Db } from "../db/client.ts"
 import { auditLog, authUser, scannerCheck } from "../db/schema.ts"
 import { GRAPH_TEST, type JobQueue, SCANNER_SELF_TEST, SMTP_TEST } from "../jobs/queue.ts"
+import { Geo } from "../links/geo.ts"
+import { Links } from "../links/service.ts"
 import { errorFacts, log, loggedPath } from "../log.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { Organizations } from "../organizations/service.ts"
 import { Replies } from "../replies/service.ts"
 import { type Settings, SettingsError } from "../settings/service.ts"
+import { clientIp, rememberClient, trustOf } from "./client.ts"
 import { hookRoutes } from "./hooks.ts"
+import { linkRoutes } from "./links.ts"
 import { organizationRoutes } from "./organizations.ts"
 import { replyRoutes } from "./replies.ts"
-import { type ApiEnv, type AppUser, clientIp } from "./request.ts"
+import type { ApiEnv, AppUser } from "./request.ts"
 import { ticketRoutes } from "./tickets.ts"
 
 export interface AppContext {
@@ -49,6 +54,10 @@ export interface AppContext {
   onSettingsChanged?: () => Promise<void>
   /** The job queue: the server only queues jobs the worker runs, and reads their state. */
   jobs: JobQueue
+  /** MAANE_TRUSTED_PROXIES: only a request from one of these may name its client in X-Forwarded-For (the link routes). */
+  trustedProxies: string[]
+  /** MAANE_GEOIP_DIR: the read-only directory of the GeoLite2 City and ASN files, or null for no location. */
+  geoipDir: string | null
 }
 
 type User = AppUser
@@ -146,6 +155,14 @@ const CSP = [
 export function createApp(ctx: AppContext) {
   const app = new Hono<Env>()
 
+  // The client address, read once for every request (client.ts): the audit rows, the link routes, and Better Auth's
+  // hooks all ask `clientIp` for it.
+  const trust = trustOf(ctx.trustedProxies)
+  app.use("*", async (c, next) => {
+    rememberClient(c.req.raw, (c.env as Partial<HttpBindings> | undefined)?.incoming, trust)
+    await next()
+  })
+
   // On every answer, so no page of the UI is ever served without its Content Security Policy, however it is reached. A
   // route may declare its own policy for its successful answer (a message body, a file: SecurityHeaders in
   // tickets.ts); every other answer, a refusal or an error of that route included, gets the UI's.
@@ -173,6 +190,10 @@ export function createApp(ctx: AppContext) {
       return c.json({ ok: false, database: "unavailable" }, 503)
     }
   })
+
+  // Tracked links and download links (plan 3.4): public, before the UI's fallback.
+  const links = new Links(ctx.db, ctx.settings, new Geo(ctx.geoipDir))
+  app.route("/", linkRoutes(links, ctx.settings, ctx.filesDir))
 
   app.on(["GET", "POST"], "/api/auth/*", (c) => ctx.auth().handler(c.req.raw))
 
@@ -380,7 +401,7 @@ export function createApp(ctx: AppContext) {
   })
 
   api.route("/admin/organizations", organizationRoutes(new Organizations(ctx.db)))
-  const replies = new Replies(ctx.db, ctx.settings, ctx.jobs, ctx.filesDir)
+  const replies = new Replies(ctx.db, ctx.settings, ctx.jobs, ctx.filesDir, ctx.publicUrl)
   api.route("/", ticketRoutes(ctx.db, ctx.filesDir, replies))
   api.route("/", replyRoutes(ctx.db, ctx.settings, replies))
 

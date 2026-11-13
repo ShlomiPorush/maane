@@ -18,10 +18,12 @@ import {
   ADDRESS_KINDS,
   AUTOMATED_SIGNS,
   DELIVERY_STATUSES,
+  DEVICE_TYPES,
   GRAPH_PROBLEMS,
   INTAKE_MODES,
   INTAKE_OUTCOMES,
   INTAKE_REASONS,
+  LINK_TRACKING,
   MESSAGE_CONTENTS,
   MESSAGE_FLAGS,
   MESSAGES,
@@ -32,6 +34,7 @@ import {
   ROLES,
   SCANNER_CHECKS,
   SCANNER_POLICIES,
+  SCANNER_REASONS,
   SEND_PROBLEMS,
   SETTING_KEYS,
   SMTP_PROBLEMS,
@@ -333,6 +336,11 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "settings.sending.security.": SMTP_SECURITIES,
   "settings.sending.problem.": SMTP_PROBLEMS,
   "settings.sending.test.": PROVIDERS,
+  "settings.linkTracking.mode.": LINK_TRACKING,
+  "settings.linkTracking.explain.": LINK_TRACKING,
+  "links.kind.": ["url", "file"],
+  "links.device.": DEVICE_TYPES,
+  "links.scannerReason.": SCANNER_REASONS,
 }
 
 // --- Language policy: Hebrew only in he.json, bidirectional controls only as escapes ---

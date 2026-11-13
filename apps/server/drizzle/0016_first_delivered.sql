@@ -1,0 +1,1 @@
+ALTER TABLE "outbox_recipient" ADD COLUMN "first_delivered_at" timestamp with time zone;
