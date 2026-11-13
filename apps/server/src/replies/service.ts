@@ -120,6 +120,10 @@ function recipients(to: MailAddress[], cc: MailAddress[]): { to: MailAddress[]; 
   return { to: parsedTo, cc: parsedCc }
 }
 
+/** The bytes files take in a message as base64 (four characters for every three bytes), without line breaks. */
+export const encodedSize = (files: readonly { size: number }[]) =>
+  files.reduce((sum, file) => sum + Math.ceil(file.size / 3) * 4, 0)
+
 /** The statuses of a stored part (STORED_STATUSES): a file the history names. */
 const STORED = new Set<string>(STORED_STATUSES)
 
@@ -234,6 +238,10 @@ export class Replies {
       const messageId = newMessageId(from)
       const subject = replySubject(t.subject, t.number)
       const references = parent ? [...parent.references.slice(-20), parent.id] : []
+      // The reply's own files alone, as base64, already over the provider's limit: refused at once, before any byte is
+      // read or any message built (plan 3.2). The built message is checked again below.
+      if (encodedSize(files) > MESSAGE_MAX_BYTES)
+        throw new Refusal("message_too_large", 400, { max: MESSAGE_MAX_BYTES })
       const attachments: ReplyAttachment[] = []
       for (const file of files) attachments.push({ ...file, content: await this.#bytes(file.sha256) })
       const authorName = await this.#agentName(user.id)

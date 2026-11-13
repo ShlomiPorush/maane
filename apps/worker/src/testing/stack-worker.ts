@@ -38,7 +38,8 @@ const REFERENCE = new RegExp(`^\\S+: ${fromCodePoints(0x2066)}[A-Z0-9]{4}-[A-Z0-
 
 /** The layout of plan 3.2: the header line first, the code before the first block, history quoted, no dir="auto". */
 function layoutOf(html: string, text: string): "yes" | "no" {
-  const header = text.split(/\r?\n/)[0] === MESSAGES.he.mail.header
+  const line = text.split(/\r?\n/)[0]
+  const header = line === MESSAGES.he.mail.header || line === MESSAGES.en.mail.header
   const code = /<span dir="ltr">[A-Z0-9]{4}-[A-Z0-9]{4}<\/span>/.exec(html)
   const first = html.indexOf('class="email-avatar"')
   const quote = html.indexOf('<blockquote type="cite"')

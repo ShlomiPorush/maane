@@ -98,12 +98,18 @@ const STYLE = [
   // Links a mail client adds itself (dates, times, phone numbers) take the text's look; a message's own links keep
   // their underline inline with !important.
   ".email-bg a{color:inherit !important;text-decoration:none !important}",
+  // A message's own tables and images (a customer's layout table 700 pixels wide) stay inside the column on a phone.
+  ".email-content table{width:auto !important;max-width:100% !important}",
+  ".email-content img{max-width:100% !important;height:auto !important}",
   "@media (prefers-color-scheme:dark){",
   ".email-body,.email-bg{background-color:#141414 !important}",
   ".email-text{color:#EEEEEE !important}",
   ".email-muted{color:#AAAAAA !important}",
   ".email-line{border-color:#333333 !important}",
   ".email-avatar{background-color:#333333 !important;color:#EEEEEE !important}",
+  // A message's own colours (black text, white cells from Outlook) would read as a white slab or black on dark: in
+  // dark mode its content takes the email's colours.
+  ".email-content *{color:inherit !important;background-color:transparent !important;border-color:#333333 !important}",
   "}",
   // Outlook for Android marks what it recolours; descendant rules under the mark keep the surfaces neutral.
   "[data-ogsb] .email-bg{background-color:#FFFFFF !important}",
@@ -268,7 +274,7 @@ function blockHtml(
     `${isolated(entry.name, emailDir)}</div>` +
     `<div class="email-muted" style="font-size:12px;line-height:18px;color:${MUTED}">` +
     `<span dir="ltr">${escapeHtml(israelTime(entry.at))}</span></div></td></tr>` +
-    `<tr><td colspan="2" dir="${content.dir}" class="email-text" style="padding-top:10px;font-family:${FONT};` +
+    `<tr><td colspan="2" dir="${content.dir}" class="email-text email-content" style="padding-top:10px;font-family:${FONT};` +
     `font-size:15px;line-height:22px;color:${TEXT};word-break:break-word;overflow-wrap:anywhere">` +
     `${content.html}</td></tr></table>`
   )

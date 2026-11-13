@@ -17,7 +17,7 @@ RUN pnpm --filter @maane/server --filter @maane/worker --filter @maane/web run b
 # documents for bundlers) and the image gets it as installed above: sharp, its dependencies, and its prebuilt
 # libvips for this platform, copied out of pnpm's store without links.
 RUN mkdir -p /runtime/node_modules \
-  && cd node_modules/.pnpm/sharp@0.35.5*/node_modules \
+  && cd node_modules/.pnpm/sharp@[0-9]*/node_modules \
   && cp -r -L sharp detect-libc semver @img /runtime/node_modules/
 
 # The bundles need no node_modules but sharp's. Runs as node on a read-only root file system; only /tmp is written.

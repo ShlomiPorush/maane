@@ -175,6 +175,12 @@ describe("the customer's email", () => {
     for (const colour of colours) expect(colour.slice(0, 2).repeat(3)).toBe(colour)
     expect(html).toContain("@media (prefers-color-scheme:dark)")
     expect(html).toContain("[data-ogsb] .email-bg{background-color:#FFFFFF !important}")
+    // A message's own colours give way in dark mode, and its tables stay inside the column.
+    expect(html).toContain(
+      ".email-content *{color:inherit !important;background-color:transparent !important;border-color:#333333 !important}",
+    )
+    expect(html).toContain(".email-content table{width:auto !important;max-width:100% !important}")
+    expect(html).toMatch(/<td colspan="2" dir="ltr" class="email-text email-content"/)
   })
 })
 

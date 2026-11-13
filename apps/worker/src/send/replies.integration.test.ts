@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { SYSTEM } from "@maane/server/audit"
-import { auditLog, message, outbox, outboxRecipient, supportAddress, upload } from "@maane/server/db/schema"
+import { auditLog, message, outbox, outboxRecipient, storedFile, supportAddress, upload } from "@maane/server/db/schema"
 import { type JobQueue, openJobQueue, SEND_REPLY, UPLOAD_SCAN } from "@maane/server/jobs/queue"
 import { Organizations } from "@maane/server/organizations/service"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
@@ -8,7 +8,7 @@ import { Settings } from "@maane/server/settings/service"
 import { createTestApp } from "@maane/server/testing/app"
 import { nextIp, TestBrowser, testPassword } from "@maane/server/testing/browser"
 import { pdf, png } from "@maane/server/testing/files"
-import { MESSAGES, type SettingKey, type TicketView, userEmail } from "@maane/shared"
+import { MESSAGE_MAX_BYTES, MESSAGES, type SettingKey, type TicketView, userEmail } from "@maane/shared"
 import { and, eq } from "drizzle-orm"
 import { simpleParser } from "mailparser"
 import { PgBoss } from "pg-boss"
@@ -320,6 +320,30 @@ describe("a reply, end to end", () => {
     expect(text).toContain("> first.admin (Example Support) | ")
     expect(text).toContain("> The first answer.")
     expect(text).not.toContain("internal note")
+  })
+
+  it("refuses a reply whose own files are larger than the provider takes, before anything is written", async () => {
+    const admin = await firstAdmin()
+    const graphId = h.graph.add(
+      mime({
+        subject: "A large file",
+        text: { content: "See the file." },
+        attachments: [{ fileName: "video.bin", contentType: "application/octet-stream", content: Buffer.from("x") }],
+      }),
+    )
+    await h.round()
+    const found = await h.ticketOf(graphId)
+    if (!found) throw new Error("no ticket")
+    const part = (await view(admin, found.number)).messages[0]?.attachments[0]
+    if (!part) throw new Error("no part")
+    // The stored file as the provider would see it: larger than its limit once encoded. No byte is read for this.
+    await h.database.db.update(storedFile).set({ size: MESSAGE_MAX_BYTES })
+    const before = (await h.database.db.select({ id: message.id }).from(message)).length
+    const answer = await admin.call("POST", `/api/v1/tickets/${found.number}/messages`, reply({ parts: [part.id] }))
+    expect(answer.status).toBe(400)
+    expect(answer.json).toEqual({ error: "message_too_large", max: MESSAGE_MAX_BYTES })
+    expect((await h.database.db.select({ id: message.id }).from(message)).length).toBe(before)
+    expect(await boss.fetch(SEND_REPLY)).toEqual([])
   })
 
   it("writes one message for one click, however often the request is repeated", async () => {
