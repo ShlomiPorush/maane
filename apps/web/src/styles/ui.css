@@ -2620,6 +2620,65 @@ textarea.ui-input.ui-textarea {
   min-width: 0;
 }
 
+/* Clicks and downloads of a reply (plan 3.4): each link or file with its count and last time, then its clicks, the flag
+   first in reading order, the address left to right. */
+.ui-clicks {
+  display: grid;
+  gap: 8px;
+}
+.ui-clicks-links,
+.ui-clicks-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ui-fs-sm);
+}
+.ui-clicks-links > li {
+  display: grid;
+  gap: 4px;
+  padding: 6px 0;
+  border-top: 1px solid var(--ui-line);
+}
+.ui-clicks-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.ui-clicks-target {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.ui-clicks-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  padding: 4px 0;
+  padding-inline-start: 12px;
+}
+.ui-click-flag {
+  flex: none;
+  width: 20px;
+  height: 15px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px var(--ui-line);
+}
+.ui-click-flag-none {
+  background: var(--ui-line);
+}
+.ui-click-ip {
+  unicode-bidi: isolate;
+}
+.ui-click-place {
+  flex-basis: 100%;
+  padding-inline-start: 30px;
+}
+
 /* The composer: the fields, the editor with its tools, the signature, files, and the actions at its end. */
 .ui-composer-body {
   display: grid;

@@ -48,6 +48,7 @@ export type ScannerReason = (typeof SCANNER_REASONS)[number]
 
 /** One click on a link, or one download of a file. */
 export interface ClickView {
+  id: number
   at: string
   ip: string | null
   /** ISO 3166-1 alpha-2, in lower case, or null. */

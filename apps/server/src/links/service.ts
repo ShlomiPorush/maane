@@ -171,6 +171,7 @@ export async function linkViews(
     }
     const device = isDevice(click.device) ? click.device : null
     const entry: ClickView = {
+      id: click.id,
       at: click.at.toISOString(),
       ip: click.ip,
       country: click.country,

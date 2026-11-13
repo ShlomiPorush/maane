@@ -4,7 +4,8 @@
 // "Show remote images"). What a scan blocked shows as blocked with its signature, never its content. Files show
 // their scan status in words; a clean image, PDF, or text file previews in the shared dialog, and every stored file
 // downloads. A ticket outside the user's organizations reads as not found, as the server answers. Replies and internal
-// notes (plan 3.1) show their author, a reply where its sending is per recipient, and the composer comes last.
+// notes (plan 3.1) show their author, a reply where its sending is per recipient and which of its links were clicked
+// and history files downloaded (plan 3.4), and the composer comes last.
 
 import type { AttachmentView, MessageView, TicketView } from "@maane/shared"
 import { Download, Eye, Paperclip } from "lucide-react"
@@ -21,6 +22,7 @@ import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { Banner, ErrorState, Loading, StaleNote } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
 import { Tag } from "../ui/tags.tsx"
+import { Clicks } from "./tickets/Clicks.tsx"
 import { Composer } from "./tickets/Composer.tsx"
 import { Delivery } from "./tickets/Delivery.tsx"
 import { FilePreview } from "./tickets/FilePreview.tsx"
@@ -257,6 +259,7 @@ function MessageCard({
       {message.delivery ? (
         <Delivery messageId={message.id} ticketNumber={ticketNumber} delivery={message.delivery} />
       ) : null}
+      {message.links?.length ? <Clicks links={message.links} /> : null}
     </article>
   )
 }

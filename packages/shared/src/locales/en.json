@@ -1152,7 +1152,6 @@
       "two": "{count} times",
       "other": "{count} times"
     },
-    "last": "Last {time}",
     "noIp": "No address",
     "country": "Country {code}",
     "unknownPlace": "Location unknown",
