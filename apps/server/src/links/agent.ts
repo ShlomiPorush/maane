@@ -4,7 +4,8 @@
 // names a browser, an OS, and a device family, but no kind of device: the kind is read from those (`deviceType`).
 
 import { readFileSync } from "node:fs"
-import { createRequire } from "node:module"
+// Named apart from createRequire: the server bundle's banner declares that name already (package.json, build).
+import { createRequire as requireFrom } from "node:module"
 import { CLICK_BOUNDS, type DeviceType } from "@maane/shared"
 import uapParser from "uap-ref-impl"
 import { parse as parseYaml } from "yaml"
@@ -34,7 +35,7 @@ let parser: ReturnType<typeof uapParser> | undefined
 /** The parser, built once from the rules uap-core ships (read from its package, which the image's node_modules holds). */
 function uap() {
   if (!parser) {
-    const file = createRequire(import.meta.url).resolve("uap-core/regexes.yaml")
+    const file = requireFrom(import.meta.url).resolve("uap-core/regexes.yaml")
     parser = uapParser(parseYaml(readFileSync(file, "utf8")))
   }
   return parser
