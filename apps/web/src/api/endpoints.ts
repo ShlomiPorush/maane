@@ -3,12 +3,15 @@
 import type {
   AddressKind,
   GraphTestView,
+  IntakeLog,
   Locale,
   Role,
   ScannerStatusView,
   ScannerTestView,
   SettingKey,
   SettingView,
+  TicketList,
+  TicketView,
 } from "@maane/shared"
 import { query, request } from "./client.ts"
 
@@ -81,7 +84,24 @@ export const qk = {
   sessions: ["sessions"] as const,
   organizations: ["organizations"] as const,
   organization: (id: string) => ["organizations", id] as const,
+  tickets: (filters: TicketFilters) => ["tickets", filters.organization ?? "", filters.flagged ? 1 : 0] as const,
+  ticket: (number: number) => ["ticket", number] as const,
+  intake: (filters: IntakeFilters) => ["intake", filters.mode ?? "", filters.flagged ? 1 : 0] as const,
 }
+
+/** The ticket list's filters, as the page keeps them in its address. */
+export type TicketFilters = { organization?: string; flagged?: boolean }
+/** The intake log's filters. */
+export type IntakeFilters = { mode?: "listening" | "live"; flagged?: boolean }
+
+/**
+ * Where a message body, a download, and a preview are served: the frame and the links use these addresses. The body's
+ * address carries its content version, so the frame reloads once a waiting part of it was decided.
+ */
+export const bodyUrl = (messageId: string, version: string, remoteImages: boolean) =>
+  `/api/v1/messages/${encodeURIComponent(messageId)}/body${query({ v: version, images: remoteImages ? 1 : undefined })}`
+export const downloadUrl = (attachmentId: string) => `/api/v1/files/${encodeURIComponent(attachmentId)}`
+export const previewUrl = (attachmentId: string) => `/api/v1/files/${encodeURIComponent(attachmentId)}/preview`
 
 export const api = {
   setupStatus: () => request<SetupStatus>("GET", "/api/setup/status"),
@@ -114,6 +134,17 @@ export const api = {
     request<{ ok: true }>("DELETE", `${at(id)}/addresses/${encodeURIComponent(addressId)}`),
   setDefaultAddress: (id: string, addressId: string) =>
     request<{ ok: true }>("PUT", `${at(id)}/addresses/${encodeURIComponent(addressId)}/default`),
+  tickets: (filters: TicketFilters, after: string | null) =>
+    request<TicketList>(
+      "GET",
+      `/tickets${query({ organization: filters.organization, flagged: filters.flagged ? 1 : undefined, after })}`,
+    ),
+  ticket: (number: number) => request<TicketView>("GET", `/tickets/${number}`),
+  intake: (filters: IntakeFilters, after: string | null) =>
+    request<IntakeLog>(
+      "GET",
+      `/intake${query({ mode: filters.mode, flagged: filters.flagged ? 1 : undefined, after })}`,
+    ),
   checkAddress: (address: string) =>
     request<AddressCheck>("GET", `${ORGANIZATIONS}/address-check${query({ address })}`),
 }

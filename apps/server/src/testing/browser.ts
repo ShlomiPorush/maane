@@ -57,6 +57,13 @@ export class TestBrowser {
     return { status: response.status, json }
   }
 
+  /** A GET with the cookies, answered as the Response itself: for headers and bodies that are not JSON. */
+  get(path: string): Promise<Response> {
+    const headers: Record<string, string> = { "x-forwarded-for": this.ip }
+    if (this.cookies.size > 0) headers.cookie = [...this.cookies].map(([n, v]) => `${n}=${v}`).join("; ")
+    return Promise.resolve(this.fetch(new Request(`${this.origin}${path}`, { headers })))
+  }
+
   setup(username: string, password: string): Promise<Answer> {
     return this.call("POST", "/api/auth/sign-up/email", {
       name: username,

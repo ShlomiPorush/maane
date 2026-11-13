@@ -40,9 +40,9 @@ test.describe("desktop", () => {
     // again in about 150 tries of this sequence, so its cause is not known.
     await expect(page.getByText(AGENT, { exact: true })).toBeVisible()
 
-    // The organization: Add organization opens it once it exists.
+    // The organization: Add organization opens it once it exists. The stack stage's intake made two already.
     await page.goto("/organizations")
-    await expect(page.getByText(he("organizations.empty"), { exact: true })).toBeVisible()
+    await expect(page.locator('a[data-organization="Example Alpha"]')).toBeVisible()
     await page.getByRole("button", { name: he("organizations.create"), exact: true }).click()
     const create = page.getByRole("dialog")
     await create.getByLabel(he("organizations.name"), { exact: true }).fill(ORGANIZATION)

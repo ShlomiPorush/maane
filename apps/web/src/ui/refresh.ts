@@ -5,6 +5,7 @@
 
 import {
   type InfiniteData,
+  keepPreviousData,
   type QueryKey,
   type UseInfiniteQueryResult,
   type UseQueryResult,
@@ -43,6 +44,8 @@ export function usePageInfiniteQuery<P, C>(options: {
   nextCursor: (page: P) => C | null
   every: number
   enabled?: boolean
+  /** A list whose key follows its filters: the rows shown stay until the new answer replaces them (TB-5). */
+  keepPrevious?: boolean
 }): UseInfiniteQueryResult<InfiniteData<P, C | null>> {
   return useInfiniteQuery({
     queryKey: options.queryKey,
@@ -50,6 +53,7 @@ export function usePageInfiniteQuery<P, C>(options: {
     initialPageParam: null as C | null,
     getNextPageParam: (last) => options.nextCursor(last) ?? undefined,
     enabled: options.enabled,
+    placeholderData: options.keepPrevious ? keepPreviousData : undefined,
     refetchInterval: options.every,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,

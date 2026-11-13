@@ -2,16 +2,17 @@
 // the sidebar's column, then in the page's card the fold toggle (above 1100px), the trail with the page title, and
 // the page's own actions. Above 1100px a 240px sidebar on the grey canvas that folds into the 72px icon rail,
 // remembered in this browser; from 761 to 1100px always the rail. The sidebar foot holds the account menu, the
-// language and the theme buttons. Up to 760px a slim top bar with the account menu, and a bottom tab bar with every
-// page of the navigation (at most five, so no More sheet).
+// language and the theme buttons. Up to 760px a slim top bar with the account menu, and a bottom tab bar with the
+// pages of the navigation: all of them when they are five or fewer, else the first four and More, a menu of the rest.
 
-import { ChevronRight } from "lucide-react"
-import { useState } from "react"
-import { Link, NavLink, Outlet } from "react-router"
+import { ChevronRight, Ellipsis } from "lucide-react"
+import { useRef, useState } from "react"
+import { Link, Outlet, useLocation } from "react-router"
 import { useI18n } from "../i18n/i18n.tsx"
+import { Menu } from "../ui/Menu.tsx"
 import { ChromeContext } from "./chrome.tsx"
 import { useNavFolded } from "./navFold.ts"
-import { navFor } from "./navigation.ts"
+import { type NavPage, navFor, navPageFor } from "./navigation.ts"
 import { PageMetaProvider, useCurrentMeta } from "./pageMeta.tsx"
 import { AccountMenu, LanguageButton, NavToggle, ThemeButton } from "./ShellTools.tsx"
 import { useMe } from "./session.ts"
@@ -29,6 +30,8 @@ function ShellFrame() {
   const nav = useNavFolded()
   const me = useMe()
   const pages = navFor(me.data?.role)
+  // The page a path belongs to (a ticket belongs to the ticket list), marked current in both navigations.
+  const current = navPageFor(useLocation().pathname)
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null)
   return (
     <ChromeContext.Provider value={{ actionsSlot }}>
@@ -40,16 +43,16 @@ function ShellFrame() {
         <nav className="ui-sidenav" aria-label={t("nav.main")}>
           <div className="ui-nav">
             {pages.map((page) => (
-              <NavLink
+              <Link
                 key={page.id}
                 to={page.to}
-                end={page.to === "/"}
+                aria-current={current?.id === page.id ? "page" : undefined}
                 className="ui-nav-item"
                 title={t(`nav.${page.id}`)}
               >
                 <page.icon aria-hidden="true" />
                 <span className="ui-nav-label">{t(`nav.${page.id}`)}</span>
-              </NavLink>
+              </Link>
             ))}
           </div>
           <div className="ui-side-foot">
@@ -63,16 +66,66 @@ function ShellFrame() {
         <main className="ui-content" id="main">
           <Outlet />
         </main>
-        <nav className="ui-tabbar" aria-label={t("nav.main")}>
-          {pages.map((page) => (
-            <NavLink key={page.id} to={page.to} end={page.to === "/"} className="ui-tabbar-item">
-              <page.icon aria-hidden="true" />
-              <span>{t(`nav.${page.id}`)}</span>
-            </NavLink>
-          ))}
-        </nav>
+        <TabBar pages={pages} />
       </div>
     </ChromeContext.Provider>
+  )
+}
+
+/** The phone tab bar holds five places at most: past five, the fifth is More, a menu of the pages that do not fit. */
+const TABS = 5
+
+function TabBar({ pages }: { pages: readonly NavPage[] }) {
+  const { t } = useI18n()
+  const { pathname } = useLocation()
+  const moreRef = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(false)
+  const shown = pages.length > TABS ? pages.slice(0, TABS - 1) : pages
+  const rest = pages.length > TABS ? pages.slice(TABS - 1) : []
+  const current = navPageFor(pathname)
+  const restCurrent = rest.some((page) => page.id === current?.id)
+  return (
+    <nav className="ui-tabbar" aria-label={t("nav.main")}>
+      {shown.map((page) => (
+        <Link
+          key={page.id}
+          to={page.to}
+          aria-current={current?.id === page.id ? "page" : undefined}
+          className="ui-tabbar-item"
+        >
+          <page.icon aria-hidden="true" />
+          <span>{t(`nav.${page.id}`)}</span>
+        </Link>
+      ))}
+      {rest.length > 0 ? (
+        <button
+          ref={moreRef}
+          type="button"
+          className={restCurrent ? "ui-tabbar-item is-current" : "ui-tabbar-item"}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => setOpen(true)}
+        >
+          <Ellipsis aria-hidden="true" />
+          <span>{t("nav.more")}</span>
+        </button>
+      ) : null}
+      {open ? (
+        <Menu
+          anchor={moreRef}
+          label={t("nav.more")}
+          side="top"
+          align="end"
+          onClose={() => setOpen(false)}
+          entries={rest.map((page) => ({
+            kind: "link" as const,
+            label: t(`nav.${page.id}`),
+            icon: <page.icon aria-hidden="true" />,
+            to: page.to,
+          }))}
+        />
+      ) : null}
+    </nav>
   )
 }
 

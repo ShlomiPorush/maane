@@ -16,13 +16,22 @@ import { join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   ADDRESS_KINDS,
+  AUTOMATED_SIGNS,
   GRAPH_PROBLEMS,
   INTAKE_MODES,
+  INTAKE_OUTCOMES,
+  INTAKE_REASONS,
+  MESSAGE_CONTENTS,
+  MESSAGE_FLAGS,
   MESSAGES,
+  PART_STATUSES,
   ROLES,
   SCANNER_CHECKS,
   SCANNER_POLICIES,
   SETTING_KEYS,
+  TEXT_FIELDS,
+  TICKET_FLAGS,
+  TICKET_STATUSES,
 } from "@maane/shared"
 import { describe, expect, it } from "vitest"
 import { ERROR_TEXT, STATUS_TEXT } from "./api/errors.ts"
@@ -177,7 +186,6 @@ function floatingCssViolations(css: string): string[] {
 
 /** Pages without a refresh of their own, each with its reason. */
 const NO_REFRESH: Record<string, string> = {
-  HomePage: "says there are no tickets yet; it reads nothing until tickets arrive in phase 2",
   NotFoundPage: "says the address names no page; it reads nothing",
   LoginPage: "signs in; it reads whether a user exists and the session once, on opening",
   SetupPage: "creates the first admin; it reads the setup state on opening and after each step",
@@ -292,6 +300,16 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "settings.scannerPolicy.explain.": SCANNER_POLICIES,
   "settings.scanner.check.": SCANNER_CHECKS,
   "settings.graph.problem.": GRAPH_PROBLEMS,
+  "ticket.status.": TICKET_STATUSES,
+  "ticket.content.": MESSAGE_CONTENTS.filter((content) => content !== "parsed"),
+  "ticket.field.": TEXT_FIELDS,
+  "scan.status.": PART_STATUSES,
+  "scan.hint.": PART_STATUSES.filter((status) => status !== "clean"),
+  "flag.": [...MESSAGE_FLAGS, ...TICKET_FLAGS],
+  "intake.mode.": INTAKE_MODES,
+  "intake.outcome.": INTAKE_OUTCOMES,
+  "intake.outcomeWould.": INTAKE_OUTCOMES,
+  "intake.reason.": INTAKE_REASONS,
 }
 
 // --- Language policy: Hebrew only in he.json, bidirectional controls only as escapes ---
@@ -605,5 +623,79 @@ describe("audit actions", () => {
     })
     expect([...planted.actions].sort()).toEqual(["planted.map", "planted.no", "planted.yes"])
     expect(planted.unread).toHaveLength(3)
+  })
+})
+
+// --- Intake reasons: every reason the worker's intake records can carry has its words on the intake log ---
+
+/** The expressions intake builds a reason from, and every code each can give. */
+const REASON_EXPRESSIONS: Record<string, readonly string[]> = {
+  "msg.content": MESSAGE_CONTENTS.filter((content) => content !== "parsed"),
+  "classification.signs.join()": AUTOMATED_SIGNS,
+}
+
+/**
+ * The reasons the worker can write into an intake record. Only intake/process.ts inserts one (another file that does is
+ * reported); its reasons are the literals after `reason:` and given to `linkReason`, and the codes of the expressions
+ * listed above. A reason built any other way is reported, so a new one cannot hide from the check. A type annotation
+ * (`reason: TicketFlag`) is not a value.
+ */
+function intakeReasonsWritten(sources: Record<string, string>): { reasons: Set<string>; unread: string[] } {
+  const reasons = new Set<string>()
+  const unread: string[] = []
+  for (const [file, raw] of Object.entries(sources)) {
+    const text = code(raw).replaceAll('.join(",")', ".join()")
+    if (!file.endsWith("intake/process.ts")) {
+      if (text.replaceAll(" ", "").includes("insert(intakeRecord"))
+        unread.push(`${file}: writes an intake record outside process.ts`)
+      continue
+    }
+    for (const match of text.matchAll(/\blinkReason\s*=\s*"([^"]+)"/g)) reasons.add(match[1] ?? "")
+    for (const match of text.matchAll(/\breason:\s*([^,\n}]+)/g)) {
+      const expression = (match[1] ?? "").trim()
+      if (/^[A-Z]/.test(expression)) continue
+      for (const literal of expression.matchAll(/"([a-z_]+)"/g)) reasons.add(literal[1] ?? "")
+      const rest = expression
+        .replace(/"[^"]*"/g, "")
+        .replace(/\?\?/g, "")
+        .replace(/\s+/g, "")
+      if (rest === "" || rest === "linkReason") continue
+      const codes = REASON_EXPRESSIONS[rest]
+      if (codes) for (const value of codes) reasons.add(value)
+      else unread.push(`${file}: an intake reason from ${expression}; use a literal or list the expression`)
+    }
+  }
+  return { reasons, unread }
+}
+
+describe("intake reasons", () => {
+  const { reasons, unread } = intakeReasonsWritten(serverFiles())
+
+  it("every reason intake can write is listed, so the intake log has its words", () => {
+    expect(unread).toEqual([])
+    expect([...reasons].filter((reason) => !(INTAKE_REASONS as readonly string[]).includes(reason))).toEqual([])
+  })
+
+  it("reads the literals and the listed expressions (the scan itself works)", () => {
+    for (const reason of ["copy", "process_failed", "no_default_address", "sender_not_participant", "unavailable"])
+      expect(reasons.has(reason)).toBe(true)
+    expect(reasons.has("auto_submitted")).toBe(true)
+  })
+
+  it("catches a planted reason and one built another way", () => {
+    const planted = intakeReasonsWritten({
+      "intake/process.ts": `finish(patch, { outcome: "unreadable", reason: "planted_reason" })
+        linkReason = "planted_link"
+        await tx.insert(intakeRecord).values({ reason: pick(row) })
+        link(tx: Tx, reason: TicketFlag): void
+        finish(patch, { outcome: "automated", reason: classification.signs.join(",") })`,
+      "intake/other.ts": 'await tx.insert(intakeRecord).values({ reason: "elsewhere" })',
+    })
+    expect([...planted.reasons].filter((reason) => reason.startsWith("planted")).sort()).toEqual([
+      "planted_link",
+      "planted_reason",
+    ])
+    expect(planted.reasons.has("auto_submitted")).toBe(true)
+    expect(planted.unread).toHaveLength(2)
   })
 })

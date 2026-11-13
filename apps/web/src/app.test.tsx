@@ -2,7 +2,7 @@
 // and role lands (signed out, two-factor off, agent, admin), the setup screen's states, sign-in with its second
 // step, and a session that ends while a page is open. Texts are read from the locale files.
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { createMemoryRouter, RouterProvider } from "react-router"
@@ -12,6 +12,10 @@ import { setTransport, type TransportRequest, type TransportResponse } from "./a
 import { ERROR_VARS } from "./api/errors.ts"
 import { I18nProvider, translate } from "./i18n/i18n.tsx"
 import { ROUTES } from "./routes.tsx"
+
+/** pdf.js, as the PDF preview loads it (pages/tickets/pdf.ts): component tests never run it. */
+const pdf = vi.hoisted(() => ({ loadPdfJs: vi.fn(), openPdf: vi.fn() }))
+vi.mock("./pages/tickets/pdf.ts", () => ({ loadPdfJs: pdf.loadPdfJs, openPdf: pdf.openPdf }))
 
 const auth = vi.hoisted(() => ({
   listUsers: vi.fn(),
@@ -88,13 +92,15 @@ const signedOut: TransportResponse = { status: 401, body: { error: "unauthorized
 const totpRequired: TransportResponse = { status: 403, body: { error: "totp_required" } }
 const admin = ok({ id: "u1", username: "first.admin", role: "admin" })
 const agent = ok({ id: "u2", username: "agent.one", role: "agent" })
+const noTickets = ok({ tickets: [], next: null, organizations: [] })
 
 async function renderAt(path: string, answers: Answers): Promise<void> {
   requests = []
   setTransport(async (request) => {
     requests.push(request)
     const path = request.url.split("?")[0] ?? ""
-    const answer = answers[path]
+    // The home page is the ticket list: an empty one unless the test answers it.
+    const answer = answers[path] ?? (path === "/api/v1/tickets" ? noTickets : undefined)
     if (!answer) return { status: 404, body: { error: "not_found" } }
     return typeof answer === "function" ? answer(request) : answer
   })
@@ -128,6 +134,8 @@ function type(input: HTMLInputElement, value: string) {
 beforeEach(() => {
   localStorage.clear()
   for (const fn of Object.values(auth)) fn.mockReset()
+  pdf.loadPdfJs.mockReset()
+  pdf.openPdf.mockReset()
   auth.listSessions.mockResolvedValue({ data: [], error: null })
   session.set({ session: { id: "current" }, user: { id: "u1", role: "admin" } })
 })
@@ -155,11 +163,12 @@ describe("the session gate", () => {
     await vi.waitFor(() => expect(text()).toContain(he("enroll.required")))
   })
 
-  it("shows an admin every page in the navigation and the empty home", async () => {
+  it("shows an admin every page in the navigation and the empty ticket list", async () => {
     await renderAt("/", { "/api/setup/status": status(), "/api/v1/me": admin })
-    await vi.waitFor(() => expect(text()).toContain(he("home.emptyTitle")))
+    await vi.waitFor(() => expect(text()).toContain(he("tickets.empty")))
     const nav = document.querySelector(".ui-sidenav")?.textContent ?? ""
-    for (const id of ["home", "organizations", "users", "settings", "audit"]) expect(nav).toContain(he(`nav.${id}`))
+    for (const id of ["home", "intake", "organizations", "users", "settings", "audit"])
+      expect(nav).toContain(he(`nav.${id}`))
   })
 
   it("hides admin pages from an agent and locks them on a direct address, without reading them", async () => {
@@ -169,7 +178,8 @@ describe("the session gate", () => {
     await vi.waitFor(() => expect(text()).toContain(he("adminOnly.title")))
     const nav = document.querySelector(".ui-sidenav")?.textContent ?? ""
     expect(nav).toContain(he("nav.home"))
-    for (const id of ["organizations", "users", "settings", "audit"]) expect(nav).not.toContain(he(`nav.${id}`))
+    for (const id of ["intake", "organizations", "users", "settings", "audit"])
+      expect(nav).not.toContain(he(`nav.${id}`))
     expect(auth.listUsers).not.toHaveBeenCalled()
   })
 
@@ -1151,7 +1161,7 @@ describe("a session that answers behind Maane's API", () => {
       }) as never,
     }
     await renderAt("/", answers)
-    await vi.waitFor(() => expect(text()).toContain(he("home.emptyTitle")))
+    await vi.waitFor(() => expect(text()).toContain(he("tickets.empty")))
     await new Promise((resolve) => setTimeout(resolve, 300))
     expect(meReads).toBeLessThanOrEqual(2)
   })
@@ -1297,5 +1307,382 @@ describe("identity switches that still reset", () => {
     await act(async () => session.set({ session: { id: "A" }, user: { id: "u1", role: "admin" } }))
     await vi.waitFor(() => expect(reads).toBeGreaterThan(caughtUp))
     await vi.waitFor(() => expect(text()).toContain("agent.one"))
+  })
+})
+
+describe("tickets", () => {
+  const ORG_A = "0d7c6f0e-6a55-4b8e-9c55-5f0b6a3e2a11"
+  const ORG_B = "1e8d7a1f-7b66-4c9f-8d66-6a1c7b4f3b22"
+  const MESSAGE = "4b0f3c2d-1a2b-4c3d-8e4f-5a6b7c8d9e01"
+  // Hebrew from code points: apps/web holds no Hebrew.
+  const SHALOM = String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)
+  const when = "2026-11-12T08:00:00.000Z"
+  const button = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+  const summary = (number: number, over: Record<string, unknown> = {}) => ({
+    number,
+    subject: `${SHALOM} ${number}`,
+    status: "new",
+    reviewFlags: [],
+    organization: { id: ORG_A, name: "Alpha" },
+    customer: { address: "dana@example.com", name: "Dana Customer" },
+    messages: 1,
+    createdAt: when,
+    lastActivityAt: when,
+    ...over,
+  })
+  const list = (tickets: unknown[]) =>
+    ok({
+      tickets,
+      next: null,
+      organizations: [
+        { id: ORG_A, name: "Alpha" },
+        { id: ORG_B, name: "Beta" },
+      ],
+    })
+  const file = (over: Record<string, unknown>) => ({
+    id: "f0",
+    kind: "attachment",
+    fileName: "file.bin",
+    size: 2048,
+    status: "clean",
+    signature: null,
+    blockedBy: null,
+    unavailableReason: null,
+    detectedType: null,
+    preview: null,
+    download: true,
+    ...over,
+  })
+  const view = (version = "v1") =>
+    ok({
+      ticket: {
+        number: 7,
+        referenceCode: "ABCD-EFGH",
+        subject: `${SHALOM} subject`,
+        status: "open",
+        reviewFlags: ["sender_not_participant"],
+        organization: { id: ORG_A, name: "Alpha" },
+        supportAddress: "help@example.com",
+        createdAt: when,
+        lastActivityAt: when,
+      },
+      participants: [{ address: "dana@example.com", name: "Dana Customer" }],
+      links: [{ number: 3, reason: "sender_not_participant" }],
+      messages: [
+        {
+          id: MESSAGE,
+          receivedAt: when,
+          sentAt: when,
+          from: { address: "dana@example.com", name: "Dana Customer" },
+          to: [{ address: "help@example.com", name: null }],
+          cc: [],
+          subject: "Hello",
+          content: "parsed",
+          reviewFlags: ["blocked_content"],
+          body: "html",
+          remoteImages: 2,
+          bodyLines: 4,
+          bodyVersion: version,
+          fields: [{ field: "text", status: "infected", signature: "Eicar-Signature" }],
+          attachments: [
+            file({ id: "f1", fileName: "photo.png", detectedType: "image/png", preview: "image" }),
+            file({
+              id: "f2",
+              fileName: "invoice.pdf",
+              status: "infected",
+              signature: "Win.Test.EICAR_HDB-1",
+              download: false,
+            }),
+            file({ id: "f3", fileName: "drawing.svg", detectedType: "application/octet-stream" }),
+            file({ id: "f4", fileName: "copy.pdf", detectedType: "application/pdf", preview: "pdf" }),
+          ],
+        },
+      ],
+    })
+
+  it("lists tickets across organizations, and keeps the filters in the address", async () => {
+    await renderAt("/", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets": (request) =>
+        request.url.includes("flagged=1")
+          ? list([summary(5, { reviewFlags: ["possibly_automated"] })])
+          : list([summary(9), summary(5, { reviewFlags: ["possibly_automated"] })]),
+    })
+    const row = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLAnchorElement>('a[data-number="9"]')
+      expect(found).not.toBeNull()
+      return found as HTMLAnchorElement
+    })
+    expect(row.getAttribute("href")).toBe("/tickets/9")
+    expect(row.querySelector('bdi[dir="auto"]')?.textContent).toBe(`${SHALOM} 9`)
+    expect(row.querySelector('bdi[dir="ltr"]')?.textContent).toBe("#9")
+    expect(row.textContent).toContain("Dana Customer")
+    expect(row.textContent).toContain("Alpha")
+    expect(row.textContent).toContain(he("ticket.status.new"))
+    const flagged = document.querySelector('a[data-number="5"]')
+    expect(flagged?.getAttribute("data-tone")).toBe("warn")
+    expect(flagged?.textContent).toContain(he("flag.possibly_automated"))
+
+    await act(async () => button(he("tickets.needsReview"))?.click())
+    await vi.waitFor(() => expect(where()).toBe("/?review=1"))
+    await vi.waitFor(() => expect(document.querySelector('a[data-number="9"]')).toBeNull())
+    expect(requests.some((r) => r.url === "/api/v1/tickets?flagged=1")).toBe(true)
+
+    // The rows and the filters stay while the next answer is on its way (TB-5).
+    const select = document.querySelector<HTMLSelectElement>(".ui-filters select") as HTMLSelectElement
+    expect(select).not.toBeNull()
+    await act(async () => {
+      select.value = ORG_B
+      select.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    await vi.waitFor(() => expect(where()).toBe(`/?review=1&organization=${ORG_B}`))
+    expect(requests.some((r) => r.url === `/api/v1/tickets?organization=${ORG_B}&flagged=1`)).toBe(true)
+  })
+
+  it("says when no ticket matches the filters, and clears them", async () => {
+    await renderAt("/?review=1", {
+      "/api/setup/status": status(),
+      "/api/v1/me": agent,
+      "/api/v1/tickets": list([]),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("tickets.emptyFiltered")))
+    await act(async () => button(he("tickets.clearFilters"))?.click())
+    await vi.waitFor(() => expect(where()).toBe("/"))
+  })
+
+  it("shows a ticket's messages in a sandboxed frame, what was blocked, and each file's status in words", async () => {
+    await renderAt("/tickets/7", { "/api/setup/status": status(), "/api/v1/me": admin, "/api/v1/tickets/7": view() })
+    const frame = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLIFrameElement>("iframe.ui-mail-frame")
+      expect(found).not.toBeNull()
+      return found as HTMLIFrameElement
+    })
+    expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?v=v1`)
+    // Links open in a new tab that leaves the sandbox; nothing in the frame runs or reaches Maane.
+    expect(frame.getAttribute("sandbox")).toBe("allow-popups allow-popups-to-escape-sandbox")
+    expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer")
+    expect(frame.style.height).toBe("140px")
+    expect(text()).toContain(translate("he", "ticket.imagesHidden.two", { count: "2" }))
+    await act(async () => button(he("ticket.showImages"))?.click())
+    expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?v=v1&images=1`)
+    expect(text()).toContain(he("ticket.imagesShown"))
+
+    // The message's own review flag, and the blocked text: its words and its signature, never its content.
+    expect(document.querySelector(".ui-message-head")?.textContent).toContain(he("flag.blocked_content"))
+    const notice = document.querySelector('[data-field="text"]')
+    expect(notice?.textContent).toContain(he("scan.status.infected"))
+    expect(notice?.querySelector('bdi[dir="ltr"]')?.textContent).toBe("Eicar-Signature")
+    // Files: a clean image previews and downloads, a blocked one does neither, a drawing only downloads.
+    const photo = document.querySelector('[data-file="photo.png"]') as HTMLElement
+    expect(photo.textContent).toContain(he("scan.status.clean"))
+    expect(photo.querySelector("a[download]")?.getAttribute("href")).toBe("/api/v1/files/f1")
+    const blocked = document.querySelector('[data-file="invoice.pdf"]') as HTMLElement
+    expect(blocked.textContent).toContain(he("scan.status.infected"))
+    expect(blocked.textContent).toContain("Win.Test.EICAR_HDB-1")
+    expect(blocked.querySelector("a[download]")).toBeNull()
+    expect(blocked.querySelector("button")).toBeNull()
+    const drawing = document.querySelector('[data-file="drawing.svg"]') as HTMLElement
+    expect(drawing.querySelector("a[download]")).not.toBeNull()
+    expect(drawing.querySelector("button")).toBeNull()
+    // The ticket's facts: the address left to right, the linked ticket, the flags.
+    expect(document.querySelector('.ui-facts bdi[dir="ltr"]')?.textContent).toBe("help@example.com")
+    expect(document.querySelector('.ui-facts a[href="/tickets/3"]')).not.toBeNull()
+    expect(text()).toContain(he("flag.sender_not_participant"))
+
+    await act(async () => (photo.querySelector("button") as HTMLButtonElement).click())
+    const dialog = await vi.waitFor(() => {
+      const found = document.querySelector('[role="dialog"]')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(dialog.textContent).toContain("photo.png")
+    expect(dialog.querySelector("img")?.getAttribute("src")).toBe("/api/v1/files/f1/preview")
+  })
+
+  it("says a ticket it cannot read does not exist", async () => {
+    await renderAt("/tickets/12", { "/api/setup/status": status(), "/api/v1/me": agent })
+    await vi.waitFor(() => expect(text()).toContain(he("ticket.notFound")))
+    expect(document.querySelector('[data-testid="ticket-missing"] a')?.getAttribute("href")).toBe("/")
+  })
+
+  it("reloads the frame once what its body shows changed, and keeps the remote images choice", async () => {
+    let version = "v1"
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": () => view(version),
+    })
+    const frame = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLIFrameElement>("iframe.ui-mail-frame")
+      expect(found).not.toBeNull()
+      return found as HTMLIFrameElement
+    })
+    await act(async () => button(he("ticket.showImages"))?.click())
+    expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?v=v1&images=1`)
+    // A waiting inline image or HTML body was decided: the next read of the ticket carries a new version.
+    version = "v2"
+    await act(async () => {
+      focusManager.setFocused(false)
+      focusManager.setFocused(true)
+    })
+    await vi.waitFor(() =>
+      expect(document.querySelector("iframe.ui-mail-frame")?.getAttribute("src")).toBe(
+        `/api/v1/messages/${MESSAGE}/body?v=v2&images=1`,
+      ),
+    )
+    focusManager.setFocused(undefined)
+  })
+
+  it("ends a PDF that finishes loading after its preview closed, and starts none once it closed", async () => {
+    let release: ((response: Response) => void) | null = null
+    const downloads = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    )
+    vi.stubGlobal("fetch", downloads)
+    try {
+      await renderAt("/tickets/7", { "/api/setup/status": status(), "/api/v1/me": admin, "/api/v1/tickets/7": view() })
+      const row = await vi.waitFor(() => {
+        const found = document.querySelector<HTMLElement>('[data-file="copy.pdf"]')
+        expect(found).not.toBeNull()
+        return found as HTMLElement
+      })
+      const closeDialog = async () => {
+        const close = document.querySelector<HTMLButtonElement>(
+          `[role="dialog"] button[aria-label="${he("common.close")}"]`,
+        )
+        await act(async () => close?.click())
+        await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull())
+      }
+      const finishDownload = async () => {
+        await vi.waitFor(() => expect(release).not.toBeNull())
+        await act(async () => {
+          release?.(new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46])))
+          release = null
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        })
+      }
+
+      // Closed while the file still downloads: pdf.js never starts.
+      await act(async () => (row.querySelector("button") as HTMLButtonElement).click())
+      await closeDialog()
+      await finishDownload()
+      expect(pdf.openPdf).not.toHaveBeenCalled()
+
+      // Closed while pdf.js loads: no document is ever started.
+      let loaded: ((pdfjs: unknown) => void) | null = null
+      pdf.loadPdfJs.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            loaded = resolve
+          }),
+      )
+      await act(async () => (row.querySelector("button") as HTMLButtonElement).click())
+      await finishDownload()
+      await vi.waitFor(() => expect(loaded).not.toBeNull())
+      await closeDialog()
+      await act(async () => {
+        loaded?.({})
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      })
+      expect(pdf.openPdf).not.toHaveBeenCalled()
+
+      // Closed while the document opens: its loading task is destroyed.
+      const opening = { destroy: vi.fn(async () => {}), promise: new Promise(() => {}) }
+      pdf.loadPdfJs.mockResolvedValue({})
+      pdf.openPdf.mockReturnValue(opening)
+      await act(async () => (row.querySelector("button") as HTMLButtonElement).click())
+      await finishDownload()
+      await vi.waitFor(() => expect(pdf.openPdf).toHaveBeenCalledTimes(1))
+      await closeDialog()
+      expect(opening.destroy).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("never asks for a ticket whose number is not a number", async () => {
+    await renderAt("/tickets/abc", { "/api/setup/status": status(), "/api/v1/me": agent })
+    await vi.waitFor(() => expect(text()).toContain(he("ticket.notFound")))
+    expect(requests.some((r) => r.url.includes("/tickets/abc"))).toBe(false)
+  })
+})
+
+describe("the intake log", () => {
+  const button = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+  const entry = (over: Record<string, unknown>) => ({
+    messageId: "m1",
+    at: "2026-11-12T08:00:00.000Z",
+    receivedAt: "2026-11-12T08:00:00.000Z",
+    mode: "live",
+    outcome: "new_ticket",
+    classification: "customer",
+    reasons: [],
+    matchLayer: null,
+    subject: "Hello",
+    from: { address: "dana@example.com", name: null },
+    supportAddress: "help@example.com",
+    organization: { id: "o1", name: "Alpha" },
+    ticket: 7,
+    matchedTicket: null,
+    flags: [],
+    ...over,
+  })
+
+  it("shows what intake did, and what it would have done while listening", async () => {
+    await renderAt("/intake", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/intake": ok({
+        entries: [
+          entry({
+            messageId: "m2",
+            mode: "listening",
+            outcome: "joined",
+            ticket: null,
+            matchedTicket: 7,
+            reasons: ["sender_not_participant"],
+            flags: ["sender_not_participant"],
+          }),
+          entry({ outcome: "automated", ticket: null, reasons: ["auto_submitted", "list", "planted_code"] }),
+        ],
+        next: null,
+      }),
+    })
+    const heard = await vi.waitFor(() => {
+      const found = document.querySelector('[data-message="m2"]')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(heard.textContent).toContain(he("intake.outcomeWould.joined"))
+    expect(heard.textContent).toContain(he("intake.mode.listening"))
+    expect(heard.textContent).toContain(he("flag.sender_not_participant"))
+    expect(heard.querySelector('a[href="/tickets/7"]')).not.toBeNull()
+    const live = document.querySelector('[data-message="m1"]') as HTMLElement
+    expect(live.textContent).toContain(he("intake.outcome.automated"))
+    // Every reason in words, never its code; a code the UI does not know yet shows as it is, left to right.
+    expect(heard.querySelector('[data-reason="sender_not_participant"]')?.textContent).toBe(
+      he("intake.reason.sender_not_participant"),
+    )
+    expect(live.querySelector('[data-reason="auto_submitted"]')?.textContent).toBe(he("intake.reason.auto_submitted"))
+    expect(live.querySelector('[data-reason="list"]')?.textContent).toContain(he("intake.reason.list"))
+    expect(live.textContent).not.toContain("auto_submitted")
+    expect(live.querySelector('[data-reason="planted_code"] bdi[dir="ltr"]')?.textContent).toBe("planted_code")
+    expect(live.querySelector('.ui-item-meta bdi[dir="ltr"].ui-mono')?.textContent).toBe("dana@example.com")
+    await act(async () => button(he("intake.mode.listening"))?.click())
+    await vi.waitFor(() => expect(where()).toBe("/intake?mode=listening"))
+    expect(requests.some((r) => r.url === "/api/v1/intake?mode=listening")).toBe(true)
+  })
+
+  it("is locked for an agent, who never reads it", async () => {
+    session.set({ session: { id: "current" }, user: { id: "u2", role: "agent" } })
+    await renderAt("/intake", { "/api/setup/status": status(), "/api/v1/me": agent })
+    await vi.waitFor(() => expect(text()).toContain(he("adminOnly.title")))
+    expect(requests.some((r) => r.url.startsWith("/api/v1/intake"))).toBe(false)
   })
 })
