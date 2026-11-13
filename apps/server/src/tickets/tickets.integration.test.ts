@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto"
+import { createHash, randomBytes, randomInt } from "node:crypto"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -81,7 +81,11 @@ async function newOrganization(name: string): Promise<string> {
   return row?.id ?? ""
 }
 
-const code = () => [...randomBytes(8)].map((byte, i) => (i === 4 ? "-" : "") + REFERENCE_ALPHABET[byte % 31]).join("")
+const code = () =>
+  Array.from(
+    { length: 8 },
+    (_, i) => (i === 4 ? "-" : "") + REFERENCE_ALPHABET[randomInt(REFERENCE_ALPHABET.length)],
+  ).join("")
 
 async function newTicket(
   organizationId: string,
