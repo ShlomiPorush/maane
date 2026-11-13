@@ -1822,6 +1822,7 @@ describe("tickets", () => {
     })
     const links = [
       {
+        id: "link-1",
         kind: "url",
         target: "https://www.example.com/guide",
         clicks: [
@@ -1838,7 +1839,14 @@ describe("tickets", () => {
           click({ id: 1 }),
         ],
       },
-      { kind: "file", target: "invoice.pdf", clicks: [click({ id: 3, device: "bot", scanner: ["agent"] })] },
+      {
+        id: "link-2",
+        kind: "file",
+        target: "invoice.pdf",
+        clicks: [click({ id: 3, device: "bot", scanner: ["agent"] })],
+      },
+      // Two history files of one name (image001.png is common in mail): each its own row.
+      { id: "link-3", kind: "file", target: "invoice.pdf", clicks: [click({ id: 4 })] },
     ]
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
@@ -1851,7 +1859,9 @@ describe("tickets", () => {
       return found as HTMLElement
     })
     expect(section.getAttribute("aria-label")).toBe(he("links.title"))
-    const [guide, file] = Array.from(section.querySelectorAll<HTMLElement>(".ui-clicks-links > li"))
+    const [guide, file, same] = Array.from(section.querySelectorAll<HTMLElement>(".ui-clicks-links > li"))
+    expect(same?.textContent).toContain("invoice.pdf")
+    expect(section.querySelectorAll(".ui-clicks-links > li")).toHaveLength(3)
     expect(guide?.getAttribute("data-kind")).toBe("url")
     expect(guide?.querySelector(".ui-clicks-target")?.getAttribute("dir")).toBe("ltr")
     expect(guide?.textContent).toContain("https://www.example.com/guide")

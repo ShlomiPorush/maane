@@ -67,6 +67,7 @@ export interface ClickView {
 
 /** A link of an outgoing reply that was clicked, or a history file that was downloaded, with its clicks newest first. */
 export interface TrackedLinkView {
+  id: string
   kind: "url" | "file"
   /** The original URL, or the file's name. */
   target: string

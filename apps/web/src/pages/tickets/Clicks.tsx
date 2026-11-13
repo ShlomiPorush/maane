@@ -67,7 +67,7 @@ export function Clicks({ links }: { links: TrackedLinkView[] }) {
       <span className="ui-label">{t("links.title")}</span>
       <ul className="ui-clicks-links">
         {links.map((link) => (
-          <li key={`${link.kind} ${link.target}`} data-kind={link.kind}>
+          <li key={link.id} data-kind={link.kind}>
             <div className="ui-clicks-head">
               <Tag tone="neutral">{t(`links.kind.${link.kind}`)}</Tag>
               {link.kind === "url" ? (

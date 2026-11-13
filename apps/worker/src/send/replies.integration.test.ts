@@ -399,9 +399,27 @@ describe("a reply, end to end", () => {
 
     const after = await view(admin, found.number)
     expect(after.messages.find((m) => m.id === written.json.id)?.links).toEqual([
-      { kind: "url", target: "https://www.example.com/guide", clicks: [expect.objectContaining({ ip: null })] },
-      { kind: "file", target: "invoice.pdf", clicks: [expect.objectContaining({ ip: null })] },
+      {
+        id: expect.any(String),
+        kind: "url",
+        target: "https://www.example.com/guide",
+        clicks: [expect.objectContaining({ ip: null })],
+      },
+      { id: expect.any(String), kind: "file", target: "invoice.pdf", clicks: [expect.objectContaining({ ip: null })] },
     ])
+
+    // With a link domain and tracking off: the agent's link as written, the history file's link on that domain.
+    const settings = await admin.call("PUT", "/api/v1/settings", {
+      "links.tracking": "off",
+      "links.domain": "links.example.com",
+    })
+    expect(settings.status).toBe(200)
+    const again = await admin.call("POST", `/api/v1/tickets/${found.number}/messages`, reply({ html }))
+    expect(await sender().send(again.json.id)).toBe("accepted")
+    const second = (await simpleParser(smtp2go.received.at(-1)?.raw ?? Buffer.alloc(0))).html || ""
+    expect(second).toContain('<a href="https://www.example.com/guide"')
+    expect(second).not.toMatch(/\/l\/[A-Za-z0-9_-]{22}/)
+    expect(second).toMatch(/<a href="https:\/\/links\.example\.com\/f\/[A-Za-z0-9_-]{22}"/)
   })
 
   it("refuses a reply whose own files are larger than the provider takes, before anything is written", async () => {

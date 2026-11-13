@@ -165,7 +165,12 @@ export async function linkViews(
   for (const { link, fileName, click } of rows) {
     let view = byLink.get(link.id)
     if (!view) {
-      view = { kind: link.kind === "file" ? "file" : "url", target: link.url ?? fileName ?? "file", clicks: [] }
+      view = {
+        id: link.id,
+        kind: link.kind === "file" ? "file" : "url",
+        target: link.url ?? fileName ?? "file",
+        clicks: [],
+      }
       byLink.set(link.id, view)
       result.set(link.messageId, [...(result.get(link.messageId) ?? []), view])
     }

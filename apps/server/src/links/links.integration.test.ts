@@ -480,6 +480,7 @@ describe("the ticket view", () => {
     const links = view.messages.find((m) => m.id === sent)?.links
     expect(links).toEqual([
       {
+        id: guide.id,
         kind: "url",
         target: "https://www.example.com/guide",
         clicks: [
@@ -495,6 +496,7 @@ describe("the ticket view", () => {
         ],
       },
       {
+        id: file.id,
         kind: "file",
         target: "invoice\r\n2026.pdf",
         clicks: [expect.objectContaining({ ip: "2001:db8::5", country: "de", scanner: [] })],
@@ -502,6 +504,7 @@ describe("the ticket view", () => {
     ])
     expect(view.messages.find((m) => m.id === early)?.links).toEqual([
       {
+        id: fresh.id,
         kind: "url",
         target: "https://www.example.com/fresh",
         clicks: [expect.objectContaining({ scanner: ["early"] })],
