@@ -1,5 +1,5 @@
 // A file's preview in the shared dialog (requirements 3.2): an image as an <img> of its preview address, a PDF drawn
-// by pdf.js on a canvas page by page (with a note when part of a page cannot be drawn), a text as plain text (each line
+// by pdf.js on a canvas page by page (with a note that the download holds the original), a text as plain text (each line
 // with its own direction). The server serves a preview only for a clean file of one of these types, read from its
 // content; anything else never opens here.
 
@@ -11,7 +11,7 @@ import { downloadUrl, previewUrl } from "../../api/endpoints.ts"
 import { errorText } from "../../api/errors.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { Dialog } from "../../ui/Dialog.tsx"
-import { Banner, Loading } from "../../ui/states.tsx"
+import { Loading } from "../../ui/states.tsx"
 
 export function FilePreview({ file, onClose }: { file: AttachmentView; onClose: () => void }) {
   const { t } = useI18n()
@@ -83,28 +83,33 @@ function PdfPreview({ id }: { id: string }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [state, setState] = useState<PdfState>({ status: "loading" })
   const [page, setPage] = useState(1)
-  // Pages pdf.js could not draw in full: they show what it could, and a note says part is missing.
-  const [partial, setPartial] = useState<ReadonlySet<number>>(new Set())
 
+  // The document and its worker live exactly as long as the preview: closing it at any moment, while the file still
+  // downloads, while pdf.js loads, or once the document is open, ends them, and nothing starts after it closed.
   useEffect(() => {
     let gone = false
-    const opened: Promise<Pdf>[] = []
+    let loading: import("pdfjs-dist").PDFDocumentLoadingTask | null = null
     ;(async () => {
       try {
         const data = await (await requestFile(previewUrl(id))).arrayBuffer()
-        const { openPdf } = await import("./pdf.ts")
-        const loading = openPdf(data)
-        opened.push(loading)
-        const document = await loading
         if (gone) return
-        setState({ status: "ready", document, pages: document.numPages })
+        const { openPdf } = await import("./pdf.ts")
+        if (gone) return
+        const task = await openPdf(data)
+        if (gone) {
+          void task.destroy()
+          return
+        }
+        loading = task
+        const document = await task.promise
+        if (!gone) setState({ status: "ready", document, pages: document.numPages })
       } catch (error) {
         if (!gone) setState({ status: "failed", error: errorText(t, error) })
       }
     })()
     return () => {
       gone = true
-      for (const document of opened) void document.then((pdf) => pdf.loadingTask.destroy()).catch(() => undefined)
+      void loading?.destroy()
     }
   }, [id, t])
 
@@ -115,7 +120,7 @@ function PdfPreview({ id }: { id: string }) {
     let gone = false
     const draw = async (document: Pdf) => {
       const pdfPage = await document.getPage(page)
-      if (gone) return
+      if (gone) return false
       // Fit the page to the dialog's width, drawn at the screen's pixel density.
       const width = Math.max(240, target.parentElement?.clientWidth ?? 800)
       const base = pdfPage.getViewport({ scale: 1 })
@@ -127,17 +132,12 @@ function PdfPreview({ id }: { id: string }) {
       target.style.width = `${Math.floor(viewport.width / ratio)}px`
       task = pdfPage.render({ canvas: target, viewport })
       await task.promise
-      return pdfPage
+      return true
     }
     const cancelled = (error: unknown) => (error as { name?: string }).name === "RenderingCancelledException"
     ;(async () => {
       try {
-        const drawn = await draw(state.document)
-        if (gone || !drawn) return
-        target.dataset.rendered = String(page)
-        // An image pdf.js could not decode leaves part of the page out: say so.
-        const { missingImages } = await import("./pdf.ts")
-        if (!gone && (await missingImages(drawn)) > 0) setPartial((pages) => new Set(pages).add(page))
+        if ((await draw(state.document)) && !gone) target.dataset.rendered = String(page)
       } catch (error) {
         if (!gone && !cancelled(error)) setState({ status: "failed", error: errorText(t, error) })
       }
@@ -179,13 +179,9 @@ function PdfPreview({ id }: { id: string }) {
       ) : (
         <span className="ui-pdf-page">{t("ticket.pdfPage", { page, pages: state.pages })}</span>
       )}
-      {partial.has(page) ? (
-        <div className="ui-pdf-partial" data-testid="pdf-partial">
-          <Banner tone="warn" title={t("ticket.pdfPartial")}>
-            {t("ticket.pdfPartialHint")}
-          </Banner>
-        </div>
-      ) : null}
+      <p className="ui-hint ui-pdf-note" data-testid="pdf-note">
+        {t("ticket.pdfNote")}
+      </p>
       <div className="ui-pdf-page-frame">
         <canvas ref={canvas} className="ui-pdf-canvas" data-testid="pdf-canvas" />
       </div>

@@ -13,6 +13,10 @@ import { ERROR_VARS } from "./api/errors.ts"
 import { I18nProvider, translate } from "./i18n/i18n.tsx"
 import { ROUTES } from "./routes.tsx"
 
+/** pdf.js, as the PDF preview loads it (pages/tickets/pdf.ts): component tests never run it. */
+const pdf = vi.hoisted(() => ({ openPdf: vi.fn() }))
+vi.mock("./pages/tickets/pdf.ts", () => ({ openPdf: pdf.openPdf }))
+
 const auth = vi.hoisted(() => ({
   listUsers: vi.fn(),
   listSessions: vi.fn(),
@@ -130,6 +134,7 @@ function type(input: HTMLInputElement, value: string) {
 beforeEach(() => {
   localStorage.clear()
   for (const fn of Object.values(auth)) fn.mockReset()
+  pdf.openPdf.mockReset()
   auth.listSessions.mockResolvedValue({ data: [], error: null })
   session.set({ session: { id: "current" }, user: { id: "u1", role: "admin" } })
 })
@@ -1389,6 +1394,7 @@ describe("tickets", () => {
               download: false,
             }),
             file({ id: "f3", fileName: "drawing.svg", detectedType: "application/octet-stream" }),
+            file({ id: "f4", fileName: "copy.pdf", detectedType: "application/pdf", preview: "pdf" }),
           ],
         },
       ],
@@ -1453,7 +1459,8 @@ describe("tickets", () => {
       return found as HTMLIFrameElement
     })
     expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?v=v1`)
-    expect(frame.getAttribute("sandbox")).toBe("")
+    // Links open in a new tab that leaves the sandbox; nothing in the frame runs or reaches Maane.
+    expect(frame.getAttribute("sandbox")).toBe("allow-popups allow-popups-to-escape-sandbox")
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer")
     expect(frame.style.height).toBe("140px")
     expect(text()).toContain(translate("he", "ticket.imagesHidden.two", { count: "2" }))
@@ -1525,6 +1532,76 @@ describe("tickets", () => {
       ),
     )
     focusManager.setFocused(undefined)
+  })
+
+  it("ends a PDF that finishes loading after its preview closed, and starts none once it closed", async () => {
+    let release: ((response: Response) => void) | null = null
+    const downloads = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    )
+    vi.stubGlobal("fetch", downloads)
+    try {
+      await renderAt("/tickets/7", { "/api/setup/status": status(), "/api/v1/me": admin, "/api/v1/tickets/7": view() })
+      const row = await vi.waitFor(() => {
+        const found = document.querySelector<HTMLElement>('[data-file="copy.pdf"]')
+        expect(found).not.toBeNull()
+        return found as HTMLElement
+      })
+      const closeDialog = async () => {
+        const close = document.querySelector<HTMLButtonElement>(
+          `[role="dialog"] button[aria-label="${he("common.close")}"]`,
+        )
+        await act(async () => close?.click())
+        await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull())
+      }
+      const finishDownload = async () => {
+        await vi.waitFor(() => expect(release).not.toBeNull())
+        await act(async () => {
+          release?.(new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46])))
+          release = null
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        })
+      }
+
+      // Closed while the file still downloads: pdf.js never starts.
+      await act(async () => (row.querySelector("button") as HTMLButtonElement).click())
+      await closeDialog()
+      await finishDownload()
+      expect(pdf.openPdf).not.toHaveBeenCalled()
+
+      // Closed while pdf.js loads: the document that arrives afterwards is destroyed with its worker.
+      let started: ((task: unknown) => void) | null = null
+      pdf.openPdf.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            started = resolve
+          }),
+      )
+      await act(async () => (row.querySelector("button") as HTMLButtonElement).click())
+      await finishDownload()
+      await vi.waitFor(() => expect(started).not.toBeNull())
+      await closeDialog()
+      const late = { destroy: vi.fn(async () => {}), promise: new Promise(() => {}) }
+      await act(async () => {
+        started?.(late)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      })
+      expect(late.destroy).toHaveBeenCalledTimes(1)
+
+      // Closed while the document opens: its loading task is destroyed.
+      const opening = { destroy: vi.fn(async () => {}), promise: new Promise(() => {}) }
+      pdf.openPdf.mockResolvedValue(opening)
+      await act(async () => (row.querySelector("button") as HTMLButtonElement).click())
+      await finishDownload()
+      await vi.waitFor(() => expect(pdf.openPdf).toHaveBeenCalledTimes(2))
+      await closeDialog()
+      expect(opening.destroy).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it("never asks for a ticket whose number is not a number", async () => {

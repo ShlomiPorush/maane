@@ -86,6 +86,20 @@ test.describe("desktop", () => {
     await expect(frame(page).locator('img[alt="banner"]')).toHaveCount(1)
     await expect(page.getByRole("button", { name: he("ticket.hideImages"), exact: true })).toBeVisible()
 
+    // A link in the frame opens in a new tab with its own address, cut off from Maane; the ticket stays as it was.
+    const ticketUrl = page.url()
+    const [popup] = await Promise.all([
+      page.waitForEvent("popup"),
+      frame(page).getByRole("link", { name: "Service status", exact: true }).click(),
+    ])
+    await popup.waitForLoadState()
+    expect(popup.url()).toBe("http://127.0.0.1:8095/healthz/live")
+    expect(await popup.evaluate(() => window.opener === null)).toBe(true)
+    await popup.close()
+    expect(page.url()).toBe(ticketUrl)
+    // A link of another scheme keeps its words but no address.
+    await expect(frame(page).getByText("Call us", { exact: true })).not.toHaveAttribute("href", /.*/)
+
     // An image preview: the browser decodes the file the preview route serves.
     await page
       .locator('[data-file="photo.png"]')
@@ -151,7 +165,7 @@ test.describe("desktop", () => {
     expect(violations).toEqual([])
   })
 
-  test("PDF previews draw scans, faxes, and embedded fonts, and say when part of a page cannot be drawn", async ({
+  test("PDF previews draw scans, faxes, and embedded fonts, and say that the download holds the original", async ({
     page,
   }) => {
     const violations = watchPolicy(page)
@@ -182,14 +196,11 @@ test.describe("desktop", () => {
     for (const fileName of ["scan-jbig2.pdf", "fax-ccitt.pdf", "embedded-font.pdf"]) {
       const { dialog, dark } = await drawn(fileName)
       expect(dark, fileName).toBeGreaterThan(1000)
-      await expect(dialog.getByTestId("pdf-partial")).toHaveCount(0)
+      // pdf.js says nothing when it leaves a part out: every PDF preview says the download holds the original.
+      await expect(dialog.getByTestId("pdf-note")).toHaveText(he("ticket.pdfNote"))
       await page.keyboard.press("Escape")
       await expect(dialog).toHaveCount(0)
     }
-    // An image no decoder reads: the page is drawn without it, and the preview says so.
-    const { dialog } = await drawn("broken-image.pdf")
-    await expect(dialog.getByTestId("pdf-partial")).toContainText(he("ticket.pdfPartial"))
-    await page.keyboard.press("Escape")
     expect(violations).toEqual([])
   })
 

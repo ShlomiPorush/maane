@@ -256,7 +256,7 @@ function MailFrame({ message }: { message: MessageView }) {
         className="ui-mail-frame"
         title={t("ticket.frameTitle", { sender })}
         src={bodyUrl(message.id, message.bodyVersion, images)}
-        sandbox=""
+        sandbox="allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
         loading="lazy"
         style={{ height: `${frameHeight(message.bodyLines)}px` }}

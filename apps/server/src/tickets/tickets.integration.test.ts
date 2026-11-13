@@ -160,7 +160,8 @@ async function pngPart(messageId: string, values: Partial<typeof messagePart.$in
   })
 }
 
-const BODY_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox; frame-ancestors 'self'"
+const BODY_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox allow-popups allow-popups-to-escape-sandbox; frame-ancestors 'self'"
 
 describe("scope", () => {
   it("scopes every route to the user's organizations, and refuses a removed member at once", async () => {
@@ -409,7 +410,7 @@ describe("message bodies", () => {
     expect(body.headers.get("referrer-policy")).toBe("no-referrer")
     const images = await admin.get(`/api/v1/messages/${m}/body?images=1`)
     expect(images.headers.get("content-security-policy")).toBe(
-      "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; sandbox; frame-ancestors 'self'",
+      "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; sandbox allow-popups allow-popups-to-escape-sandbox; frame-ancestors 'self'",
     )
 
     for (const answer of [
@@ -462,6 +463,25 @@ describe("message bodies", () => {
 
     const view = (await admin.call("GET", `/api/v1/tickets/${t.number}`)).json
     expect(view.messages[0]).toMatchObject({ id: m, body: "html", remoteImages: 1 })
+  })
+
+  it("serves links that open in a new tab cut off from Maane, and no link of another scheme", async () => {
+    const admin = await firstAdmin()
+    const t = await newTicket(await newOrganization("Alpha"))
+    const html = sanitizeMailHtml(
+      '<p><a href="https://www.example.com/pay">pay</a> <a href="tel:+15555550100">call</a> <a href="cid:x@example.com">part</a></p>',
+    )
+    const m = await newMessage(t.id, { htmlBody: html })
+    const body = await admin.get(`/api/v1/messages/${m}/body`)
+    expect(body.headers.get("referrer-policy")).toBe("no-referrer")
+    const document = await body.text()
+    expect(document).toContain(
+      '<a href="https://www.example.com/pay" target="_blank" rel="noopener noreferrer">pay</a>',
+    )
+    expect(document).toContain("<a>call</a>")
+    expect(document).toContain("<a>part</a>")
+    expect(document).not.toContain("tel:")
+    expect(document).not.toContain("cid:")
   })
 
   it("shows a text-only message escaped and line by line, each line with its direction", async () => {

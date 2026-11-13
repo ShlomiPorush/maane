@@ -49,12 +49,24 @@ const DECODER_FILES = [
   "LICENSE_PDFJS_OPENJPEG",
 ]
 
+/**
+ * The same files in the build (emitted beside the bundle) and in the dev server (Vite's documented configureServer
+ * middleware, which answers only these names and leaves every other path to Vite).
+ */
 function pdfDecoders(): Plugin {
+  const dir = join(dirname(require.resolve("pdfjs-dist/package.json")), "wasm")
   return {
     name: "maane-pdf-decoders",
-    apply: "build",
+    configureServer(server) {
+      server.middlewares.use(`/${PDF_DECODERS}`, (request, response, next) => {
+        const name = (request.url ?? "").split("?")[0]?.replace(/^\//, "") ?? ""
+        if (!DECODER_FILES.includes(name)) return next()
+        response.setHeader("Content-Type", name.endsWith(".js") ? "text/javascript" : "text/plain; charset=utf-8")
+        response.setHeader("X-Content-Type-Options", "nosniff")
+        response.end(readFileSync(join(dir, name)))
+      })
+    },
     generateBundle() {
-      const dir = join(dirname(require.resolve("pdfjs-dist/package.json")), "wasm")
       for (const file of DECODER_FILES) {
         this.emitFile({ type: "asset", fileName: `${PDF_DECODERS}${file}`, source: readFileSync(join(dir, file)) })
       }

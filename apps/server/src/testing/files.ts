@@ -125,27 +125,20 @@ function jbig2Page(): Buffer {
 
 /**
  * A one-page PDF whose only mark is a 32 by 32 one-bit image with a black band, drawn large in the middle of the
- * page, encoded as a fax (CCITT) or a scan (JBIG2) usually is; "broken" is a JPEG 2000 image of bytes no decoder reads,
- * beside a blue frame, so a preview can draw only part of the page.
+ * page, encoded as a fax (CCITT) or a scan (JBIG2) usually is.
  */
-export function scannedPdf(kind: "ccitt" | "jbig2" | "broken"): Buffer {
+export function scannedPdf(kind: "ccitt" | "jbig2"): Buffer {
   const image =
     kind === "ccitt"
       ? stream(
           `/Type /XObject /Subtype /Image /Width ${SIDE} /Height ${SIDE} /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K 0 /Columns ${SIDE} /Rows ${SIDE} /BlackIs1 false >>`,
           ccittRows(),
         )
-      : kind === "jbig2"
-        ? stream(
-            `/Type /XObject /Subtype /Image /Width ${SIDE} /Height ${SIDE} /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode`,
-            jbig2Page(),
-          )
-        : stream(
-            `/Type /XObject /Subtype /Image /Width ${SIDE} /Height ${SIDE} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /JPXDecode`,
-            Buffer.from("not a JPEG 2000 codestream at all", "latin1"),
-          )
-  const frame = kind === "broken" ? "0 0 1 RG 4 w 12 12 176 176 re S\n" : ""
-  const content = `${frame}q 120 0 0 120 40 40 cm /Im1 Do Q\n`
+      : stream(
+          `/Type /XObject /Subtype /Image /Width ${SIDE} /Height ${SIDE} /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode`,
+          jbig2Page(),
+        )
+  const content = "q 120 0 0 120 40 40 cm /Im1 Do Q\n"
   return pdfFile([
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",

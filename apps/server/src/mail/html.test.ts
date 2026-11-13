@@ -63,6 +63,23 @@ describe("renderMailHtml", () => {
   })
 })
 
+describe("links in a served body", () => {
+  it("open https, http, and mailto links in a new tab cut off from Maane, and drop every other link's address", () => {
+    const stored = sanitizeMailHtml(
+      '<p><a href="https://www.example.com/a" target="_self" rel="opener">a</a>' +
+        '<a href="http://www.example.com/b">b</a><a href="mailto:dana@example.com">c</a>' +
+        '<a href="tel:+15555550100">d</a><a href="cid:part@example.com">e</a><a href="/relative">f</a>' +
+        '<a href="javascript:alert(1)">g</a><a name="top">h</a></p>',
+    )
+    const { html } = renderMailHtml(stored, { remoteImages: false, inline: none })
+    const opens = (href: string) => `<a href="${href}" target="_blank" rel="noopener noreferrer">`
+    expect(html).toBe(
+      `<p>${opens("https://www.example.com/a")}a</a>${opens("http://www.example.com/b")}b</a>` +
+        `${opens("mailto:dana@example.com")}c</a><a>d</a><a>e</a><a>f</a><a>g</a><a name="top">h</a></p>`,
+    )
+  })
+})
+
 describe("body documents", () => {
   it("makes Hebrew HTML without dir right to left, from the message's first strong character", () => {
     const document = htmlDocument(`<p>${SHALOM} hello</p>`, null)

@@ -126,6 +126,9 @@ export interface RenderedHtml {
   remoteImages: number
 }
 
+/** The schemes a link in a served body may open (in a new tab, isolated); tel: and cid: links lose their address. */
+const LINK_SCHEMES = new Set(["https", "http", "mailto"])
+
 /** The scheme of a URL as sanitize-html reads one: the letters before the first colon, in lower case. */
 function schemeOf(url: string): string | null {
   const match = /^\s*([a-z][a-z0-9+.-]*):/i.exec(url)
@@ -149,7 +152,8 @@ export function renderMailHtml(stored: string, options: RenderOptions): Rendered
     ...OPTIONS,
     // Only here may an image be a data: URL: the ones built below from clean parts of this message. Stage one dropped
     // every data: URL the sender wrote.
-    allowedSchemesByTag: { img: options.remoteImages ? ["data", "https"] : ["data"] },
+    allowedSchemesByTag: { img: options.remoteImages ? ["data", "https"] : ["data"], a: [...LINK_SCHEMES] },
+    allowedAttributes: { ...OPTIONS.allowedAttributes, a: ["href", "name", "target", "rel"] },
     transformTags: {
       img: (tagName, attribs) => {
         const { src, ...rest } = attribs
@@ -163,6 +167,14 @@ export function renderMailHtml(stored: string, options: RenderOptions): Rendered
           resolved = options.remoteImages ? src : null
         }
         return { tagName, attribs: resolved === null ? rest : { ...rest, src: resolved } }
+      },
+      // A link opens in a new tab, cut off from Maane (owner's decision, 2026-11-13): only an https, http, or mailto
+      // link keeps its address, with target="_blank" and rel="noopener noreferrer"; any other link loses it.
+      a: (tagName, attribs) => {
+        const { href, target: _target, rel: _rel, ...rest } = attribs
+        const scheme = href === undefined ? null : schemeOf(href)
+        if (href === undefined || scheme === null || !LINK_SCHEMES.has(scheme)) return { tagName, attribs: rest }
+        return { tagName, attribs: { ...rest, href, target: "_blank", rel: "noopener noreferrer" } }
       },
     },
     // An image left without a source (a remote one not shown yet, an unknown or blocked part) goes with its tag.

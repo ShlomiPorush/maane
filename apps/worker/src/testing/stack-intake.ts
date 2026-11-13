@@ -131,7 +131,9 @@ try {
           '<p><img src="cid:logo@example.com" alt="logo"></p>' +
           '<p><img src="https://images.example.com/banner.png" alt="banner" width="320" height="80"></p>' +
           '<p align="center">Example Alpha</p>' +
-          "<p>Order 2026-117 is attached in English too.</p>",
+          "<p>Order 2026-117 is attached in English too.</p>" +
+          // A link the end-to-end tests open from the frame: the stack's own public address (verify.sh).
+          '<p><a href="http://127.0.0.1:8095/healthz/live">Service status</a> <a href="tel:+15555550100">Call us</a></p>',
       },
       attachments: [
         {
@@ -198,7 +200,7 @@ try {
       text: { content: "I am away this week." },
     }),
   )
-  // Scans and faxes (JBIG2, CCITT), a PDF with an embedded font, and one whose image no decoder reads.
+  // Scans and faxes (JBIG2, CCITT), and a PDF with an embedded font.
   const scannedId = graph.add(
     mime({
       to: alpha.address,
@@ -208,7 +210,6 @@ try {
         { fileName: "scan-jbig2.pdf", contentType: "application/pdf", content: scannedPdf("jbig2") },
         { fileName: "fax-ccitt.pdf", contentType: "application/pdf", content: scannedPdf("ccitt") },
         { fileName: "embedded-font.pdf", contentType: "application/pdf", content: Buffer.from(embeddedFontPdf) },
-        { fileName: "broken-image.pdf", contentType: "application/pdf", content: scannedPdf("broken") },
       ],
     }),
   )
@@ -274,7 +275,7 @@ try {
 
   const scannedParts = await partsOf(await stored(scannedId))
   check(
-    scannedParts.length === 4 &&
+    scannedParts.length === 3 &&
       scannedParts.every(({ part, detectedType }) => part.status === "clean" && detectedType === "application/pdf"),
     `scanned PDFs: ${scannedParts.map(({ part, detectedType }) => `${part.status} ${detectedType}`).join(", ")}`,
   )

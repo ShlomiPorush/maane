@@ -33,7 +33,8 @@ export function bodyHeaders(remoteImages: boolean): SecurityHeaders {
       "default-src 'none'",
       "style-src 'unsafe-inline'",
       remoteImages ? "img-src data: https:" : "img-src data:",
-      "sandbox",
+      // Links open in a new tab that leaves the sandbox (owner's decision, 2026-11-13); nothing in the frame runs.
+      "sandbox allow-popups allow-popups-to-escape-sandbox",
       "frame-ancestors 'self'",
     ].join("; "),
     frameDeny: false,

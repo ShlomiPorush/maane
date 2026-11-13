@@ -310,8 +310,7 @@
     "pdfPage": "Page {page} of {pages}",
     "pdfPrevious": "Previous page",
     "pdfNext": "Next page",
-    "pdfPartial": "Part of this page could not be drawn",
-    "pdfPartialHint": "An image or another part of the page could not be read. Download the file to see all of it.",
+    "pdfNote": "A preview may not show every part of a PDF. The download has the original.",
     "signature": "Signature",
     "blockedBy": "Blocked by"
   },
