@@ -123,7 +123,7 @@ No path needs the server to accept mail from the internet.
 - Maane is a PWA that can be installed on a computer and on Android. Notifications arrive through standard Web Push, also with the tab closed, using established libraries.
 - Each user turns notifications on per device and can turn them off. A subscription the browser revoked is deleted automatically.
 - A notification shows only the ticket number and the customer name, never message content.
-- A subscription belongs to a user and a device. Before each send Maane checks that the user is still authorized, within the same time limit as the session. If authorization expired or is unknown, notifications pause. If authorization was revoked, the user's subscriptions are deleted.
+- A subscription belongs to a user and a device. It is not tied to a sign-in session (owner's decision, 2026-11-15). Notifications on a device stop when the user signs out on that device, turns notifications off, is disabled, or is removed from the organization (for that organization's tickets). Before each send Maane checks that the user is still active and still allowed on the ticket's organization. A disabled user's subscriptions are deleted.
 - A full Android app is considered only if the PWA is not enough.
 
 ## 4. Customer email layout
