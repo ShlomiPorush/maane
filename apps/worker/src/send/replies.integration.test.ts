@@ -8,6 +8,7 @@ import {
   outboxRecipient,
   storedFile,
   supportAddress,
+  ticket as ticketTable,
   upload,
 } from "@maane/server/db/schema"
 import { type JobQueue, openJobQueue, SEND_REPLY, UPLOAD_SCAN } from "@maane/server/jobs/queue"
@@ -18,7 +19,7 @@ import { createTestApp } from "@maane/server/testing/app"
 import { nextIp, TestBrowser, testPassword } from "@maane/server/testing/browser"
 import { pdf, png } from "@maane/server/testing/files"
 import { MESSAGE_MAX_BYTES, MESSAGES, type SettingKey, type TicketView, userEmail } from "@maane/shared"
-import { and, eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import { simpleParser } from "mailparser"
 import { PgBoss } from "pg-boss"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
@@ -54,6 +55,7 @@ let app: ReturnType<typeof createTestApp>
 let queue: JobQueue
 let boss: PgBoss
 let org: string
+let otherOrg: string
 const password = testPassword()
 
 beforeAll(async () => {
@@ -69,7 +71,7 @@ afterAll(async () => {
 beforeEach(async () => {
   h = await startIntake(clamd)
   org = await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
-  await h.organization("Example Other", [{ value: OTHER }])
+  otherOrg = await h.organization("Example Other", [{ value: OTHER }])
   await h.mode("live")
   queue = await openJobQueue(h.database.url)
   app = createTestApp(h.database, {}, queue, h.dir)
@@ -741,6 +743,43 @@ describe("attempts that overlap", () => {
     expect(row).toEqual({ state: "accepted", attempt: null })
     const [now] = await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id))
     expect(now).toEqual(after)
+  })
+
+  it("a claim waits for a move in progress and checks the organization the move leaves (plan 4.1, review S3)", async () => {
+    const admin = await firstAdmin()
+    const ticket = await customerTicket()
+    const written = await admin.call("POST", `/api/v1/tickets/${ticket.number}/messages`, reply())
+    expect(written.status).toBe(201)
+    const id = written.json.id as string
+    const received = smtp2go.received.length + failover.received.length
+    let sent: Promise<unknown> = Promise.resolve()
+    // A move holds the ticket row as Workflow.move does (FOR UPDATE) while the sender claims the reply.
+    await h.database.db.transaction(async (tx) => {
+      await tx
+        .select({ id: ticketTable.id })
+        .from(ticketTable)
+        .where(eq(ticketTable.number, ticket.number))
+        .for("update")
+      await tx.update(ticketTable).set({ organizationId: otherOrg }).where(eq(ticketTable.number, ticket.number))
+      sent = sender().send(id)
+      // The claim waits on the ticket's lock: bounded, and a claim that does not wait fails here.
+      let waiting = false
+      for (let tries = 0; tries < 200 && !waiting; tries++) {
+        const result = await h.database.db.execute<{ n: number }>(
+          sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+        )
+        waiting = (result.rows[0]?.n ?? 0) > 0
+        if (!waiting) await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      expect(waiting).toBe(true)
+    })
+    // Moved: the support address belongs to the old organization, so the send point refuses and sends nothing.
+    expect(await sent).toBe("failed")
+    expect(deliveryOf(await view(admin, ticket.number), id)).toMatchObject({
+      state: "failed",
+      problem: "from_not_allowed",
+    })
+    expect(smtp2go.received.length + failover.received.length).toBe(received)
   })
 })
 

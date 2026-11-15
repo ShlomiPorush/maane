@@ -128,7 +128,6 @@ export class ReplySender {
           mime: outbox.mime,
           from: outbox.fromAddress,
           ticketId: ticket.id,
-          organizationId: ticket.organizationId,
           authorUserId: message.authorUserId,
         })
         .from(outbox)
@@ -149,7 +148,16 @@ export class ReplySender {
         return null
       }
       if (row.state !== "pending") return null
-      const problem = await this.#refusal(tx, mode, row)
+      // The ticket's organization, read under a lock a move waits for (FOR SHARE against its FOR UPDATE), taken after
+      // the outbox row as every path that holds both takes them: a move and this claim serialize, so the checks below
+      // and the switch to `sending` see the organization the ticket has while the reply goes.
+      const [held] = await tx
+        .select({ organizationId: ticket.organizationId })
+        .from(ticket)
+        .where(eq(ticket.id, row.ticketId))
+        .for("share")
+      if (!held) return null
+      const problem = await this.#refusal(tx, mode, { ...row, organizationId: held.organizationId })
       if (problem) {
         await tx
           .update(outbox)
