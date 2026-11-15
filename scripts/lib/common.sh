@@ -220,7 +220,7 @@ vapid_generator() {
 # or one in another form Compose reads (VAPID_LINE): refused, because a new pair would replace the one the devices
 # subscribed with. The output is never printed.
 ensure_vapid_keys() {
-  local dir="$1" image="$2" file lock keys rc shape
+  local dir="$1" image="$2" file lock keys rc shape separator
   file="$dir/app.env"
   require_linux_dir "$dir"
   require_outside_repo "$dir"
@@ -250,9 +250,12 @@ ensure_vapid_keys() {
   shape=$'^MAANE_VAPID_PUBLIC_KEY=[A-Za-z0-9_-]{87}\nMAANE_VAPID_PRIVATE_KEY=[A-Za-z0-9_-]{43}$'
   [[ "$keys" =~ $shape ]] ||
     die "the VAPID key generator in $image printed something unexpected; $file is unchanged"
+  # A last line without its newline would take the first key as part of its value.
+  separator=""
+  if [ -n "$(tail -c 1 "$file")" ]; then separator=$'\n'; fi
   (
     umask 077
-    printf '%s\n' "$keys" >>"$file"
+    printf '%s%s\n' "$separator" "$keys" >>"$file"
   ) || die "cannot append the VAPID keys to $file"
   env_file_valid "$file" "${APP_ENV_NAMES[@]}" "${VAPID_ENV_NAMES[@]}" ||
     die "$file is not complete or not mode 600 after adding the VAPID keys"

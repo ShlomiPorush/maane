@@ -203,7 +203,7 @@ Everything else is set in Maane itself, in Settings. A variable in the lower par
 
 Browser notifications (Web Push) need a VAPID key pair in `app.env`: `MAANE_VAPID_PUBLIC_KEY` and `MAANE_VAPID_PRIVATE_KEY`. The server and the worker refuse to start without them, or with values that are not one key pair. The image makes them with web-push's own generator. Run this block once, after the block above on a new deployment, and before you start a release with browser notifications on an existing one.
 
-It appends the two lines to `app.env` and changes nothing else in it. It refuses, and writes nothing, when `app.env` is missing or not mode 600, when `app.env` already sets either key in any form Compose reads (set or empty, also indented, after `export`, or with spaces around `=`), when the generator fails or prints something else, or when another run holds the file. It prints no key. Set `version` to the release you run or are about to run:
+It appends the two lines to `app.env` (after a line break when its last line has none) and changes nothing else in it. It refuses, and writes nothing, when `app.env` is missing or not mode 600, when `app.env` already sets either key in any form Compose reads (set or empty, also indented, after `export`, or with spaces around `=`), when the generator fails or prints something else, or when another run holds the file. It prints no key. Set `version` to the release you run or are about to run:
 
 ```bash
 (
@@ -227,7 +227,10 @@ It appends the two lines to `app.env` and changes nothing else in it. It refuses
     --entrypoint node "ghcr.io/shlomiporush/maane:$version" dist/worker/vapid-keys.js)"
   shape=$'^MAANE_VAPID_PUBLIC_KEY=[A-Za-z0-9_-]{87}\nMAANE_VAPID_PRIVATE_KEY=[A-Za-z0-9_-]{43}$'
   [[ "$keys" =~ $shape ]] || { echo "error: the generator printed something unexpected; nothing was written" >&2; exit 1; }
-  printf '%s\n' "$keys" >>app.env
+  # A last line without its newline would take the first key as part of its value.
+  separator=""
+  if [ -n "$(tail -c 1 app.env)" ]; then separator=$'\n'; fi
+  printf '%s%s\n' "$separator" "$keys" >>app.env
   [ "$(grep -cE '^MAANE_VAPID_(PUBLIC|PRIVATE)_KEY=.+' app.env)" = 2 ] && [ "$(stat -c %a app.env)" = 600 ] ||
     { echo "error: app.env does not hold the two keys as expected; check it before you start Maane" >&2; exit 1; }
   echo "Added the VAPID key pair to $HOME/maane/app.env. Keep app.env with your backup."

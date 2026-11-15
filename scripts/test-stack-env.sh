@@ -74,6 +74,16 @@ after="$(sha256sum <"$dir/app.env")"
 check "a second run succeeds" run "$dir"
 check "a second run replaces nothing" [ "$(sha256sum <"$dir/app.env")" = "$after" ]
 
+# An app.env whose last line has no newline: the pair goes on lines of its own, the last value unchanged.
+dir="$(new_dir)"
+before="$(cat "$dir/app.env")"
+truncate -s -1 "$dir/app.env"
+check "adds a pair after a last line without a newline" run "$dir"
+check "keeps the last value unchanged" [ "$(head -3 "$dir/app.env")" = "$before" ]
+check "one public key after a last line without a newline" [ "$(count "$dir" MAANE_VAPID_PUBLIC_KEY)" = 1 ]
+check "one private key after a last line without a newline" [ "$(count "$dir" MAANE_VAPID_PRIVATE_KEY)" = 1 ]
+check "stays mode 600 after a last line without a newline" [ "$(stat -c %a "$dir/app.env")" = 600 ]
+
 # Half a pair, or an empty key, is refused and left as it is.
 for partial in "MAANE_VAPID_PUBLIC_KEY=$(random_b64url 87)" "MAANE_VAPID_PRIVATE_KEY=$(random_b64url 43)" \
   "MAANE_VAPID_PUBLIC_KEY=" "MAANE_VAPID_PUBLIC_KEY=
