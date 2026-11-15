@@ -2253,6 +2253,9 @@ textarea.ui-input.ui-textarea {
 .ui-search-row .ui-input {
   flex: 1 1 auto;
   min-width: 0;
+  /* As tall as its button: 40px on a phone, where buttons grow for the finger. */
+  height: auto;
+  min-height: var(--ui-ctl-h);
 }
 .ui-search-row .ui-btn {
   flex: none;
