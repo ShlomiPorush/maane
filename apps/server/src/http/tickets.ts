@@ -6,7 +6,15 @@
 import { createReadStream } from "node:fs"
 import { stat } from "node:fs/promises"
 import { Readable } from "node:stream"
-import { INTAKE_FILTER_MODES, INTAKE_PAGE_SIZE, previewKind, TICKET_STATUSES, TICKETS_PAGE_SIZE } from "@maane/shared"
+import {
+  DEFAULT_STATUS_FILTER,
+  INTAKE_FILTER_MODES,
+  INTAKE_PAGE_SIZE,
+  previewKind,
+  STATUS_FILTERS,
+  type StatusFilter,
+  TICKETS_PAGE_SIZE,
+} from "@maane/shared"
 import { create as contentDisposition } from "content-disposition"
 import { type Context, Hono } from "hono"
 import type { Db } from "../db/client.ts"
@@ -84,15 +92,19 @@ export function ticketRoutes(db: Db, filesDir: string, replies: Replies): Hono<A
   routes.get("/tickets", async (c) => {
     const organization = c.req.query("organization")
     const status = c.req.query("status")
+    const category = c.req.query("category")
     const flagged = c.req.query("flagged")
     if (organization !== undefined && !UUID.test(organization)) return invalid(c)
-    if (status !== undefined && !(TICKET_STATUSES as readonly string[]).includes(status)) return invalid(c)
+    // Without a status the list shows open work (plan 4.1); `all` shows every status.
+    if (status !== undefined && !(STATUS_FILTERS as readonly string[]).includes(status)) return invalid(c)
+    if (category !== undefined && !UUID.test(category)) return invalid(c)
     if (flagged !== undefined && flagged !== "1") return invalid(c)
     try {
       return c.json(
         await tickets.list(await scopeOf(c), {
           organization,
-          status: status as (typeof TICKET_STATUSES)[number] | undefined,
+          status: (status as StatusFilter | undefined) ?? DEFAULT_STATUS_FILTER,
+          category,
           flagged: flagged === "1",
           cursor: c.req.query("after"),
           limit: TICKETS_PAGE_SIZE,

@@ -38,6 +38,7 @@ import { organizationRoutes } from "./organizations.ts"
 import { replyRoutes } from "./replies.ts"
 import type { ApiEnv, AppUser } from "./request.ts"
 import { ticketRoutes } from "./tickets.ts"
+import { workflowRoutes } from "./workflow.ts"
 
 export interface AppContext {
   db: Db
@@ -404,6 +405,7 @@ export function createApp(ctx: AppContext) {
   const replies = new Replies(ctx.db, ctx.settings, ctx.jobs, ctx.filesDir, ctx.publicUrl)
   api.route("/", ticketRoutes(ctx.db, ctx.filesDir, replies))
   api.route("/", replyRoutes(ctx.db, ctx.settings, replies))
+  api.route("/", workflowRoutes(ctx.db))
 
   app.route("/api/v1", api)
   app.route("/hooks", hookRoutes(ctx.db, ctx.settings))

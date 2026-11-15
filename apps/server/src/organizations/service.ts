@@ -54,7 +54,7 @@ export type Acting = { actor: Actor; ipAddress: string | null }
 
 // Control characters, and the characters that reorder text (bidirectional marks and isolates): a name shows in
 // lists, sender names, and audit rows, where either could hide or disguise what it says.
-function hidden(code: number): boolean {
+export function hidden(code: number): boolean {
   return (
     code < 0x20 ||
     (code >= 0x7f && code <= 0x9f) ||

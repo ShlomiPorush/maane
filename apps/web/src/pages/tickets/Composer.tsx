@@ -4,9 +4,19 @@
 // agent's computer (uploaded, then scanned by the worker; a refused one says why and is never sent) or from the
 // ticket's own messages. One click is one message: the composer sends a submission ID, kept until the server answers,
 // so a repeated or lost request finds the same message. While intake listens, only internal notes can be written.
+// A reply's default action is "Send and set pending" (plan 4.1): the server sets the status in the reply's own
+// transaction; "Send" leaves the status. A closed ticket offers only "Send" to an agent (only an admin leaves closed).
 // TipTap's own stylesheet stays off (injectCSS: false): the UI's policy allows no inline <style>; ui.css styles it.
 
-import type { AttachmentView, ComposeView, MailAddress, ReplyInput, TicketView, UploadView } from "@maane/shared"
+import {
+  type AttachmentView,
+  type ComposeView,
+  type MailAddress,
+  mayChangeStatus,
+  type ReplyInput,
+  type TicketView,
+  type UploadView,
+} from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react"
 import StarterKit from "@tiptap/starter-kit"
@@ -16,6 +26,7 @@ import { api, qk } from "../../api/endpoints.ts"
 import { errorText } from "../../api/errors.ts"
 import { formatBytes } from "../../format/number.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
+import { useMe } from "../../shell/session.ts"
 import { Banner } from "../../ui/states.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag, type Tone } from "../../ui/tags.tsx"
@@ -63,7 +74,9 @@ export function Composer({ view }: { view: TicketView }) {
   const queryClient = useQueryClient()
   const formId = useId()
   const [kind, setKind] = useState<Kind>(compose.listening ? "note" : "reply")
-  const [from, setFrom] = useState(compose.defaultFrom ?? "")
+  const [chosenFrom, setFrom] = useState(compose.defaultFrom ?? "")
+  // A From the ticket no longer offers (it moved to another organization) gives way to its default; the draft stays.
+  const from = compose.from.includes(chosenFrom) ? chosenFrom : (compose.defaultFrom ?? "")
   const [to, setTo] = useState(listText(compose.to))
   const [cc, setCc] = useState(listText(compose.cc))
   const [files, setFiles] = useState<Picked[]>([])
@@ -160,7 +173,11 @@ export function Composer({ view }: { view: TicketView }) {
           ],
     )
 
-  const send = async () => {
+  const role = useMe().data?.role ?? "agent"
+  // "Send and set pending" only where this user may set pending (not on a closed ticket, unless an admin).
+  const canSetPending = mayChangeStatus(role, view.ticket.status, "pending")
+
+  const send = async (setPending: boolean) => {
     if (!editor) return
     setError(null)
     if (empty && sendable.length === 0) {
@@ -178,6 +195,7 @@ export function Composer({ view }: { view: TicketView }) {
       html: empty ? "" : editor.getHTML(),
       uploads: sendable.flatMap((file) => (file.source === "upload" && file.upload ? [file.upload.id] : [])),
       parts: sendable.flatMap((file) => (file.source === "part" ? [file.part.id] : [])),
+      setPending: kind === "reply" && setPending,
     }
     if (kind === "reply" && input.to.length === 0) {
       setError(t("compose.toRequired"))
@@ -193,8 +211,18 @@ export function Composer({ view }: { view: TicketView }) {
       editor.commands.clearContent()
       setEmpty(true)
       setFiles([])
-      showToast(kind === "reply" ? t("compose.replyQueued") : t("compose.noteAdded"), "success")
-      await queryClient.invalidateQueries({ queryKey: qk.ticket(view.ticket.number) })
+      showToast(
+        kind === "note"
+          ? t("compose.noteAdded")
+          : setPending
+            ? t("compose.replyQueuedPending")
+            : t("compose.replyQueued"),
+        "success",
+      )
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: qk.ticket(view.ticket.number) }),
+        queryClient.invalidateQueries({ queryKey: ["tickets"] }),
+      ])
     } catch (failure) {
       if (mounted.current) setError(errorText(t, failure))
     } finally {
@@ -341,16 +369,33 @@ export function Composer({ view }: { view: TicketView }) {
             {t("compose.attach")}
           </button>
           {scanning ? <span className="ui-hint">{t("compose.waitScan")}</span> : null}
+          {kind === "reply" && canSetPending ? (
+            <button
+              type="button"
+              className="ui-btn"
+              disabled={busy || scanning || !editor}
+              onClick={() => void send(false)}
+              data-testid="composer-send-only"
+            >
+              {t("compose.sendOnly")}
+            </button>
+          ) : null}
           <button
             type="button"
             className="ui-btn ui-btn-primary"
             disabled={busy || scanning || !editor}
             aria-busy={busy || undefined}
-            onClick={() => void send()}
+            onClick={() => void send(kind === "reply" && canSetPending)}
             data-testid="composer-send"
           >
             <Send aria-hidden="true" />
-            {busy ? t("compose.sending") : kind === "reply" ? t("compose.sendReply") : t("compose.addNote")}
+            {busy
+              ? t("compose.sending")
+              : kind === "note"
+                ? t("compose.addNote")
+                : canSetPending
+                  ? t("compose.sendPending")
+                  : t("compose.sendReply")}
           </button>
         </div>
       </div>

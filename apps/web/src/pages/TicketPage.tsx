@@ -5,7 +5,8 @@
 // their scan status in words; a clean image, PDF, or text file previews in the shared dialog, and every stored file
 // downloads. A ticket outside the user's organizations reads as not found, as the server answers. Replies and internal
 // notes (plan 3.1) show their author, a reply where its sending is per recipient and which of its links were clicked
-// and history files downloaded (plan 3.4), and the composer comes last.
+// and history files downloaded (plan 3.4), and the composer comes last. The details hold the workflow (plan 4.1): the
+// status, the categories, and moving the ticket to another organization (tickets/Workflow.tsx).
 
 import type { AttachmentView, MessageView, TicketView } from "@maane/shared"
 import { Download, Eye, Paperclip } from "lucide-react"
@@ -27,6 +28,7 @@ import { Composer } from "./tickets/Composer.tsx"
 import { Delivery } from "./tickets/Delivery.tsx"
 import { FilePreview } from "./tickets/FilePreview.tsx"
 import { AddressLine, ScanTag, Sender, TicketNumber, TicketTags } from "./tickets/parts.tsx"
+import { CategoriesControl, OrganizationControl, StatusControl } from "./tickets/Workflow.tsx"
 
 const NUMBER = /^[1-9][0-9]{0,15}$/
 
@@ -104,9 +106,21 @@ function Ticket({ view }: { view: TicketView }) {
         </div>
         <dl className="ui-facts">
           <div>
+            <dt>{t("ticket.statusLabel")}</dt>
+            <dd>
+              <StatusControl view={view} />
+            </dd>
+          </div>
+          <div>
+            <dt>{t("ticket.categories.label")}</dt>
+            <dd>
+              <CategoriesControl view={view} />
+            </dd>
+          </div>
+          <div>
             <dt>{t("ticket.organization")}</dt>
             <dd>
-              <bdi dir="auto">{ticket.organization.name}</bdi>
+              <OrganizationControl view={view} />
             </dd>
           </div>
           <div>
@@ -150,7 +164,7 @@ function Ticket({ view }: { view: TicketView }) {
                     <Link to={`/tickets/${link.number}`}>
                       <TicketNumber number={link.number} />
                     </Link>{" "}
-                    <span className="ui-muted">{t(`flag.${link.reason}`)}</span>
+                    <span className="ui-muted">{t(`ticket.link.${link.reason}`)}</span>
                   </span>
                 ))}
               </dd>

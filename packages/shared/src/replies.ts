@@ -184,6 +184,11 @@ export interface ReplyInput {
   uploads: string[]
   /** Attachments and inline parts of the ticket's own messages. */
   parts: string[]
+  /**
+   * A reply only: set the ticket to pending in the same transaction (plan 4.1). The composer sends true by default
+   * ("Send and set pending"); false or absent leaves the status as it is. A note never changes the status.
+   */
+  setPending?: boolean
 }
 
 /**

@@ -51,6 +51,7 @@ import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
 import type { Settings } from "../settings/service.ts"
 import { wellFormedText } from "../text.ts"
+import { changeStatus, lockTicket } from "../tickets/status.ts"
 import { EMBEDDABLE_TYPES, imagesToRead, prepareImage } from "./images.ts"
 import type { Entry, EntryImage } from "./layout.ts"
 import {
@@ -64,7 +65,7 @@ import {
   replySubject,
   storedBody,
 } from "./mail.ts"
-import { belongsTo, supportRules } from "./rules.ts"
+import { belongsTo, fromAddresses, supportRules } from "./rules.ts"
 
 /** The user a request acts for. */
 export type ReplyUser = { id: string; role: string; actor: Actor; ipAddress: string | null }
@@ -81,6 +82,8 @@ export const ReplyBody = z.object({
   html: z.string().max(REPLY_HTML_MAX),
   uploads: z.array(z.uuid()).max(ATTACHMENTS_MAX),
   parts: z.array(z.uuid()).max(ATTACHMENTS_MAX),
+  /** A reply only: set the ticket to pending in the reply's transaction (plan 4.1); absent leaves the status. */
+  setPending: z.boolean().optional(),
 })
 export type ReplyBodyInput = z.infer<typeof ReplyBody>
 
@@ -170,13 +173,7 @@ export class Replies {
     organizationName: string,
     signature: string,
   ): Promise<ComposeView> {
-    const rules = await supportRules(this.db)
-    const own = rules
-      .filter((rule) => rule.kind === "exact" && rule.organizationId === found.organizationId)
-      .map((rule) => rule.value)
-      .sort()
-    const ticketAddress = belongsTo(found.supportAddress, rules, found.organizationId) ? found.supportAddress : null
-    const from = ticketAddress && !own.includes(ticketAddress) ? [ticketAddress, ...own] : own
+    const { from, defaultFrom } = fromAddresses(await supportRules(this.db), found.organizationId, found.supportAddress)
     const participants = await this.db
       .select({ address: ticketParticipant.address, name: ticketParticipant.name })
       .from(ticketParticipant)
@@ -185,7 +182,7 @@ export class Replies {
     const [first, ...others] = participants
     return {
       from,
-      defaultFrom: ticketAddress ?? from[0] ?? null,
+      defaultFrom,
       to: first ? [first] : [],
       cc: others,
       signature,
@@ -293,6 +290,11 @@ export class Replies {
     }
 
     const written = await transactionWithJobs(this.db, async (tx, jobs) => {
+      // The ticket locked first: its status is decided from this row, a move since it was read out of the author's scope
+      // leaves nothing to write to (a note too), and any move since then refuses a reply's From.
+      const locked = await lockTicket(tx, t.id)
+      if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
+      if (isReply && locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
       const [row] = await tx
         .insert(message)
         .values({
@@ -362,10 +364,10 @@ export class Replies {
             )
         await this.jobs.sendIn(jobs, SEND_REPLY, { messageId: row.id })
       }
-      await tx
-        .update(ticket)
-        .set(isReply ? { status: "open", lastActivityAt: now } : { lastActivityAt: now })
-        .where(eq(ticket.id, t.id))
+      // "Send and set pending" (plan 4.1): in the reply's own transaction, by the one status rule, never on acceptance.
+      // A plain send and an internal note leave the status as it is.
+      if (isReply && input.setPending) await changeStatus(tx, locked, "pending", user, "reply")
+      await tx.update(ticket).set({ lastActivityAt: now }).where(eq(ticket.id, t.id))
       await writeAudit(tx, user.actor, {
         action: isReply ? "message.reply" : "message.note",
         entityType: "message",
@@ -595,7 +597,13 @@ export class Replies {
     return bytes
   }
 
-  /** A reply of a ticket in the scope, locked, with its outbox row; a refusal otherwise. */
+  /**
+   * A reply of a ticket in the scope, locked, with its outbox row; a refusal otherwise. The outbox row is locked first,
+   * then the ticket FOR KEY SHARE (the order the sender's claim takes), and the scope is checked against the ticket as
+   * that lock reads it: a move holds the ticket FOR UPDATE, so a move in progress is waited for and a ticket it took out
+   * of the user's scope is not found (review S8). KEY SHARE, not a stronger lock: Mark as sent updates recipient rows
+   * after this, and the webhook locks a recipient row before the ticket FOR NO KEY UPDATE, which KEY SHARE never blocks.
+   */
   async #reply(tx: Pick<Db, "select">, scope: OrganizationScope, messageId: string) {
     const [row] = await tx
       .select({
@@ -611,7 +619,13 @@ export class Replies {
       .where(eq(message.id, messageId))
       .for("update", { of: outbox })
     if (!row || !inScope(scope, row.organizationId)) throw new Refusal("not_found", 404)
-    return row
+    const [held] = await tx
+      .select({ organizationId: ticket.organizationId })
+      .from(ticket)
+      .where(eq(ticket.id, row.ticketId))
+      .for("key share")
+    if (!held || !inScope(scope, held.organizationId)) throw new Refusal("not_found", 404)
+    return { ...row, organizationId: held.organizationId }
   }
 
   /**

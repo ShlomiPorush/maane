@@ -64,7 +64,9 @@ export function TicketTags({ status, flags }: { status: TicketStatus; flags: str
   const { t } = useI18n()
   return (
     <>
-      <Tag tone={status === "new" ? "info" : "neutral"}>{t(`ticket.status.${status}`)}</Tag>
+      <Tag tone={status === "new" ? "info" : status === "solved" ? "ok" : "neutral"}>
+        {t(`ticket.status.${status}`)}
+      </Tag>
       {flags.map((flag) => (
         <Tag key={flag} tone="warn">
           {t(`flag.${flag}`)}

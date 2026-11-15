@@ -1,9 +1,18 @@
 // The words of the ticket list, the ticket view, file preview, and the intake log (plan 2.4) that the server and the
 // UI share: which detected types preview and how, and the shapes the API answers with.
 
-import type { IntakeOutcome, MatchLayer, MessageContent, PartStatus, TextField, TicketStatus } from "./intake.ts"
+import type {
+  IntakeOutcome,
+  LinkReason,
+  MatchLayer,
+  MessageContent,
+  PartStatus,
+  TextField,
+  TicketStatus,
+} from "./intake.ts"
 import type { TrackedLinkView } from "./links.ts"
 import type { ComposeView, DeliveryView, MessageDirection } from "./replies.ts"
+import type { CategoryRef } from "./workflow.ts"
 
 /**
  * How a file previews, by the type read from its content (never the declared one): images, PDF (pdf.js), and text
@@ -64,6 +73,8 @@ export interface TicketList {
   next: string | null
   /** The organizations the user may see, for the filter. */
   organizations: OrganizationRef[]
+  /** Every category, for the filter. */
+  categories: CategoryRef[]
 }
 
 /** A file of a message: an attachment or an inline part, with its scan status and what may be done with it. */
@@ -131,13 +142,19 @@ export interface TicketView {
     supportAddress: string
     createdAt: string
     lastActivityAt: string
+    /** The ticket's categories, by name. */
+    categories: CategoryRef[]
   }
   participants: MailAddress[]
   /** Tickets this one is linked to, either way, that the user may see. */
-  links: { number: number; reason: string }[]
+  links: { number: number; reason: LinkReason }[]
   messages: MessageView[]
   /** What the composer starts from. */
   compose: ComposeView
+  /** Every category, for the ticket's category picker. */
+  categories: CategoryRef[]
+  /** The organizations the user may move the ticket to (plan 4.1): none when they may not move it. */
+  moveTargets: OrganizationRef[]
 }
 
 /** A row of the intake log: what processing did (live) or would have done (listening) with one message. */

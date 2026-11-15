@@ -1,21 +1,26 @@
 // Maane's own API, typed, and the TanStack Query keys of each read.
 
-import type {
-  AddressKind,
-  GraphTestView,
-  IntakeLog,
-  Locale,
-  ReplyInput,
-  Role,
-  ScannerStatusView,
-  ScannerTestView,
-  SettingKey,
-  SettingView,
-  SmtpTestView,
-  TicketList,
-  TicketView,
-  UploadView,
-  WebhookSecretsView,
+import {
+  type AddressKind,
+  type CategoryRef,
+  type CategoryView,
+  DEFAULT_STATUS_FILTER,
+  type GraphTestView,
+  type IntakeLog,
+  type Locale,
+  type ReplyInput,
+  type Role,
+  type ScannerStatusView,
+  type ScannerTestView,
+  type SettingKey,
+  type SettingView,
+  type SmtpTestView,
+  type StatusFilter,
+  type TicketList,
+  type TicketStatus,
+  type TicketView,
+  type UploadView,
+  type WebhookSecretsView,
 } from "@maane/shared"
 import { query, request, sendFile } from "./client.ts"
 
@@ -88,13 +93,21 @@ export const qk = {
   sessions: ["sessions"] as const,
   organizations: ["organizations"] as const,
   organization: (id: string) => ["organizations", id] as const,
-  tickets: (filters: TicketFilters) => ["tickets", filters.organization ?? "", filters.flagged ? 1 : 0] as const,
+  tickets: (filters: TicketFilters) =>
+    [
+      "tickets",
+      filters.organization ?? "",
+      filters.flagged ? 1 : 0,
+      filters.status ?? "",
+      filters.category ?? "",
+    ] as const,
+  categories: ["categories"] as const,
   ticket: (number: number) => ["ticket", number] as const,
   intake: (filters: IntakeFilters) => ["intake", filters.mode ?? "", filters.flagged ? 1 : 0] as const,
 }
 
-/** The ticket list's filters, as the page keeps them in its address. */
-export type TicketFilters = { organization?: string; flagged?: boolean }
+/** The ticket list's filters, as the page keeps them in its address. Without a status the list shows open work. */
+export type TicketFilters = { organization?: string; flagged?: boolean; status?: StatusFilter; category?: string }
 /** The intake log's filters. */
 export type IntakeFilters = { mode?: "listening" | "live"; flagged?: boolean }
 
@@ -146,9 +159,28 @@ export const api = {
   tickets: (filters: TicketFilters, after: string | null) =>
     request<TicketList>(
       "GET",
-      `/tickets${query({ organization: filters.organization, flagged: filters.flagged ? 1 : undefined, after })}`,
+      `/tickets${query({
+        organization: filters.organization,
+        flagged: filters.flagged ? 1 : undefined,
+        // Open work is the server's default too: the request, like the address, names only another view.
+        status: filters.status === DEFAULT_STATUS_FILTER ? undefined : filters.status,
+        category: filters.category,
+        after,
+      })}`,
     ),
   ticket: (number: number) => request<TicketView>("GET", `/tickets/${number}`),
+  /** The ticket's status (plan 4.1): `closed` is set and left only by an admin. */
+  setStatus: (number: number, status: TicketStatus) =>
+    request<{ ok: true }>("PUT", `/tickets/${number}/status`, { status }),
+  setTicketCategories: (number: number, categories: string[]) =>
+    request<{ ok: true }>("PUT", `/tickets/${number}/categories`, { categories }),
+  moveTicket: (number: number, organizationId: string) =>
+    request<{ ok: true }>("PUT", `/tickets/${number}/organization`, { organizationId }),
+  categories: () => request<{ categories: CategoryView[] }>("GET", "/admin/categories"),
+  createCategory: (name: string) => request<{ category: CategoryRef }>("POST", "/admin/categories", { name }),
+  renameCategory: (id: string, name: string) =>
+    request<{ ok: true }>("PATCH", `/admin/categories/${encodeURIComponent(id)}`, { name }),
+  deleteCategory: (id: string) => request<{ ok: true }>("DELETE", `/admin/categories/${encodeURIComponent(id)}`),
   intake: (filters: IntakeFilters, after: string | null) =>
     request<IntakeLog>(
       "GET",

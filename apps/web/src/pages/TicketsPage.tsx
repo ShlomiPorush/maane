@@ -1,9 +1,17 @@
 // The ticket list, the home page (plan 2.4): one list across every organization the user may see, newest activity
-// first (GET /api/v1/tickets), with an organization filter and the review filter, both kept in the address
-// (?organization=<id>&review=1). "Show older tickets" follows the cursor after the last row shown (TB-6); the list
+// first (GET /api/v1/tickets), with an organization filter, the review filter, and (plan 4.1) a status filter whose
+// default is open work (new, open, on hold) and a category filter, all kept in the address
+// (?organization=<id>&review=1&status=<filter>&category=<id>; no status is open work). "Show older tickets" follows the cursor after the last row shown (TB-6); the list
 // reads itself again every 30 seconds and keeps every page it shows (SV-10). A row opens the ticket (/tickets/:n).
 
-import type { TicketList, TicketSummary } from "@maane/shared"
+import {
+  type CategoryRef,
+  DEFAULT_STATUS_FILTER,
+  STATUS_FILTERS,
+  type StatusFilter,
+  type TicketList,
+  type TicketSummary,
+} from "@maane/shared"
 import { ChevronRight } from "lucide-react"
 import { useId } from "react"
 import { Link, useSearchParams } from "react-router"
@@ -22,9 +30,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** The filters the address holds; anything else in it is ignored. */
 export function ticketFilters(search: URLSearchParams): TicketFilters {
   const organization = search.get("organization") ?? ""
+  const status = search.get("status") ?? ""
+  const category = search.get("category") ?? ""
   return {
     organization: UUID.test(organization) ? organization : undefined,
     flagged: search.get("review") === "1",
+    status: (STATUS_FILTERS as readonly string[]).includes(status) ? (status as StatusFilter) : DEFAULT_STATUS_FILTER,
+    category: UUID.test(category) ? category : undefined,
   }
 }
 
@@ -42,10 +54,13 @@ export function TicketsPage() {
   })
   const tickets = query.data?.pages.flatMap((page) => page.tickets) ?? []
   const organizations = query.data?.pages[0]?.organizations ?? []
-  const filtered = Boolean(filters.organization || filters.flagged)
+  const categories = query.data?.pages[0]?.categories ?? []
+  const filtered = Boolean(
+    filters.organization || filters.flagged || filters.category || filters.status !== DEFAULT_STATUS_FILTER,
+  )
 
   // A filter replaces the address in place: Back leaves the list instead of undoing a filter (NL-4).
-  const setFilter = (name: "organization" | "review", value: string | null) => {
+  const setFilter = (name: "organization" | "review" | "status" | "category", value: string | null) => {
     const next = new URLSearchParams(search)
     if (value) next.set(name, value)
     else next.delete(name)
@@ -61,6 +76,11 @@ export function TicketsPage() {
         flagged={Boolean(filters.flagged)}
         onOrganization={(id) => setFilter("organization", id || null)}
         onFlagged={(on) => setFilter("review", on ? "1" : null)}
+        status={filters.status ?? DEFAULT_STATUS_FILTER}
+        onStatus={(status) => setFilter("status", status === DEFAULT_STATUS_FILTER ? null : status)}
+        categories={categories}
+        category={filters.category ?? ""}
+        onCategory={(id) => setFilter("category", id || null)}
       />
       <section
         className="ui-panel"
@@ -123,13 +143,59 @@ function Filters(props: {
   flagged: boolean
   onOrganization: (id: string) => void
   onFlagged: (on: boolean) => void
+  status: StatusFilter
+  onStatus: (status: StatusFilter) => void
+  categories: CategoryRef[]
+  category: string
+  onCategory: (id: string) => void
 }) {
   const { t } = useI18n()
   const selectId = useId()
   // An organization in the address that the list does not offer (removed, or not visible) still shows as chosen.
   const known = props.organization === "" || props.organizations.some((o) => o.id === props.organization)
+  const knownCategory = props.category === "" || props.categories.some((c) => c.id === props.category)
   return (
     <div className="ui-filters">
+      <div className="ui-filter">
+        <label className="ui-label" htmlFor={`${selectId}-status`}>
+          {t("tickets.status")}
+        </label>
+        <select
+          id={`${selectId}-status`}
+          className="ui-input ui-select"
+          value={props.status}
+          data-testid="status-filter"
+          onChange={(event) => props.onStatus(event.target.value as StatusFilter)}
+        >
+          {STATUS_FILTERS.map((status) => (
+            <option key={status} value={status}>
+              {t(`tickets.statusFilter.${status}`)}
+            </option>
+          ))}
+        </select>
+      </div>
+      {props.categories.length > 0 || props.category !== "" ? (
+        <div className="ui-filter">
+          <label className="ui-label" htmlFor={`${selectId}-category`}>
+            {t("tickets.category")}
+          </label>
+          <select
+            id={`${selectId}-category`}
+            className="ui-input ui-select"
+            value={props.category}
+            data-testid="category-filter"
+            onChange={(event) => props.onCategory(event.target.value)}
+          >
+            <option value="">{t("tickets.allCategories")}</option>
+            {props.categories.map((category) => (
+              <option key={category.id} value={category.id} dir="auto">
+                {category.name}
+              </option>
+            ))}
+            {knownCategory ? null : <option value={props.category}>{props.category}</option>}
+          </select>
+        </div>
+      ) : null}
       {props.organizations.length > 1 || props.organization !== "" ? (
         <div className="ui-filter">
           <label className="ui-label" htmlFor={selectId}>
@@ -138,6 +204,7 @@ function Filters(props: {
           <select
             id={selectId}
             className="ui-input ui-select"
+            data-testid="organization-filter"
             value={props.organization}
             onChange={(event) => props.onOrganization(event.target.value)}
           >

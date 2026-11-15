@@ -65,6 +65,8 @@ export {
   isClientId,
   isMailbox,
   isTenantId,
+  LINK_REASONS,
+  type LinkReason,
   MATCH_LAYERS,
   type MatchLayer,
   MESSAGE_CONTENTS,
@@ -179,3 +181,14 @@ export {
   type TicketSummary,
   type TicketView,
 } from "./tickets.ts"
+export {
+  CATEGORY_NAME_MAX,
+  type CategoryRef,
+  type CategoryView,
+  DEFAULT_STATUS_FILTER,
+  mayChangeStatus,
+  OPEN_WORK_STATUSES,
+  STATUS_FILTERS,
+  type StatusFilter,
+  statusesOf,
+} from "./workflow.ts"

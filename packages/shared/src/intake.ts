@@ -68,9 +68,20 @@ export const TICKET_FLAGS = [
 ] as const
 export type TicketFlag = (typeof TICKET_FLAGS)[number]
 
-/** A new ticket is `new`; a customer message on an existing ticket makes it `open`. Later phases add the rest. */
-export const TICKET_STATUSES = ["new", "open"] as const
+/**
+ * The Zendesk set (requirements 3.1, plan 4.1): a new ticket is `new`; `pending` waits for the customer; `on_hold` waits
+ * for someone else; `solved` is done; `closed` is final, set and left only by an admin. A customer reply makes every
+ * status but `closed` `open` (apps/server/src/tickets/customer-reply.ts); a reply to a closed ticket opens a follow-up.
+ */
+export const TICKET_STATUSES = ["new", "open", "pending", "on_hold", "solved", "closed"] as const
 export type TicketStatus = (typeof TICKET_STATUSES)[number]
+
+/**
+ * Why a ticket is linked to another (`ticket_link.reason`): the two review flags of intake, and `follow_up`, a ticket
+ * opened by a customer reply to a closed ticket (plan 4.1). A follow-up needs no review, so it is not a ticket flag.
+ */
+export const LINK_REASONS = ["sender_not_participant", "ambiguous_original", "follow_up"] as const
+export type LinkReason = (typeof LINK_REASONS)[number]
 
 /**
  * What processing did with a message (live) or would have done (listening):
@@ -120,6 +131,7 @@ export const INTAKE_REASONS = [
   "no_default_address",
   "sender_not_participant",
   "ambiguous_original",
+  "follow_up",
   ...AUTOMATED_SIGNS,
 ] as const
 export type IntakeReason = (typeof INTAKE_REASONS)[number]
