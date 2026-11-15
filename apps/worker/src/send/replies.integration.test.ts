@@ -11,6 +11,7 @@ import {
   ticket as ticketTable,
   upload,
 } from "@maane/server/db/schema"
+import { refreshDeliveryFlag } from "@maane/server/delivery/service"
 import { type JobQueue, openJobQueue, SEND_REPLY, UPLOAD_SCAN } from "@maane/server/jobs/queue"
 import { Organizations } from "@maane/server/organizations/service"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
@@ -19,7 +20,7 @@ import { createTestApp } from "@maane/server/testing/app"
 import { nextIp, TestBrowser, testPassword } from "@maane/server/testing/browser"
 import { pdf, png } from "@maane/server/testing/files"
 import { MESSAGE_MAX_BYTES, MESSAGES, type SettingKey, type TicketView, userEmail } from "@maane/shared"
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import { simpleParser } from "mailparser"
 import { PgBoss } from "pg-boss"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
@@ -189,6 +190,18 @@ async function view(b: TestBrowser, number: number): Promise<TicketView> {
 }
 
 const deliveryOf = (v: TicketView, id: string) => v.messages.find((m) => m.id === id)?.delivery
+
+/** Whether another session waits on a row lock within five seconds: bounded, so one that never waits fails. */
+async function someoneWaits(): Promise<boolean> {
+  for (let tries = 0; tries < 200; tries++) {
+    const result = await h.database.db.execute<{ n: number }>(
+      sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+    )
+    if ((result.rows[0]?.n ?? 0) > 0) return true
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  return false
+}
 
 describe("a reply, end to end", () => {
   it("sends a Hebrew reply with an English paragraph and an attachment through SMTP2GO, and it is accepted", async () => {
@@ -780,6 +793,85 @@ describe("attempts that overlap", () => {
       problem: "from_not_allowed",
     })
     expect(smtp2go.received.length + failover.received.length).toBe(received)
+  })
+
+  it.each(["mark-sent", "resend"] as const)(
+    "%s waits for a move in progress and refuses a reply the move took out of the agent's organizations (review S8)",
+    async (action) => {
+      const admin = await firstAdmin()
+      const { b: agent, id: agentId } = await newAgent(admin, "an.agent")
+      await new Organizations(h.database.db).addMember(org, agentId, { actor: SYSTEM, ipAddress: null })
+      const ticket = await customerTicket()
+      const written = await admin.call(
+        "POST",
+        `/api/v1/tickets/${ticket.number}/messages`,
+        reply({
+          to: [{ address: "drop.dana@example.com", name: null }],
+          cc: [{ address: "ron@example.com", name: null }],
+        }),
+      )
+      expect(written.status).toBe(201)
+      const id = written.json.id as string
+      expect(await sender().send(id)).toBe("unknown")
+      const [ticketRow] = await h.database.db
+        .select({ id: ticketTable.id })
+        .from(ticketTable)
+        .where(eq(ticketTable.number, ticket.number))
+      const ticketId = ticketRow?.id ?? ""
+      const recipients = () => h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id))
+      const before = { recipients: await recipients(), participants: await h.participantsOf(ticketId) }
+      expect(before.participants).not.toContain("ron@example.com")
+      let answer: Promise<{ status: number; json: unknown }> = Promise.resolve({ status: 0, json: null })
+      // A move holds the ticket row as Workflow.move does (FOR UPDATE) while the agent of the old organization acts.
+      await h.database.db.transaction(async (tx) => {
+        await tx.select({ id: ticketTable.id }).from(ticketTable).where(eq(ticketTable.id, ticketId)).for("update")
+        await tx.update(ticketTable).set({ organizationId: otherOrg }).where(eq(ticketTable.id, ticketId))
+        answer = agent.call(
+          "POST",
+          `/api/v1/messages/${id}/${action}`,
+          action === "mark-sent" ? { address: "ron@example.com" } : undefined,
+        )
+        expect(await someoneWaits()).toBe(true)
+      })
+      const result = await answer
+      expect(result.status).toBe(404)
+      expect(result.json).toEqual({ error: "not_found" })
+      // Nothing written to the moved ticket: no recipient, state, participant, delivery flag, or audit row changed.
+      expect(await recipients()).toEqual(before.recipients)
+      expect(await h.participantsOf(ticketId)).toEqual(before.participants)
+      const [row] = await h.database.db.select({ state: outbox.state }).from(outbox).where(eq(outbox.messageId, id))
+      expect(row?.state).toBe("unknown")
+      expect(
+        await h.database.db
+          .select()
+          .from(auditLog)
+          .where(and(eq(auditLog.entityId, id), inArray(auditLog.action, ["message.mark_sent", "message.resend"]))),
+      ).toEqual([])
+    },
+  )
+
+  it("a claim does not hold up the webhook's delivery flag while it waits for a recipient the webhook holds (review S7)", async () => {
+    const admin = await firstAdmin()
+    const ticket = await customerTicket()
+    const written = await admin.call("POST", `/api/v1/tickets/${ticket.number}/messages`, reply())
+    expect(written.status).toBe(201)
+    const id = written.json.id as string
+    const [ticketRow] = await h.database.db
+      .select({ id: ticketTable.id })
+      .from(ticketTable)
+      .where(eq(ticketTable.number, ticket.number))
+    const ticketId = ticketRow?.id ?? ""
+    let sent: Promise<unknown> = Promise.resolve()
+    // The webhook's order (applyDeliveryEvent): a recipient row first, then the ticket FOR NO KEY UPDATE for its flag.
+    // The claim meanwhile holds the outbox row and the ticket, and waits for that recipient row. With a ticket lock
+    // that conflicts with FOR NO KEY UPDATE (FOR SHARE) the two would deadlock and PostgreSQL would abort one.
+    await h.database.db.transaction(async (tx) => {
+      await tx.update(outboxRecipient).set({ deliveryRecordedAt: sql`now()` }).where(eq(outboxRecipient.messageId, id))
+      sent = sender().send(id)
+      expect(await someoneWaits()).toBe(true)
+      await refreshDeliveryFlag(tx, ticketId)
+    })
+    expect(await sent).toBe("accepted")
   })
 })
 

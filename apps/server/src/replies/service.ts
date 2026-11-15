@@ -597,7 +597,13 @@ export class Replies {
     return bytes
   }
 
-  /** A reply of a ticket in the scope, locked, with its outbox row; a refusal otherwise. */
+  /**
+   * A reply of a ticket in the scope, locked, with its outbox row; a refusal otherwise. The outbox row is locked first,
+   * then the ticket FOR KEY SHARE (the order the sender's claim takes), and the scope is checked against the ticket as
+   * that lock reads it: a move holds the ticket FOR UPDATE, so a move in progress is waited for and a ticket it took out
+   * of the user's scope is not found (review S8). KEY SHARE, not a stronger lock: Mark as sent updates recipient rows
+   * after this, and the webhook locks a recipient row before the ticket FOR NO KEY UPDATE, which KEY SHARE never blocks.
+   */
   async #reply(tx: Pick<Db, "select">, scope: OrganizationScope, messageId: string) {
     const [row] = await tx
       .select({
@@ -613,7 +619,13 @@ export class Replies {
       .where(eq(message.id, messageId))
       .for("update", { of: outbox })
     if (!row || !inScope(scope, row.organizationId)) throw new Refusal("not_found", 404)
-    return row
+    const [held] = await tx
+      .select({ organizationId: ticket.organizationId })
+      .from(ticket)
+      .where(eq(ticket.id, row.ticketId))
+      .for("key share")
+    if (!held || !inScope(scope, held.organizationId)) throw new Refusal("not_found", 404)
+    return { ...row, organizationId: held.organizationId }
   }
 
   /**

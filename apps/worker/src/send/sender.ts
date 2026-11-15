@@ -148,14 +148,17 @@ export class ReplySender {
         return null
       }
       if (row.state !== "pending") return null
-      // The ticket's organization, read under a lock a move waits for (FOR SHARE against its FOR UPDATE), taken after
-      // the outbox row as every path that holds both takes them: a move and this claim serialize, so the checks below
-      // and the switch to `sending` see the organization the ticket has while the reply goes.
+      // The ticket's organization, read under a lock a move waits for (FOR KEY SHARE against its FOR UPDATE; the move
+      // is the only writer of the organization), taken after the outbox row as every path that holds both takes them:
+      // a move and this claim serialize, so the checks below and the switch to `sending` see the organization the
+      // ticket has while the reply goes. KEY SHARE, not SHARE (review S7): the webhook locks a recipient row and then
+      // the ticket FOR NO KEY UPDATE to refresh its delivery flag, which KEY SHARE does not block, so a claim waiting
+      // for that recipient row below never holds up the webhook it waits for.
       const [held] = await tx
         .select({ organizationId: ticket.organizationId })
         .from(ticket)
         .where(eq(ticket.id, row.ticketId))
-        .for("share")
+        .for("key share")
       if (!held) return null
       const problem = await this.#refusal(tx, mode, { ...row, organizationId: held.organizationId })
       if (problem) {
