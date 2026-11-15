@@ -48,6 +48,7 @@ async function main(): Promise<void> {
     jobs,
     trustedProxies: config.trustedProxies,
     geoipDir: config.geoipDir,
+    vapidPublicKey: config.vapid.publicKey,
   })
 
   const server = serve({ fetch: app.fetch, port: config.port, hostname: "0.0.0.0" })

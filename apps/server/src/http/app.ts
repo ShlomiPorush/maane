@@ -27,6 +27,7 @@ import { GRAPH_TEST, type JobQueue, SCANNER_SELF_TEST, SMTP_TEST } from "../jobs
 import { Geo } from "../links/geo.ts"
 import { Links } from "../links/service.ts"
 import { errorFacts, log, loggedPath } from "../log.ts"
+import { Subscriptions } from "../notifications/service.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { Organizations } from "../organizations/service.ts"
 import { Replies } from "../replies/service.ts"
@@ -34,6 +35,7 @@ import { type Settings, SettingsError } from "../settings/service.ts"
 import { clientIp, rememberClient, trustOf } from "./client.ts"
 import { hookRoutes } from "./hooks.ts"
 import { linkRoutes } from "./links.ts"
+import { notificationRoutes } from "./notifications.ts"
 import { organizationRoutes } from "./organizations.ts"
 import { replyRoutes } from "./replies.ts"
 import type { ApiEnv, AppUser } from "./request.ts"
@@ -59,6 +61,8 @@ export interface AppContext {
   trustedProxies: string[]
   /** MAANE_GEOIP_DIR: the read-only directory of the GeoLite2 City and ASN files, or null for no location. */
   geoipDir: string | null
+  /** MAANE_VAPID_PUBLIC_KEY: the key a browser subscribes to notifications with (plan 4.5). */
+  vapidPublicKey: string
 }
 
 type User = AppUser
@@ -402,6 +406,7 @@ export function createApp(ctx: AppContext) {
   })
 
   api.route("/admin/organizations", organizationRoutes(new Organizations(ctx.db)))
+  api.route("/notifications", notificationRoutes(new Subscriptions(ctx.db), ctx.vapidPublicKey))
   const replies = new Replies(ctx.db, ctx.settings, ctx.jobs, ctx.filesDir, ctx.publicUrl)
   api.route("/", ticketRoutes(ctx.db, ctx.filesDir, replies))
   api.route("/", replyRoutes(ctx.db, ctx.settings, replies))

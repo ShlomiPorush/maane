@@ -7,6 +7,7 @@ import {
   INTAKE_FILES_RETRY,
   INTAKE_PROCESS,
   INTAKE_SYNC,
+  PUSH_NOTIFY,
   QUEUE_OPTIONS,
   SCANNER_SELF_TEST,
   SEND_REPLY,
@@ -25,6 +26,7 @@ import { type LockPool, runExclusive } from "./intake/jobs.ts"
 import type { IntakeProcessor } from "./intake/process.ts"
 import type { WaitingFiles } from "./intake/retry.ts"
 import type { IntakeSync } from "./intake/sync.ts"
+import { type PushNotifier, pushNotifyJob } from "./notify/push.ts"
 import { type ReplySender, sendReplyJob } from "./send/sender.ts"
 import type { SmtpTimeouts } from "./send/smtp.ts"
 import { smtpTest } from "./send/test.ts"
@@ -45,6 +47,8 @@ export interface JobOptions {
   intake?: IntakeJobs
   /** Replies (plan 3.1): sending, the composer's uploads, and the SMTP connection tests. Needs `files`. */
   send?: SendJobs
+  /** Browser notifications (plan 4.5); registered before intake, which queues them. */
+  push?: PushNotifier
 }
 
 export interface SendJobs {
@@ -135,6 +139,14 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
       await boss.schedule(DELIVERY_POLL, "*/10 * * * *")
       await boss.work(DELIVERY_POLL, async () => poll.run())
     }
+  }
+
+  const push = options.push
+  if (push) {
+    // Created before intake's jobs run: intake queues notifications in its own transactions, and pg-boss refuses a job
+    // for a queue that does not exist.
+    await boss.createQueue(PUSH_NOTIFY, QUEUE_OPTIONS[PUSH_NOTIFY])
+    await boss.work(PUSH_NOTIFY, async ([job]) => pushNotifyJob(push, job?.data))
   }
 
   const intake = options.intake

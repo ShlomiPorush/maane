@@ -167,7 +167,10 @@
       "moveNoSendingAddress": "That organization has no address to send this ticket's replies from. Add a support address to it, then move the ticket.",
       "categoryNotFound": "This category no longer exists. Reload the page and try again.",
       "categoryNameInvalid": "Give the category a name of 1 to {categoryNameMax} characters.",
-      "categoryNameTaken": "Another category has this name. Choose another one."
+      "categoryNameTaken": "Another category has this name. Choose another one.",
+      "pushEndpointRefused": "This browser's push service is not one Maane sends to. Try Chrome, Edge, Firefox, or Safari.",
+      "pushEndpointTaken": "This device's notifications still belong to another account. Try again.",
+      "pushSubscriptionInvalid": "The browser gave a subscription Maane cannot use. Try again."
     }
   },
   "auth": {
@@ -555,6 +558,27 @@
     "codesLossMessage": "The new codes are shown only now, and the old ones no longer work. Closing without saving them means making new ones.",
     "codesLossClose": "Close anyway",
     "codesLossBack": "Back to the codes"
+  },
+  "notifications": {
+    "push": {
+      "newTicket": "New ticket #{number}",
+      "customerReply": "Customer reply in #{number}"
+    },
+    "group": "Notifications on this device",
+    "hint": "A notification for every new ticket and customer reply you may see, also while Maane is closed. It shows only the ticket number and the customer's name.",
+    "row": "Browser notifications",
+    "on": "On",
+    "off": "Off",
+    "turnOn": "Turn on",
+    "turnOff": "Turn off",
+    "busy": "Updating",
+    "loading": "Checking this device",
+    "checkFailed": "Could not check this device's notifications",
+    "unsupported": "This browser cannot get notifications from Maane.",
+    "blocked": "Notifications from Maane are blocked in this browser. Allow them in the browser's site settings, then turn them on here.",
+    "turnedOn": "Notifications are on for this device.",
+    "turnedOff": "Notifications are off for this device.",
+    "failed": "Could not change the notifications. {reason}"
   },
   "users": {
     "title": "Users",

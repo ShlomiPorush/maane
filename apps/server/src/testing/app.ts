@@ -44,6 +44,8 @@ export function createTestApp(
   filesDir = "/nonexistent",
   /** The link routes: the proxies they trust and the GeoLite2 directory. */
   links: { trustedProxies?: string[]; geoipDir?: string | null } = {},
+  /** The VAPID public key the notification routes hand out. */
+  vapidPublicKey = randomBytes(65).toString("base64url"),
 ) {
   const audit = openDatabase(database.url, 2)
   const clock = new TestClock()
@@ -81,6 +83,7 @@ export function createTestApp(
     jobs,
     trustedProxies: links.trustedProxies ?? [],
     geoipDir: links.geoipDir ?? null,
+    vapidPublicKey,
   })
   return {
     ready,
