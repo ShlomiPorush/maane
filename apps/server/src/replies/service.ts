@@ -65,7 +65,7 @@ import {
   replySubject,
   storedBody,
 } from "./mail.ts"
-import { belongsTo, supportRules } from "./rules.ts"
+import { belongsTo, fromAddresses, supportRules } from "./rules.ts"
 
 /** The user a request acts for. */
 export type ReplyUser = { id: string; role: string; actor: Actor; ipAddress: string | null }
@@ -173,13 +173,7 @@ export class Replies {
     organizationName: string,
     signature: string,
   ): Promise<ComposeView> {
-    const rules = await supportRules(this.db)
-    const own = rules
-      .filter((rule) => rule.kind === "exact" && rule.organizationId === found.organizationId)
-      .map((rule) => rule.value)
-      .sort()
-    const ticketAddress = belongsTo(found.supportAddress, rules, found.organizationId) ? found.supportAddress : null
-    const from = ticketAddress && !own.includes(ticketAddress) ? [ticketAddress, ...own] : own
+    const { from, defaultFrom } = fromAddresses(await supportRules(this.db), found.organizationId, found.supportAddress)
     const participants = await this.db
       .select({ address: ticketParticipant.address, name: ticketParticipant.name })
       .from(ticketParticipant)
@@ -188,7 +182,7 @@ export class Replies {
     const [first, ...others] = participants
     return {
       from,
-      defaultFrom: ticketAddress ?? from[0] ?? null,
+      defaultFrom,
       to: first ? [first] : [],
       cc: others,
       signature,
@@ -296,9 +290,10 @@ export class Replies {
     }
 
     const written = await transactionWithJobs(this.db, async (tx, jobs) => {
-      // The ticket locked first: its status is decided from this row, and a move since it was read refuses the From.
+      // The ticket locked first: its status is decided from this row, a move since it was read out of the author's scope
+      // leaves nothing to write to (a note too), and any move since then refuses a reply's From.
       const locked = await lockTicket(tx, t.id)
-      if (!locked) throw new Refusal("not_found", 404)
+      if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
       if (isReply && locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
       const [row] = await tx
         .insert(message)

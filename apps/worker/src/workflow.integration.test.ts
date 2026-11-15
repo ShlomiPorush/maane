@@ -19,7 +19,7 @@ import { createTestApp } from "@maane/server/testing/app"
 import { nextIp, TestBrowser, testPassword } from "@maane/server/testing/browser"
 import { customerReplyCondition, isCustomerReply } from "@maane/server/tickets/customer-reply"
 import { type SettingKey, type TicketStatus, type TicketView, userEmail } from "@maane/shared"
-import { and, asc, count, eq } from "drizzle-orm"
+import { and, asc, count, eq, sql } from "drizzle-orm"
 import { simpleParser } from "mailparser"
 import { PgBoss } from "pg-boss"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
@@ -525,6 +525,54 @@ describe("moving a ticket to another organization", () => {
     expect(parsed.from?.value[0]?.address).toBe(OTHER)
     expect(parsed.from?.value[0]?.name).toContain("(Example Other)")
   })
+
+  it("refuses a move to an organization with no address to send the ticket's replies from (review S4)", async () => {
+    const admin = await firstAdmin()
+    const patterns = await h.organization("Example Patterns", [{ value: "*@sales.example.com", kind: "pattern" }])
+    const t = await customerTicket()
+    const move = (organizationId: string) =>
+      admin.call("PUT", `/api/v1/tickets/${t.number}/organization`, { organizationId })
+    const refused = await move(patterns)
+    expect(refused.status).toBe(409)
+    expect(refused.json).toEqual({ error: "move_no_sending_address" })
+    expect((await db().select().from(ticket).where(eq(ticket.id, t.id)))[0]?.organizationId).toBe(org)
+    expect(
+      await db()
+        .select()
+        .from(auditLog)
+        .where(and(eq(auditLog.action, "ticket.move"), eq(auditLog.entityId, t.id))),
+    ).toEqual([])
+    // An organization with an exact address takes it, and its replies come from that address.
+    expect((await move(other)).status).toBe(200)
+  })
+
+  it("writes no note to a ticket moved out of its author's organizations while the note was written (review S1)", async () => {
+    const admin = await firstAdmin()
+    const one = await newAgent(admin, "agent.one", [org])
+    const t = await customerTicket()
+    const before = await messagesOf(t.id)
+    let posted: Promise<{ status: number; json: unknown }> = Promise.resolve({ status: 0, json: null })
+    // A move holds the ticket row as Workflow.move does (FOR UPDATE) while the agent's note is written.
+    await db().transaction(async (tx) => {
+      await tx.select({ id: ticket.id }).from(ticket).where(eq(ticket.id, t.id)).for("update")
+      await tx.update(ticket).set({ organizationId: other }).where(eq(ticket.id, t.id))
+      posted = one.call("POST", `/api/v1/tickets/${t.number}/messages`, reply({ kind: "note", from: null, to: [] }))
+      // The note waits on the ticket's lock: bounded, and a note that does not wait fails here.
+      let waiting = false
+      for (let tries = 0; tries < 200 && !waiting; tries++) {
+        const result = await db().execute<{ n: number }>(
+          sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+        )
+        waiting = (result.rows[0]?.n ?? 0) > 0
+        if (!waiting) await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      expect(waiting).toBe(true)
+    })
+    const answer = await posted
+    expect(answer.status).toBe(404)
+    expect(answer.json).toEqual({ error: "not_found" })
+    expect(await messagesOf(t.id)).toBe(before)
+  })
 })
 
 describe("categories", () => {
@@ -578,7 +626,7 @@ describe("categories", () => {
       { action: "category.create", details: { name: "Billing" } },
       { action: "category.create", details: { name: "Shipping" } },
       { action: "category.rename", details: { name: "Invoices", previous: "Billing" } },
-      { action: "category.delete", details: { name: "Shipping", tickets: 1 } },
+      { action: "category.delete", details: { name: "Shipping" } },
     ])
     const changes = await db()
       .select({ details: auditLog.details })

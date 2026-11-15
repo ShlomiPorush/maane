@@ -15,11 +15,9 @@ import { type ApiEnv, clientIp } from "./request.ts"
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const NUMBER = /^[1-9][0-9]{0,15}$/
-/** More categories than a ticket can sensibly carry is a malformed request. */
-const CATEGORIES_MAX = 100
 
 const StatusBody = z.object({ status: z.enum(TICKET_STATUSES) })
-const CategoriesBody = z.object({ categories: z.array(z.string().regex(UUID)).max(CATEGORIES_MAX) })
+const CategoriesBody = z.object({ categories: z.array(z.string().regex(UUID)) })
 const MoveBody = z.object({ organizationId: z.string().regex(UUID) })
 const NameBody = z.object({ name: z.string() })
 

@@ -14,6 +14,24 @@ export function belongsTo(address: string, rules: readonly Rule[], organizationI
   return match !== null && match.rule.organizationId === organizationId
 }
 
+/**
+ * The From addresses a ticket's replies may use in an organization: the ticket's own support address when it belongs
+ * to the organization (first, and the default), then the organization's exact addresses. A pattern alone gives none.
+ */
+export function fromAddresses(
+  rules: readonly Rule[],
+  organizationId: string,
+  ticketAddress: string,
+): { from: string[]; defaultFrom: string | null } {
+  const own = rules
+    .filter((rule) => rule.kind === "exact" && rule.organizationId === organizationId)
+    .map((rule) => rule.value)
+    .sort()
+  const kept = belongsTo(ticketAddress, rules, organizationId) ? ticketAddress : null
+  const from = kept && !own.includes(kept) ? [kept, ...own] : own
+  return { from, defaultFrom: kept ?? from[0] ?? null }
+}
+
 /** Every support address, as the shared matcher reads them. */
 export async function supportRules(db: Pick<Db, "select">): Promise<Rule[]> {
   return (await db

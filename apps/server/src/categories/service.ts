@@ -102,13 +102,12 @@ export class Categories {
     await this.db.transaction(async (tx) => {
       const [current] = await tx.select({ name: category.name }).from(category).where(eq(category.id, id)).for("update")
       if (!current) throw new Refusal("category_not_found", 404)
-      const [used] = await tx.select({ n: count() }).from(ticketCategory).where(eq(ticketCategory.categoryId, id))
       await tx.delete(category).where(eq(category.id, id))
       await writeAudit(tx, acting.actor, {
         action: "category.delete",
         entityType: "category",
         entityId: id,
-        details: { name: current.name, tickets: used?.n ?? 0 },
+        details: { name: current.name },
         ipAddress: acting.ipAddress,
       })
     })

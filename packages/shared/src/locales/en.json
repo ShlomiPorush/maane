@@ -164,6 +164,7 @@
       "nameInvalid": "Give a name of 1 to 80 characters without control characters.",
       "statusAdminOnly": "Only an admin can close a ticket or change a closed one.",
       "moveNotAllowed": "You can move a ticket only to an organization you belong to.",
+      "moveNoSendingAddress": "That organization has no address to send this ticket's replies from. Add a support address to it, then move the ticket.",
       "categoryNotFound": "This category no longer exists. Reload the page and try again.",
       "categoryNameInvalid": "Give the category a name of 1 to {categoryNameMax} characters.",
       "categoryNameTaken": "Another category has this name. Choose another one."

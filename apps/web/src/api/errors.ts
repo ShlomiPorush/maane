@@ -59,6 +59,7 @@ export const ERROR_TEXT: Record<string, string> = {
   name_invalid: "errors.code.nameInvalid",
   status_admin_only: "errors.code.statusAdminOnly",
   move_not_allowed: "errors.code.moveNotAllowed",
+  move_no_sending_address: "errors.code.moveNoSendingAddress",
   category_not_found: "errors.code.categoryNotFound",
   category_name_invalid: "errors.code.categoryNameInvalid",
   category_name_taken: "errors.code.categoryNameTaken",

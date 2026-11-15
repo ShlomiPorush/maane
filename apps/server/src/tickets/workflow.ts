@@ -14,6 +14,7 @@ import type { Db } from "../db/client.ts"
 import { category, organization, ticket, ticketCategory } from "../db/schema.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
+import { fromAddresses, supportRules } from "../replies/rules.ts"
 import { changeStatus, type LockedTicket, lockTicket } from "./status.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
@@ -102,6 +103,14 @@ export class Workflow {
         .for("share")
       const target = names.find((row) => row.id === organizationId)
       if (!target) throw new Refusal("organization_not_found", 404)
+      // Replies after the move come from the new organization: one with no address for this ticket (patterns alone,
+      // and the ticket's support address not its own) would leave the ticket unanswerable, so it is refused.
+      const [held] = await tx
+        .select({ supportAddress: ticket.supportAddress })
+        .from(ticket)
+        .where(eq(ticket.id, locked.id))
+      if (!held || fromAddresses(await supportRules(tx), organizationId, held.supportAddress).from.length === 0)
+        throw new Refusal("move_no_sending_address", 409)
       await tx.update(ticket).set({ organizationId }).where(eq(ticket.id, locked.id))
       await writeAudit(tx, user.actor, {
         action: "ticket.move",
