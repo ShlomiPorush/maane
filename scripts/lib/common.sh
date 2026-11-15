@@ -194,6 +194,65 @@ ensure_stack_env() {
   exec {lock}>&-
 }
 
+# --- Browser notification keys (plan 4.5) ---
+# The VAPID key pair the server and the worker read from app.env. It is made by web-push's documented
+# generateVAPIDKeys, which the image runs (dist/worker/vapid-keys.js), so it is added once the image is built. A
+# development data directory gets it once, also when its app.env is older than phase 4, and never a second one:
+# replacing it would disconnect every device's notifications. Verification and try-pr stacks are new for each run.
+VAPID_ENV_NAMES=(MAANE_VAPID_PUBLIC_KEY MAANE_VAPID_PRIVATE_KEY)
+
+# Prints a new pair as the two lines app.env takes, from the given image, without network or privileges. Returns 3
+# when the image has no generator (a pull request from before phase 4, which reads no VAPID keys).
+vapid_generator() {
+  local image="$1"
+  docker run --rm --network none --entrypoint test "$image" -f dist/worker/vapid-keys.js || return 3
+  docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --entrypoint node "$image" dist/worker/vapid-keys.js
+}
+
+# Appends a VAPID pair to DIR/app.env when it holds none. Both keys there: nothing changes. One of them, or an empty
+# one: refused, because a new pair would replace the one the devices subscribed with. The output is never printed.
+ensure_vapid_keys() {
+  local dir="$1" image="$2" file lock keys rc shape
+  file="$dir/app.env"
+  require_linux_dir "$dir"
+  require_outside_repo "$dir"
+  exec {lock}>"$dir/.secrets.lock" || die "cannot open the lock in $dir"
+  flock "$lock" || die "cannot lock $dir"
+  env_file_valid "$file" "${APP_ENV_NAMES[@]}" ||
+    die "$file is missing, incomplete, or not mode 600. Restore it; new keys would not read the stored secrets"
+  if env_file_valid "$file" "${VAPID_ENV_NAMES[@]}"; then
+    exec {lock}>&-
+    return 0
+  fi
+  if grep -qE '^MAANE_VAPID_(PUBLIC|PRIVATE)_KEY=' "$file"; then
+    die "$file holds only one of the VAPID keys, or an empty one. Restore the pair; a new one would disconnect every device's notifications"
+  fi
+  if keys="$(vapid_generator "$image")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [ "$rc" = 3 ]; then
+    info "$image has no VAPID key generator; app.env is left as it is"
+    exec {lock}>&-
+    return 0
+  fi
+  [ "$rc" = 0 ] || die "the VAPID key generator in $image failed; $file is unchanged"
+  # The generator's two lines exactly: a 65-byte public key and a 32-byte private key, base64url without padding.
+  shape=$'^MAANE_VAPID_PUBLIC_KEY=[A-Za-z0-9_-]{87}\nMAANE_VAPID_PRIVATE_KEY=[A-Za-z0-9_-]{43}$'
+  [[ "$keys" =~ $shape ]] ||
+    die "the VAPID key generator in $image printed something unexpected; $file is unchanged"
+  (
+    umask 077
+    printf '%s\n' "$keys" >>"$file"
+  ) || die "cannot append the VAPID keys to $file"
+  env_file_valid "$file" "${APP_ENV_NAMES[@]}" "${VAPID_ENV_NAMES[@]}" ||
+    die "$file is not complete or not mode 600 after adding the VAPID keys"
+  exec {lock}>&-
+  info "Added a VAPID key pair for browser notifications to $file"
+}
+
 # --- Data and signature directories ---
 # Next to the database, a stack has DIR/data, the attachments the server and the worker share (owned by UID 1000, the
 # image's node user), and DIR/clamav, ClamAV's signatures (owned by UID 100, the clamav user). Both are created by a

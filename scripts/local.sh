@@ -25,7 +25,7 @@ Usage: scripts/local.sh <command>
   nuke     Stop the stack and delete its data directory (asks first).
 
 Data directory: $MAANE_DATA_DIR (the database, postgres.env and app.env with its generated password and keys,
-data/ with the attachments, and clamav/ with ClamAV's signatures)
+the VAPID pair of browser notifications among them, data/ with the attachments, and clamav/ with ClamAV's signatures)
 The shell may set MAANE_PORT (default 8095) and MAANE_PUBLIC_URL.
 EOF
 }
@@ -65,12 +65,15 @@ main() {
       ensure_stack_env "$MAANE_DATA_DIR"
       ensure_stack_dirs "$MAANE_DATA_DIR"
       build
+      # The image makes the VAPID keys, so they are added after the build; an existing pair is never replaced.
+      ensure_vapid_keys "$MAANE_DATA_DIR" maane:dev
       dev_compose up --remove-orphans
       ;;
     start)
       ensure_stack_env "$MAANE_DATA_DIR"
       ensure_stack_dirs "$MAANE_DATA_DIR"
       build
+      ensure_vapid_keys "$MAANE_DATA_DIR" maane:dev
       # The server first: its setup screen is open for 5 minutes from its start while no user exists, and ClamAV's
       # first signature download can take longer than that.
       info "Starting the server of $PROJECT"

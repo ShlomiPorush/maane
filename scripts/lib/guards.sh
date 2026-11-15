@@ -350,6 +350,9 @@ if [ $# -eq 0 ]; then
 
   echo "--- Release workflow: jobs and steps on both CI paths, with and without dry_run"
   bash scripts/test-release-workflow.sh || fail=1
+
+  echo "--- Stack secrets: the VAPID pair added to app.env only when missing, never replaced"
+  bash scripts/test-stack-env.sh || fail=1
 fi
 
 exit "$fail"
