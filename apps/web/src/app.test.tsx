@@ -2360,12 +2360,13 @@ describe("browser notifications on this device", () => {
     [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === label) ?? null
 
   /** A browser with push: what it did, in order, next to the requests the transport answered. */
-  function fakeDevice(subscribed: boolean) {
+  function fakeDevice(subscribed: boolean, fails: { current?: boolean; unsubscribe?: boolean } = {}) {
     const events: string[] = []
     const subscription = (): DeviceSubscription => ({
       endpoint: ENDPOINT,
       keys: { p256dh: "p256dh-of-the-browser", auth: "auth-of-the-browser" },
       unsubscribe: async () => {
+        if (fails.unsubscribe) throw new Error("the push service did not answer")
         events.push("unsubscribe")
         current = null
       },
@@ -2374,7 +2375,10 @@ describe("browser notifications on this device", () => {
     setPushDevice({
       supported: () => true,
       permission: () => "granted",
-      current: async () => current,
+      current: async () => {
+        if (fails.current) throw new Error("the service worker is not reachable")
+        return current
+      },
       subscribe: async (key) => {
         events.push(`subscribe ${key}`)
         current = subscription()
@@ -2418,6 +2422,33 @@ describe("browser notifications on this device", () => {
     expect(events.slice(2)).toEqual([`DELETE ${JSON.stringify({ endpoint: ENDPOINT })}`, "unsubscribe"])
   })
 
+  /** Lets the requests and the browser calls already started finish. */
+  const settle = () => act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
+
+  it("ends a subscription this browser holds for someone else once a user is signed in, on any page", async () => {
+    const events = fakeDevice(true)
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": ok({ publicKey: PUBLIC_KEY, on: false }),
+    }
+    await renderAt("/", answers)
+    await vi.waitFor(() => expect(events).toEqual(["unsubscribe"]))
+    const asked = requests.find((r) => r.url === "/api/v1/notifications/state")
+    expect(asked?.body).toBe(JSON.stringify({ endpoint: ENDPOINT }))
+  })
+
+  it.each([
+    ["this user's own subscription", ok({ publicKey: PUBLIC_KEY, on: true })],
+    ["any subscription when the check fails", { status: 500, body: { error: "internal" } }],
+  ])("keeps %s", async (_, state) => {
+    const events = fakeDevice(true)
+    await renderAt("/", { "/api/setup/status": status(), "/api/v1/me": admin, "/api/v1/notifications/state": state })
+    await vi.waitFor(() => expect(requests.some((r) => r.url === "/api/v1/notifications/state")).toBe(true))
+    await settle()
+    expect(events).toEqual([])
+  })
+
   it("replaces a subscription this browser holds for someone else instead of taking it over", async () => {
     const events = fakeDevice(true)
     const answers: Answers = {
@@ -2431,6 +2462,8 @@ describe("browser notifications on this device", () => {
     }
     await renderAt("/account", answers)
     await vi.waitFor(() => expect(text()).toContain(he("notifications.off")))
+    // The check on signing in ends it first; turning on then makes a new one.
+    await vi.waitFor(() => expect(events).toEqual(["unsubscribe"]))
     await act(async () => button(he("notifications.turnOn"))?.click())
     await vi.waitFor(() => expect(events).toContain("PUT"))
     expect(events).toEqual(["unsubscribe", `subscribe ${PUBLIC_KEY}`, "PUT"])
@@ -2472,6 +2505,42 @@ describe("browser notifications on this device", () => {
     )
     expect(auth.signOut).not.toHaveBeenCalled()
     expect(events).toEqual([])
+    expect(where()).toBe("/enroll")
+  })
+
+  it("signs out when the server refuses the delete but the browser ends the subscription", async () => {
+    const events = fakeDevice(true)
+    auth.signOut.mockImplementation(async () => {
+      events.push("signOut")
+      return { data: {}, error: null }
+    })
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": totpRequired,
+      "/api/v1/notifications/subscription": totpRequired,
+    }
+    await renderAt("/enroll", answers)
+    await vi.waitFor(() => expect(button(he("account.signOut"))).not.toBeNull())
+    await act(async () => button(he("account.signOut"))?.click())
+    await vi.waitFor(() => expect(where()).toBe("/login"))
+    expect(events).toEqual(["unsubscribe", "signOut"])
+  })
+
+  it.each([
+    ["end", { unsubscribe: true }],
+    ["read", { current: true }],
+  ])("keeps the session when the browser could not %s its subscription, and says so", async (_, fails) => {
+    fakeDevice(true, fails)
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": totpRequired,
+      "/api/v1/notifications/subscription": totpRequired,
+    }
+    await renderAt("/enroll", answers)
+    await vi.waitFor(() => expect(button(he("account.signOut"))).not.toBeNull())
+    await act(async () => button(he("account.signOut"))?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.notForgotten")))
+    expect(auth.signOut).not.toHaveBeenCalled()
     expect(where()).toBe("/enroll")
   })
 })

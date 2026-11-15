@@ -578,7 +578,8 @@
     "blocked": "Notifications from Maane are blocked in this browser. Allow them in the browser's site settings, then turn them on here.",
     "turnedOn": "Notifications are on for this device.",
     "turnedOff": "Notifications are off for this device.",
-    "failed": "Could not change the notifications. {reason}"
+    "failed": "Could not change the notifications. {reason}",
+    "notForgotten": "Could not turn off notifications on this device, so you are still signed in. Try again."
   },
   "users": {
     "title": "Users",

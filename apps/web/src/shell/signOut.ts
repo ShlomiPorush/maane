@@ -8,7 +8,7 @@ import { useNavigate } from "react-router"
 import { authClient, authData } from "../api/auth.ts"
 import { errorText } from "../api/errors.ts"
 import { useI18n } from "../i18n/i18n.tsx"
-import { forgetDevice } from "../notifications/forget.ts"
+import { DeviceNotForgotten, forgetDevice } from "../notifications/forget.ts"
 import { showToast } from "../ui/Toast.tsx"
 import { useClearUnsaved, useConfirmLeave } from "../ui/unsaved.tsx"
 
@@ -38,7 +38,8 @@ export function useSignOut() {
       await forgetDevice()
       await authData(authClient.signOut())
     } catch (error) {
-      showToast(t("account.signOutFailed", { reason: errorText(t, error) }), "error")
+      if (error instanceof DeviceNotForgotten) showToast(t("notifications.notForgotten"), "error")
+      else showToast(t("account.signOutFailed", { reason: errorText(t, error) }), "error")
       return
     }
     signedOut()
