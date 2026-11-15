@@ -74,7 +74,9 @@ export function Composer({ view }: { view: TicketView }) {
   const queryClient = useQueryClient()
   const formId = useId()
   const [kind, setKind] = useState<Kind>(compose.listening ? "note" : "reply")
-  const [from, setFrom] = useState(compose.defaultFrom ?? "")
+  const [chosenFrom, setFrom] = useState(compose.defaultFrom ?? "")
+  // A From the ticket no longer offers (it moved to another organization) gives way to its default; the draft stays.
+  const from = compose.from.includes(chosenFrom) ? chosenFrom : (compose.defaultFrom ?? "")
   const [to, setTo] = useState(listText(compose.to))
   const [cc, setCc] = useState(listText(compose.cc))
   const [files, setFiles] = useState<Picked[]>([])

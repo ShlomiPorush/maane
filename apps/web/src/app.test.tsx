@@ -1702,6 +1702,55 @@ describe("tickets", () => {
     expect(sent()[2]).toMatchObject({ kind: "note", setPending: false })
   })
 
+  it("switches the composer to the new organization's From after a move, keeping the draft (review S2)", async () => {
+    let moved = false
+    const after = ok({
+      ...(view().body as Record<string, unknown>),
+      ticket: { ...(view().body as { ticket: object }).ticket, organization: { id: ORG_B, name: "Beta" } },
+      moveTargets: [{ id: ORG_A, name: "Alpha" }],
+      compose: {
+        // The new default is not the first address: a stale From would show the first and send the old one.
+        from: ["zeta@example.com", "beta@example.com"],
+        defaultFrom: "beta@example.com",
+        to: [{ address: "dana@example.com", name: "Dana Customer" }],
+        cc: [],
+        signature: "Beta support",
+        senderName: "Agent Name (Beta)",
+        listening: false,
+      },
+    })
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": () => (moved ? after : view()),
+      "/api/v1/tickets/7/organization": () => {
+        moved = true
+        return ok({ ok: true })
+      },
+      "/api/v1/tickets/7/messages": { status: 201, body: { id: "00000000-0000-4000-8000-0000000000bb" } },
+    })
+    const box = () =>
+      document.querySelector<HTMLInputElement>('.ui-composer-ticket-files input[type="checkbox"]') ?? null
+    await vi.waitFor(() => expect(box()).not.toBeNull())
+    // The draft: a file of the ticket, picked before the move.
+    await act(async () => box()?.click())
+    expect(box()?.checked).toBe(true)
+    await act(async () => button(he("ticket.move.open"))?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=dialog]")).not.toBeNull())
+    await act(async () => button(he("ticket.move.submit"))?.click())
+    await vi.waitFor(() => expect(text()).toContain("Agent Name (Beta)"))
+    await vi.waitFor(() => expect(document.querySelector("[role=dialog]")).toBeNull())
+    expect(box()?.checked).toBe(true)
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-send"]')?.click())
+    const posted = await vi.waitFor(() => {
+      const found = requests.find((r) => r.method === "POST" && r.url === "/api/v1/tickets/7/messages")
+      expect(found).toBeDefined()
+      return JSON.parse(found?.body ?? "null") as { from: string; parts: string[] }
+    })
+    expect(posted.from).toBe("beta@example.com")
+    expect(posted.parts).toHaveLength(1)
+  })
+
   it("shows a ticket's messages in a sandboxed frame, what was blocked, and each file's status in words", async () => {
     await renderAt("/tickets/7", { "/api/setup/status": status(), "/api/v1/me": admin, "/api/v1/tickets/7": view() })
     const frame = await vi.waitFor(() => {
