@@ -37,7 +37,7 @@ import {
 } from "@maane/shared"
 import { and, asc, desc, eq, exists, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import { z } from "zod"
-import { lockAction, setActionState } from "../actions/timed.ts"
+import { lockAction, OPEN_ACTION_STATES, setActionState } from "../actions/timed.ts"
 import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import {
@@ -527,7 +527,10 @@ export class Replies {
     })
   }
 
-  /** Cancels a scheduled reply while it is still `scheduled`; anyone who may see the ticket may. */
+  /**
+   * Cancels a scheduled reply until it starts sending (`scheduled`, or `handed`: written, not yet at the send point);
+   * anyone who may see the ticket may.
+   */
   async cancelScheduled(scope: OrganizationScope, user: ReplyUser, actionId: string): Promise<void> {
     const action = await this.#action(scope, actionId)
     await this.db.transaction(async (tx) => {
@@ -535,7 +538,8 @@ export class Replies {
       const locked = row ? await lockTicket(tx, row.id) : null
       if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
       const held = await lockAction(tx, actionId)
-      if (!held || held.ticketId !== locked.id || held.state !== "scheduled")
+      // Until it starts sending: also once its reply was written and waits for the send point, which then refuses it.
+      if (!held || held.ticketId !== locked.id || !(OPEN_ACTION_STATES as readonly string[]).includes(held.state))
         throw new Refusal("scheduled_not_open", 409)
       await setActionState(tx, actionId, "cancelled", "agent")
       await writeAudit(tx, user.actor, {

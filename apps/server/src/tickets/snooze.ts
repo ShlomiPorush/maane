@@ -50,13 +50,23 @@ async function endSnooze(tx: Tx, locked: LockedTicket, by: StatusActor, via: "ag
  * A customer reply ends the ticket's snooze at once (the reply itself already opened the ticket), in the transaction
  * that attaches it, on the ticket the caller locked. Returns whether there was one.
  */
-export async function customerEndsSnooze(tx: Pick<Tx, "update">, ticketId: string): Promise<boolean> {
+export async function customerEndsSnooze(
+  tx: Pick<Tx, "update" | "insert">,
+  locked: Pick<LockedTicket, "id" | "number">,
+): Promise<boolean> {
   const ended = await tx
     .update(ticket)
     .set({ snoozedUntil: null, snoozeVersion: sql`${ticket.snoozeVersion} + 1` })
-    .where(and(eq(ticket.id, ticketId), isNotNull(ticket.snoozedUntil)))
+    .where(and(eq(ticket.id, locked.id), isNotNull(ticket.snoozedUntil)))
     .returning({ id: ticket.id })
-  return ended.length > 0
+  if (ended.length === 0) return false
+  await writeAudit(tx, SYSTEM, {
+    action: "ticket.unsnooze",
+    entityType: "ticket",
+    entityId: locked.id,
+    details: { ticket: locked.number, via: "customer_reply" },
+  })
+  return true
 }
 
 /**

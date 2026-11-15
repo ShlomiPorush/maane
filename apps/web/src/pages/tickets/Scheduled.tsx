@@ -1,6 +1,6 @@
 // A ticket's scheduled replies (plan 4.2), above the composer: each with its time (Israel time), its author, its
-// recipients, and its state. While it is still scheduled, its author can change it (in the composer: a new version) and
-// anyone who sees the ticket can cancel it (asked first). Once its time came it shows where the reply is (3.1's states;
+// recipients, and its state. While it is still scheduled, its author can change it (in the composer: a new version);
+// until it starts sending, anyone who sees the ticket can cancel it (asked first). Once its time came it shows where the reply is (3.1's states;
 // the reply itself is in the conversation, marked as scheduled), and a cancelled or ended one says why: the agent
 // cancelled it, the customer wrote first (the agent can write again), the ticket moved to another organization, or a
 // check at its time failed.
@@ -187,6 +187,21 @@ function ScheduledCard({
             </button>
           </div>
         </>
+      ) : null}
+      {entry.state === "handed" ? (
+        // Its reply is written and waits for the send point: it can still be stopped there.
+        <div className="ui-scheduled-acts">
+          <button
+            type="button"
+            className="ui-btn ui-btn-sm"
+            disabled={busy}
+            onClick={() => void cancel()}
+            data-testid="scheduled-cancel"
+          >
+            <X aria-hidden="true" />
+            {t("scheduled.cancel")}
+          </button>
+        </div>
       ) : null}
     </article>
   )

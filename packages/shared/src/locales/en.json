@@ -1042,7 +1042,8 @@
     "change": "{from}, now {to}",
     "snoozeEnd": {
       "agent": "by an agent",
-      "time": "at its time"
+      "time": "at its time",
+      "customer_reply": "by a customer reply"
     },
     "scheduledYes": "Sent at its scheduled time"
   },

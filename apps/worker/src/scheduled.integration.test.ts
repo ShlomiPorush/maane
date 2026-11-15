@@ -133,7 +133,9 @@ async function customerTicket(subject = "A question") {
 
 /** The customer answers the ticket's first message, through intake. */
 async function customerAnswers(t: { messageId: string }) {
-  h.graph.add(mime({ from: DANA, to: SUPPORT, subject: "Re: A question", inReplyTo: t.messageId, text: { content: TODA } }))
+  h.graph.add(
+    mime({ from: DANA, to: SUPPORT, subject: "Re: A question", inReplyTo: t.messageId, text: { content: TODA } }),
+  )
   await h.round()
 }
 
@@ -240,7 +242,7 @@ describe("a scheduled reply", () => {
     expect(await repliesOf(t.id)).toBe(1)
   })
 
-  it("refuses a time that is not ahead, a note, and changes or cancellation once it left `scheduled`", async () => {
+  it("refuses a time that is not ahead, a note, a change once its reply is written, and a cancellation once sent", async () => {
     const admin = await firstAdmin()
     const { b: agent } = await newAgent(admin, "an.agent", [org])
     const t = await customerTicket()
@@ -255,6 +257,11 @@ describe("a scheduled reply", () => {
     expect(await actions().run(id, 1)).toBe("handed")
     const change = await agent.call("PUT", `/api/v1/scheduled/${id}`, { ...reply(), sendAt: inHours(4), version: 1 })
     expect(change.json).toEqual({ error: "scheduled_not_open" })
+    // Until it starts sending it can still be cancelled; the send point then sends nothing.
+    expect((await agent.call("POST", `/api/v1/scheduled/${id}/cancel`)).status).toBe(200)
+    const [made] = await outboxOfAction(id)
+    expect(await sender().send(made?.messageId ?? "")).toBe("failed")
+    expect((await outboxOfAction(id))[0]?.problem).toBe("action_ended")
     expect((await agent.call("POST", `/api/v1/scheduled/${id}/cancel`)).json).toEqual({ error: "scheduled_not_open" })
   })
 })
@@ -410,9 +417,9 @@ describe("a move and a lost permission before the time", () => {
     const id = await schedule(agent, t.number)
     const handed = await schedule(agent, t.number)
     expect(await actions().run(handed, 1)).toBe("handed")
-    expect((await agent.call("PUT", `/api/v1/tickets/${t.number}/organization`, { organizationId: other })).status).toBe(
-      200,
-    )
+    expect(
+      (await agent.call("PUT", `/api/v1/tickets/${t.number}/organization`, { organizationId: other })).status,
+    ).toBe(200)
     expect(await scheduledOf(agent, t.number, id)).toMatchObject({ state: "cancelled", reason: "move" })
     expect(await scheduledOf(agent, t.number, handed)).toMatchObject({ state: "cancelled", reason: "move" })
     expect(await actions().run(id, 1)).toBe("stale")
@@ -541,5 +548,10 @@ describe("snooze", () => {
     expect(await list(agent)).toContain(t.number)
     const [version] = await snoozeJobs(t.id)
     expect(await snoozeEnded(db(), t.id, version ?? 0)).toBe(false)
+    const [ended] = await db()
+      .select({ actor: auditLog.actorLabel, details: auditLog.details })
+      .from(auditLog)
+      .where(and(eq(auditLog.entityId, t.id), eq(auditLog.action, "ticket.unsnooze")))
+    expect(ended).toEqual({ actor: "system", details: { ticket: t.number, via: "customer_reply" } })
   })
 })

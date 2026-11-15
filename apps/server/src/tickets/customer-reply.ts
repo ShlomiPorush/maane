@@ -90,5 +90,5 @@ export async function customerReplied(tx: Tx, ticketId: string, at: Date): Promi
   )
   await tx.update(ticket).set({ lastActivityAt: at }).where(eq(ticket.id, ticketId))
   await cancelTicketActions(tx, ticketId, "customer_reply")
-  await customerEndsSnooze(tx, ticketId)
+  await customerEndsSnooze(tx, locked)
 }

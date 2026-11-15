@@ -335,7 +335,7 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "delivery.provider.": PROVIDERS,
   "delivery.problem.": SEND_PROBLEMS,
   "scheduled.reason.": ACTION_REASONS,
-  "audit.snoozeEnd.": ["agent", "time"],
+  "audit.snoozeEnd.": ["agent", "time", "customer_reply"],
   "delivery.status.": DELIVERY_STATUSES,
   "settings.sending.": SETTING_ROWS.filter(
     (key) => key.startsWith("smtp2go.") || key.startsWith("failover.") || key === "mail.bounceAddress",

@@ -246,7 +246,10 @@ export function describe(
     // Snooze (plan 4.2): until when, and how it ended.
     if (typeof details.until === "string")
       facts.push({ label: t("audit.fact.snoozedUntil"), value: formatTime(details.until, { seconds: false }) })
-    if (entry.action === "ticket.unsnooze" && (details.via === "agent" || details.via === "time"))
+    if (
+      entry.action === "ticket.unsnooze" &&
+      (details.via === "agent" || details.via === "time" || details.via === "customer_reply")
+    )
       facts.push({ label: t("audit.fact.snoozeEnd"), value: t(`audit.snoozeEnd.${details.via}`) })
     const names = (value: unknown) =>
       Array.isArray(value) && value.length > 0 ? value.filter((item) => typeof item === "string").join(", ") : null
