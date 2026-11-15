@@ -2442,19 +2442,36 @@ describe("tickets", () => {
       outboxState: null,
     }
     const body = view().body as { ticket: { number: number } }
-    await renderAt("/tickets/7", {
+    // Ticket 8 first, so it is in the cache and shows at once when the agent goes back to it: the page stays mounted.
+    await renderAt("/tickets/8", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
       "/api/v1/tickets/7": view("v1", [], false, {}, [{ id: ORG_B, name: "Beta" }], [scheduled]),
       "/api/v1/tickets/8": ok({ ...body, ticket: { ...body.ticket, number: 8 } }),
+    })
+    await vi.waitFor(() => expect(document.querySelector(".ui-composer")).not.toBeNull())
+    await act(async () => {
+      void router?.navigate("/tickets/7")
     })
     await vi.waitFor(() => expect(button(he("scheduled.change"))).toBeDefined())
     await act(async () => button(he("scheduled.change"))?.click())
     await vi.waitFor(() => expect(document.querySelector(`.ui-composer[data-editing="${SCHEDULED}"]`)).not.toBeNull())
     for (const number of [8, 7]) {
       await act(async () => {
-        await router?.navigate(`/tickets/${number}`)
+        void router?.navigate(`/tickets/${number}`)
       })
+      // Leaving the ticket with the reply loaded in the composer asks first (its text counts as unsaved).
+      if (number === 8) {
+        const question = await vi.waitFor(() => {
+          const found = document.querySelector<HTMLElement>("[role=alertdialog]")
+          expect(found).not.toBeNull()
+          return found as HTMLElement
+        })
+        const leave = Array.from(question.querySelectorAll("button")).find(
+          (b) => b.textContent?.trim() === he("unsaved.leave"),
+        )
+        await act(async () => leave?.click())
+      }
       await vi.waitFor(() => expect(document.querySelector(".ui-composer")).not.toBeNull())
       await vi.waitFor(() => expect(where()).toBe(`/tickets/${number}`))
       expect(document.querySelector(".ui-composer[data-editing]")).toBeNull()
