@@ -2419,6 +2419,48 @@ describe("tickets", () => {
     expect(document.querySelector(".ui-editor-text")?.textContent).toBe("")
   })
 
+  it("never carries a scheduled reply being changed to another ticket (review T4)", async () => {
+    const SCHEDULED = "00000000-0000-4000-8000-0000000000d7"
+    const scheduled = {
+      id: SCHEDULED,
+      version: 1,
+      state: "scheduled",
+      reason: null,
+      sendAt: "2099-01-10T07:30:00.000Z",
+      createdAt: when,
+      updatedAt: when,
+      author: { id: "u1", name: "Agent Name" },
+      editable: true,
+      from: "help@example.com",
+      to: [{ address: "dana@example.com", name: "Dana Customer" }],
+      cc: [],
+      text: "Hello",
+      html: "<p>Hello</p>",
+      setPending: false,
+      files: [],
+      messageId: null,
+      outboxState: null,
+    }
+    const body = view().body as { ticket: { number: number } }
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [], false, {}, [{ id: ORG_B, name: "Beta" }], [scheduled]),
+      "/api/v1/tickets/8": ok({ ...body, ticket: { ...body.ticket, number: 8 } }),
+    })
+    await vi.waitFor(() => expect(button(he("scheduled.change"))).toBeDefined())
+    await act(async () => button(he("scheduled.change"))?.click())
+    await vi.waitFor(() => expect(document.querySelector(`.ui-composer[data-editing="${SCHEDULED}"]`)).not.toBeNull())
+    for (const number of [8, 7]) {
+      await act(async () => {
+        await router?.navigate(`/tickets/${number}`)
+      })
+      await vi.waitFor(() => expect(document.querySelector(".ui-composer")).not.toBeNull())
+      await vi.waitFor(() => expect(where()).toBe(`/tickets/${number}`))
+      expect(document.querySelector(".ui-composer[data-editing]")).toBeNull()
+    }
+  })
+
   it("shows each recipient's state, and sends an unknown reply again only after asking", async () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),

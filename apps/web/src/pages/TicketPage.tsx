@@ -95,7 +95,8 @@ export function TicketPage() {
         </div>
       ) : null}
       <StaleNote failed={query.isError && Boolean(view)} />
-      {view ? <Ticket view={view} /> : null}
+      {/* One per ticket: its state (the scheduled reply being changed, the preview) never carries to another ticket. */}
+      {view ? <Ticket key={view.ticket.number} view={view} /> : null}
     </div>
   )
 }
