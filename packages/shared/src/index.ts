@@ -187,6 +187,7 @@ export {
   type CategoryRef,
   type CategoryView,
   DEFAULT_STATUS_FILTER,
+  defaultStatusFilter,
   mayChangeStatus,
   OPEN_WORK_STATUSES,
   STATUS_FILTERS,

@@ -1555,17 +1555,29 @@ describe("tickets", () => {
     const encoded = new URLSearchParams({ q: SHALOM }).toString()
     await vi.waitFor(() => expect(where()).toBe(`/?${encoded}`))
     expect(requests.some((r) => r.url === `/api/v1/tickets?${encoded}`)).toBe(true)
-    // Nothing found: the term, and that the status filter limits the search.
-    await vi.waitFor(() => expect(text()).toContain(he("tickets.searchEmptyStatusHint")))
+    // Without a chosen status the search covers every status, and the filter shows it.
+    const statusFilter = document.querySelector<HTMLSelectElement>('[data-testid="status-filter"]') as HTMLSelectElement
+    await vi.waitFor(() => expect(statusFilter.value).toBe("all"))
+    // Nothing found: the term and a hint, which no status limits.
+    await vi.waitFor(() => expect(text()).toContain(he("tickets.searchEmptyHint")))
     expect(text()).toContain(SHALOM)
+    expect(text()).not.toContain(he("tickets.searchEmptyStatusHint"))
+    // A chosen status narrows the search, open work too, and the hint says so.
+    await act(async () => {
+      statusFilter.value = "open_work"
+      statusFilter.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    await vi.waitFor(() => expect(where()).toBe(`/?${encoded}&status=open_work`))
+    expect(requests.some((r) => r.url === `/api/v1/tickets?status=open_work&${encoded}`)).toBe(true)
+    await vi.waitFor(() => expect(text()).toContain(he("tickets.searchEmptyStatusHint")))
     // Emptying the box ends the search at once.
     await act(async () => type(box, ""))
-    await vi.waitFor(() => expect(where()).toBe("/"))
+    await vi.waitFor(() => expect(where()).toBe("/?status=open_work"))
     await vi.waitFor(() => expect(document.querySelector('a[data-number="9"]')).not.toBeNull())
   })
 
   it("starts the search box from the address, with the other filters", async () => {
-    await renderAt("/?status=all&q=%2312", {
+    await renderAt("/?status=solved&q=%2312", {
       "/api/setup/status": status(),
       "/api/v1/me": agent,
       "/api/v1/tickets": list([summary(12)]),
@@ -1576,7 +1588,7 @@ describe("tickets", () => {
       return found as HTMLInputElement
     })
     expect(box).not.toBeNull()
-    expect(requests.some((r) => r.url === "/api/v1/tickets?status=all&q=%2312")).toBe(true)
+    expect(requests.some((r) => r.url === "/api/v1/tickets?status=solved&q=%2312")).toBe(true)
   })
 
   it("shows open work by default and filters by status and category, kept in the address (plan 4.1)", async () => {

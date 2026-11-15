@@ -4,7 +4,7 @@ import {
   type AddressKind,
   type CategoryRef,
   type CategoryView,
-  DEFAULT_STATUS_FILTER,
+  defaultStatusFilter,
   type GraphTestView,
   type IntakeLog,
   type Locale,
@@ -111,7 +111,7 @@ export const qk = {
   intake: (filters: IntakeFilters) => ["intake", filters.mode ?? "", filters.flagged ? 1 : 0] as const,
 }
 
-/** The ticket list's filters, as the page keeps them in its address. Without a status the list shows open work. */
+/** The ticket list's filters, kept in the page's address. No status: open work, or every status in a search. */
 export type TicketFilters = {
   organization?: string
   flagged?: boolean
@@ -174,8 +174,8 @@ export const api = {
       `/tickets${query({
         organization: filters.organization,
         flagged: filters.flagged ? 1 : undefined,
-        // Open work is the server's default too: the request, like the address, names only another view.
-        status: filters.status === DEFAULT_STATUS_FILTER ? undefined : filters.status,
+        // The default (open work, or every status while searching) is the server's too: the request names only another.
+        status: filters.status === defaultStatusFilter(Boolean(filters.q)) ? undefined : filters.status,
         category: filters.category,
         q: filters.q,
         after,

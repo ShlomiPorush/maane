@@ -8,11 +8,16 @@ export const OPEN_WORK_STATUSES = ["new", "open", "on_hold"] as const satisfies 
 
 /**
  * The ticket list's status filter: open work (the default), every status, or one status. The address and the API
- * carry it as `status`; without it the list shows open work.
+ * carry it as `status`; without it the list shows open work, and a search every status (plan 4.4).
  */
 export const STATUS_FILTERS = ["open_work", "all", "new", "open", "pending", "on_hold", "solved", "closed"] as const
 export type StatusFilter = (typeof STATUS_FILTERS)[number]
 export const DEFAULT_STATUS_FILTER: StatusFilter = "open_work"
+
+/** The status filter when none is chosen: open work, or every status while searching (plan 4.4). */
+export function defaultStatusFilter(searching: boolean): StatusFilter {
+  return searching ? "all" : DEFAULT_STATUS_FILTER
+}
 
 /** The statuses a filter shows, or null for every status. */
 export function statusesOf(filter: StatusFilter): readonly TicketStatus[] | null {

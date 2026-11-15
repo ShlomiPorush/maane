@@ -2,14 +2,15 @@
 // first (GET /api/v1/tickets), with an organization filter, the review filter, and (plan 4.1) a status filter whose
 // default is open work (new, open, on hold) and a category filter, all kept in the address
 // (?organization=<id>&review=1&status=<filter>&category=<id>; no status is open work). Plan 4.4 adds one search box
-// (?q=<term>) over the subject, the customer's address and name, message text, and the ticket number; it runs on Enter
-// or its button (SR-9), narrows the list like a filter, and emptying the box ends it. "Show older tickets" follows the
-// cursor after the last row shown (TB-6); the list reads itself again every 30 seconds and keeps every page it shows
-// (SV-10). A row opens the ticket (/tickets/:n).
+// (?q=<term>) over the subject, the customer's address and name, message text, and the ticket number; without a chosen
+// status it searches every status, and a chosen one narrows it. It runs on Enter or its button (SR-9), narrows the list
+// like a filter, and emptying the box ends it. "Show older tickets" follows the cursor after the last row shown (TB-6);
+// the list reads itself again every 30 seconds and keeps every page it shows (SV-10). A row opens the ticket
+// (/tickets/:n).
 
 import {
   type CategoryRef,
-  DEFAULT_STATUS_FILTER,
+  defaultStatusFilter,
   SEARCH_MAX_LENGTH,
   STATUS_FILTERS,
   type StatusFilter,
@@ -40,7 +41,9 @@ export function ticketFilters(search: URLSearchParams): TicketFilters {
   return {
     organization: UUID.test(organization) ? organization : undefined,
     flagged: search.get("review") === "1",
-    status: (STATUS_FILTERS as readonly string[]).includes(status) ? (status as StatusFilter) : DEFAULT_STATUS_FILTER,
+    status: (STATUS_FILTERS as readonly string[]).includes(status)
+      ? (status as StatusFilter)
+      : defaultStatusFilter(Boolean(q)),
     category: UUID.test(category) ? category : undefined,
     q: q || undefined,
   }
@@ -66,7 +69,7 @@ export function TicketsPage() {
       filters.flagged ||
       filters.category ||
       filters.q ||
-      filters.status !== DEFAULT_STATUS_FILTER,
+      filters.status !== defaultStatusFilter(Boolean(filters.q)),
   )
 
   // A filter replaces the address in place: Back leaves the list instead of undoing a filter (NL-4).
@@ -87,8 +90,8 @@ export function TicketsPage() {
         flagged={Boolean(filters.flagged)}
         onOrganization={(id) => setFilter("organization", id || null)}
         onFlagged={(on) => setFilter("review", on ? "1" : null)}
-        status={filters.status ?? DEFAULT_STATUS_FILTER}
-        onStatus={(status) => setFilter("status", status === DEFAULT_STATUS_FILTER ? null : status)}
+        status={filters.status ?? defaultStatusFilter(Boolean(filters.q))}
+        onStatus={(status) => setFilter("status", status === defaultStatusFilter(Boolean(filters.q)) ? null : status)}
         categories={categories}
         category={filters.category ?? ""}
         onCategory={(id) => setFilter("category", id || null)}

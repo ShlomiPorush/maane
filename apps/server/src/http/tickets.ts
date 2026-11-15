@@ -7,7 +7,7 @@ import { createReadStream } from "node:fs"
 import { stat } from "node:fs/promises"
 import { Readable } from "node:stream"
 import {
-  DEFAULT_STATUS_FILTER,
+  defaultStatusFilter,
   INTAKE_FILTER_MODES,
   INTAKE_PAGE_SIZE,
   previewKind,
@@ -101,7 +101,7 @@ export function ticketRoutes(db: Db, filesDir: string, replies: Replies): Hono<A
     const search = wellFormedText(c.req.query("q") ?? "").value.trim()
     if (search.length > SEARCH_MAX_LENGTH) return invalid(c)
     if (organization !== undefined && !UUID.test(organization)) return invalid(c)
-    // Without a status the list shows open work (plan 4.1); `all` shows every status.
+    // Without a status: open work (plan 4.1), or every status in a search (plan 4.4); `all` is every status.
     if (status !== undefined && !(STATUS_FILTERS as readonly string[]).includes(status)) return invalid(c)
     if (category !== undefined && !UUID.test(category)) return invalid(c)
     if (flagged !== undefined && flagged !== "1") return invalid(c)
@@ -110,7 +110,7 @@ export function ticketRoutes(db: Db, filesDir: string, replies: Replies): Hono<A
         await tickets.list(await scopeOf(c), {
           organization,
           search: search || undefined,
-          status: (status as StatusFilter | undefined) ?? DEFAULT_STATUS_FILTER,
+          status: (status as StatusFilter | undefined) ?? defaultStatusFilter(search !== ""),
           category,
           flagged: flagged === "1",
           cursor: c.req.query("after"),

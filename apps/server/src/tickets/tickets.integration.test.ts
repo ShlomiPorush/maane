@@ -26,7 +26,7 @@ import { createTestApp } from "../testing/app.ts"
 import { nextIp, TestBrowser, testPassword } from "../testing/browser.ts"
 import { createTestDatabase } from "../testing/db.ts"
 import { pdf, png } from "../testing/files.ts"
-import { searchCondition, Tickets } from "./service.ts"
+import { Tickets } from "./service.ts"
 
 // The ticket routes of plan 2.4 against a migrated database and a file store in a temporary directory. Tickets,
 // messages, parts, and files are written here as intake writes them; the routes only read.
@@ -779,14 +779,17 @@ describe("search (plan 4.4)", () => {
     await db()
       .insert(ticketCategory)
       .values({ ticketId: solved.id, categoryId: billing?.id ?? "" })
-    // Without a status the search keeps the default view, open work.
-    expect(await found(admin, STEM, "")).toEqual([open.number])
+    // Without a chosen status a search covers every status, a solved ticket too; a chosen status narrows it.
+    expect(await found(admin, STEM, "")).toEqual([solved.number, open.number])
     expect(await found(admin, STEM)).toEqual([solved.number, open.number])
+    expect(await found(admin, STEM, "&status=open")).toEqual([open.number])
+    expect(await found(admin, STEM, "&status=open_work")).toEqual([open.number])
     expect(await found(admin, STEM, "&status=solved")).toEqual([solved.number])
     expect(await found(admin, STEM, "&status=pending")).toEqual([])
     expect(await found(admin, STEM, `&status=all&category=${billing?.id}`)).toEqual([solved.number])
     // An empty or blank term is no search.
     expect((await found(admin, "   ")).length).toBe(3)
+    expect((await found(admin, "   ", "")).length).toBe(2)
     expect((await admin.call("GET", `/api/v1/tickets?q=${"x".repeat(SEARCH_MAX_LENGTH)}`)).status).toBe(200)
     expect((await admin.call("GET", `/api/v1/tickets?q=${"x".repeat(SEARCH_MAX_LENGTH + 1)}`)).status).toBe(400)
     // A NUL, which PostgreSQL refuses in a parameter, is searched as U+FFFD, not an error.
@@ -797,22 +800,64 @@ describe("search (plan 4.4)", () => {
     const a = await newOrganization("Alpha")
     const t = await newTicket(a)
     await newMessage(t.id, { textBody: `${SHALOM} ${WORD}` })
+    // An organization with some history, so that reading every ticket of the scope and then its messages is not the
+    // cheaper plan; VACUUM ANALYZE takes the statistics and merges GIN's pending entries, as autovacuum would.
+    const many = await db()
+      .insert(ticket)
+      .values(
+        Array.from({ length: 2000 }, () => ({
+          referenceCode: code(),
+          organizationId: a,
+          supportAddress: "help@example.com",
+          subject: "Hello",
+        })),
+      )
+      .returning({ id: ticket.id })
+    await db()
+      .insert(message)
+      .values(
+        many.map((row) => ({
+          sourceId,
+          graphId: randomBytes(8).toString("hex"),
+          folder: "inbox",
+          receivedAt: new Date(),
+          state: "processed",
+          content: "parsed",
+          graph: { subject: "Hello" },
+          fromAddress: "dana@example.com",
+          fromName: "Dana Customer",
+          toAddresses: [{ address: "help@example.com", name: null }],
+          subject: "Hello",
+          textBody: "Hello",
+          ticketId: row.id,
+        })),
+      )
+    await db()
+      .insert(ticketParticipant)
+      .values(many.map((row, i) => ({ ticketId: row.id, address: `customer${i}@example.com`, name: `Customer ${i}` })))
     const client = await database.pool.connect()
     try {
+      await client.query("vacuum analyze ticket, message, ticket_participant")
       // Hebrew letters are word characters in this database's locale, so a Hebrew term gives trigrams to look up.
       const trigrams = await client.query("select show_trgm($1) as t", [STEM])
       expect(trigrams.rows[0].t.length).toBeGreaterThan(0)
-      // The list's own search query; the tables are tiny, so sequential scans are switched off to ask whether the
-      // index is usable at all.
-      const query = db().select({ id: ticket.id }).from(ticket).where(searchCondition(STEM)).toSQL()
-      await client.query("begin")
-      await client.query("set local enable_seqscan = off")
-      const plan = await client.query(`explain (costs off) ${query.sql}`, query.params)
-      await client.query("rollback")
-      const text = plan.rows.map((row) => row["QUERY PLAN"]).join("\n")
-      expect(text).toContain("message_text_trgm_idx")
-      expect(text).toContain("ticket_subject_trgm_idx")
-      expect(text).toContain("ticket_participant_address_trgm_idx")
+      // The whole list query as the service runs it, for an admin and for an agent of one organization (the scope in
+      // each branch), with a status and a cursor; sequential scans are switched off to ask whether the index is usable.
+      const tickets = new Tickets(db(), filesDir)
+      const cursor = Buffer.from(JSON.stringify(["2999-01-01T00:00:00.000000Z", 1])).toString("base64url")
+      const scopes = [{ all: true as const }, { all: false as const, organizationIds: [a] }]
+      for (const scope of scopes) {
+        const query = tickets.listQuery(scope, { status: "all", search: STEM, cursor, limit: 50 }).toSQL()
+        expect(query.sql).toContain("union all")
+        await client.query("begin")
+        await client.query("set local enable_seqscan = off")
+        const plan = await client.query(`explain (costs off) ${query.sql}`, query.params)
+        await client.query("rollback")
+        const text = plan.rows.map((row) => row["QUERY PLAN"]).join("\n")
+        expect(text, JSON.stringify(scope)).toContain("message_text_trgm_idx")
+        expect(text, JSON.stringify(scope)).toContain("ticket_subject_trgm_idx")
+        expect(text, JSON.stringify(scope)).toContain("ticket_participant_address_trgm_idx")
+      }
     } finally {
       client.release()
     }

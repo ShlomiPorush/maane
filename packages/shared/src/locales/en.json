@@ -296,7 +296,7 @@
     "searchSubmit": "Search",
     "searchEmpty": "No tickets match \"{query}\"",
     "searchEmptyHint": "Try part of a word, an address, or a ticket number.",
-    "searchEmptyStatusHint": "The search looks only at the tickets the filters show. Choose Every status to search every ticket."
+    "searchEmptyStatusHint": "The search looks only at the status you chose. Choose Every status to search every ticket."
   },
   "ticket": {
     "loading": "Loading the ticket",

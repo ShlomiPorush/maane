@@ -37,7 +37,7 @@ import {
   type TicketView,
   type UnmatchedDelivery,
 } from "@maane/shared"
-import { and, asc, type Column, desc, eq, ilike, inArray, isNotNull, or, type SQL, sql } from "drizzle-orm"
+import { and, asc, type Column, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm"
 import { alias, QueryBuilder } from "drizzle-orm/pg-core"
 import { Categories } from "../categories/service.ts"
 import type { Db } from "../db/client.ts"
@@ -211,30 +211,45 @@ const NUMBER_TERM = /^#?([1-9][0-9]{0,15})$/
  * The tickets a search term finds (plan 4.4), as a condition on the list's ticket row: its subject, its participants'
  * addresses and names (the customer and the Cc), the text of any of its messages (internal notes too), or its number.
  * A substring match, ILIKE '%term%' with the term's wildcards escaped, which pg_trgm's GIN indexes serve from three
- * characters; a shorter term matches the same rows, by a scan. One uncorrelated IN over a union, so each source uses
- * its own index. The tickets it finds are only ever tested against the list's own rows, which carry the scope.
+ * characters; a shorter term matches the same rows, by a scan. One uncorrelated IN over a UNION ALL (IN needs no
+ * deduplication), so each source uses its own index. Each branch keeps only tickets of the user's organizations, so
+ * no match outside the scope is ever computed; the list's own rows carry the scope too.
  */
-export function searchCondition(term: string): SQL {
+export function searchCondition(term: string, scope: OrganizationScope): SQL {
   const pattern = containsPattern(term)
   const digits = NUMBER_TERM.exec(term)?.[1]
   const number = digits !== undefined && Number.isSafeInteger(Number(digits)) ? Number(digits) : null
   const matched = alias(ticket, "matched")
+  const byParticipant = alias(ticket, "by_participant")
+  const byMessage = alias(ticket, "by_message")
   const query = new QueryBuilder()
   const found = query
     .select({ id: matched.id })
     .from(matched)
-    .where(or(ilike(matched.subject, pattern), number === null ? undefined : eq(matched.number, number)))
-    .union(
+    .where(
+      and(
+        inScope(scope, matched.organizationId),
+        or(ilike(matched.subject, pattern), number === null ? undefined : eq(matched.number, number)),
+      ),
+    )
+    .unionAll(
       query
         .select({ id: ticketParticipant.ticketId })
         .from(ticketParticipant)
-        .where(or(ilike(ticketParticipant.address, pattern), ilike(ticketParticipant.name, pattern))),
+        .innerJoin(byParticipant, eq(byParticipant.id, ticketParticipant.ticketId))
+        .where(
+          and(
+            inScope(scope, byParticipant.organizationId),
+            or(ilike(ticketParticipant.address, pattern), ilike(ticketParticipant.name, pattern)),
+          ),
+        ),
     )
-    .union(
+    .unionAll(
       query
-        .select({ id: sql<string>`${message.ticketId}`.as("id") })
+        .select({ id: byMessage.id })
         .from(message)
-        .where(and(isNotNull(message.ticketId), ilike(message.textBody, pattern))),
+        .innerJoin(byMessage, eq(byMessage.id, message.ticketId))
+        .where(and(inScope(scope, byMessage.organizationId), ilike(message.textBody, pattern))),
     )
   return inArray(ticket.id, found)
 }
@@ -270,41 +285,7 @@ export class Tickets {
 
   /** The ticket list: newest activity first, by a cursor after the last row shown; a search narrows it (plan 4.4). */
   async list(scope: OrganizationScope, filters: ListFilters): Promise<TicketList> {
-    const cursor = filters.cursor ? decodeCursor(filters.cursor, "number") : null
-    if (filters.cursor && !cursor) throw new CursorError()
-    const flagged = sql`(cardinality(${ticket.reviewFlags}) > 0 or exists (select 1 from ${message} where ${message.ticketId} = ${ticket.id} and cardinality(${message.reviewFlags}) > 0))`
-    const statuses = statusesOf(filters.status)
-    const conditions = [
-      inScope(scope, ticket.organizationId),
-      filters.organization ? eq(ticket.organizationId, filters.organization) : undefined,
-      statuses ? inArray(ticket.status, [...statuses]) : undefined,
-      filters.category
-        ? sql`exists (select 1 from ${ticketCategory} where ${ticketCategory.ticketId} = ${ticket.id} and ${ticketCategory.categoryId} = ${filters.category})`
-        : undefined,
-      filters.flagged ? flagged : undefined,
-      filters.search ? searchCondition(filters.search) : undefined,
-      cursor
-        ? sql`(${ticket.lastActivityAt}, ${ticket.number}) < (${cursor.at}::timestamptz, ${cursor.key})`
-        : undefined,
-    ]
-    const rows = await this.db
-      .select({
-        id: ticket.id,
-        number: ticket.number,
-        subject: ticket.subject,
-        status: ticket.status,
-        reviewFlags: ticket.reviewFlags,
-        organizationId: organization.id,
-        organizationName: organization.name,
-        createdAt: ticket.createdAt,
-        lastActivityAt: ticket.lastActivityAt,
-        cursorAt: microseconds(ticket.lastActivityAt),
-      })
-      .from(ticket)
-      .innerJoin(organization, eq(organization.id, ticket.organizationId))
-      .where(and(...conditions))
-      .orderBy(desc(ticket.lastActivityAt), desc(ticket.number))
-      .limit(filters.limit)
+    const rows = await this.listQuery(scope, filters)
 
     const ids = rows.map((row) => row.id)
     const firsts = ids.length
@@ -358,6 +339,45 @@ export class Tickets {
       organizations: await this.organizations(scope),
       categories: await new Categories(this.db).refs(),
     }
+  }
+
+  /** The list's rows as the list reads them: the scope, every filter, the search, and the cursor, in one query. */
+  listQuery(scope: OrganizationScope, filters: ListFilters) {
+    const cursor = filters.cursor ? decodeCursor(filters.cursor, "number") : null
+    if (filters.cursor && !cursor) throw new CursorError()
+    const flagged = sql`(cardinality(${ticket.reviewFlags}) > 0 or exists (select 1 from ${message} where ${message.ticketId} = ${ticket.id} and cardinality(${message.reviewFlags}) > 0))`
+    const statuses = statusesOf(filters.status)
+    const conditions = [
+      inScope(scope, ticket.organizationId),
+      filters.organization ? eq(ticket.organizationId, filters.organization) : undefined,
+      statuses ? inArray(ticket.status, [...statuses]) : undefined,
+      filters.category
+        ? sql`exists (select 1 from ${ticketCategory} where ${ticketCategory.ticketId} = ${ticket.id} and ${ticketCategory.categoryId} = ${filters.category})`
+        : undefined,
+      filters.flagged ? flagged : undefined,
+      filters.search ? searchCondition(filters.search, scope) : undefined,
+      cursor
+        ? sql`(${ticket.lastActivityAt}, ${ticket.number}) < (${cursor.at}::timestamptz, ${cursor.key})`
+        : undefined,
+    ]
+    return this.db
+      .select({
+        id: ticket.id,
+        number: ticket.number,
+        subject: ticket.subject,
+        status: ticket.status,
+        reviewFlags: ticket.reviewFlags,
+        organizationId: organization.id,
+        organizationName: organization.name,
+        createdAt: ticket.createdAt,
+        lastActivityAt: ticket.lastActivityAt,
+        cursorAt: microseconds(ticket.lastActivityAt),
+      })
+      .from(ticket)
+      .innerJoin(organization, eq(organization.id, ticket.organizationId))
+      .where(and(...conditions))
+      .orderBy(desc(ticket.lastActivityAt), desc(ticket.number))
+      .limit(filters.limit)
   }
 
   /** The organizations a user may see, by name. */
