@@ -1,19 +1,24 @@
 // The ticket list, the home page (plan 2.4): one list across every organization the user may see, newest activity
 // first (GET /api/v1/tickets), with an organization filter, the review filter, and (plan 4.1) a status filter whose
 // default is open work (new, open, on hold) and a category filter, all kept in the address
-// (?organization=<id>&review=1&status=<filter>&category=<id>; no status is open work). "Show older tickets" follows the cursor after the last row shown (TB-6); the list
-// reads itself again every 30 seconds and keeps every page it shows (SV-10). A row opens the ticket (/tickets/:n).
+// (?organization=<id>&review=1&status=<filter>&category=<id>; no status is open work). Plan 4.4 adds one search box
+// (?q=<term>) over the subject, the customer's address and name, message text, and the ticket number; without a chosen
+// status it searches every status, and a chosen one narrows it. It runs on Enter or its button (SR-9), narrows the list
+// like a filter, and emptying the box ends it. "Show older tickets" follows the cursor after the last row shown (TB-6);
+// the list reads itself again every 30 seconds and keeps every page it shows (SV-10). A row opens the ticket
+// (/tickets/:n).
 
 import {
   type CategoryRef,
-  DEFAULT_STATUS_FILTER,
+  defaultStatusFilter,
+  SEARCH_MAX_LENGTH,
   STATUS_FILTERS,
   type StatusFilter,
   type TicketList,
   type TicketSummary,
 } from "@maane/shared"
-import { ChevronRight } from "lucide-react"
-import { useId } from "react"
+import { ChevronRight, Search } from "lucide-react"
+import { type FormEvent, useId, useState } from "react"
 import { Link, useSearchParams } from "react-router"
 import { api, qk, type TicketFilters } from "../api/endpoints.ts"
 import { formatNumber } from "../format/number.ts"
@@ -32,11 +37,15 @@ export function ticketFilters(search: URLSearchParams): TicketFilters {
   const organization = search.get("organization") ?? ""
   const status = search.get("status") ?? ""
   const category = search.get("category") ?? ""
+  const q = (search.get("q") ?? "").trim().slice(0, SEARCH_MAX_LENGTH)
   return {
     organization: UUID.test(organization) ? organization : undefined,
     flagged: search.get("review") === "1",
-    status: (STATUS_FILTERS as readonly string[]).includes(status) ? (status as StatusFilter) : DEFAULT_STATUS_FILTER,
+    status: (STATUS_FILTERS as readonly string[]).includes(status)
+      ? (status as StatusFilter)
+      : defaultStatusFilter(Boolean(q)),
     category: UUID.test(category) ? category : undefined,
+    q: q || undefined,
   }
 }
 
@@ -56,11 +65,15 @@ export function TicketsPage() {
   const organizations = query.data?.pages[0]?.organizations ?? []
   const categories = query.data?.pages[0]?.categories ?? []
   const filtered = Boolean(
-    filters.organization || filters.flagged || filters.category || filters.status !== DEFAULT_STATUS_FILTER,
+    filters.organization ||
+      filters.flagged ||
+      filters.category ||
+      filters.q ||
+      filters.status !== defaultStatusFilter(Boolean(filters.q)),
   )
 
   // A filter replaces the address in place: Back leaves the list instead of undoing a filter (NL-4).
-  const setFilter = (name: "organization" | "review" | "status" | "category", value: string | null) => {
+  const setFilter = (name: "organization" | "review" | "status" | "category" | "q", value: string | null) => {
     const next = new URLSearchParams(search)
     if (value) next.set(name, value)
     else next.delete(name)
@@ -70,14 +83,16 @@ export function TicketsPage() {
   return (
     <div className="ui-page">
       <PageHead title={t("tickets.title")} description={t("tickets.description")} />
+      <SearchBox value={filters.q ?? ""} onSearch={(q) => setFilter("q", q || null)} />
       <Filters
         organizations={organizations}
         organization={filters.organization ?? ""}
         flagged={Boolean(filters.flagged)}
         onOrganization={(id) => setFilter("organization", id || null)}
         onFlagged={(on) => setFilter("review", on ? "1" : null)}
-        status={filters.status ?? DEFAULT_STATUS_FILTER}
-        onStatus={(status) => setFilter("status", status === DEFAULT_STATUS_FILTER ? null : status)}
+        status={filters.status ?? defaultStatusFilter(Boolean(filters.q))}
+        // A chosen status stays in the address even when it equals today's default: the default changes with search.
+        onStatus={(status) => setFilter("status", status)}
         categories={categories}
         category={filters.category ?? ""}
         onCategory={(id) => setFilter("category", id || null)}
@@ -100,8 +115,12 @@ export function TicketsPage() {
         {query.data && tickets.length === 0 ? (
           filtered ? (
             <div className="ui-empty">
-              <b>{t("tickets.emptyFiltered")}</b>
-              <span>{t("tickets.emptyFilteredHint")}</span>
+              <b>{filters.q ? t("tickets.searchEmpty", { query: filters.q }) : t("tickets.emptyFiltered")}</b>
+              <span>
+                {filters.q
+                  ? t(filters.status === "all" ? "tickets.searchEmptyHint" : "tickets.searchEmptyStatusHint")
+                  : t("tickets.emptyFilteredHint")}
+              </span>
               <button type="button" className="ui-btn ui-btn-sm" onClick={() => setSearch(new URLSearchParams())}>
                 {t("tickets.clearFilters")}
               </button>
@@ -134,6 +153,56 @@ export function TicketsPage() {
         ) : null}
       </section>
     </div>
+  )
+}
+
+/**
+ * The search box: the term runs on Enter or the button, not on each key (a server query, SR-9); emptying the box ends
+ * the search at once. It follows the address (Clear filters, Back) without being drawn again, so the focus stays.
+ */
+function SearchBox({ value, onSearch }: { value: string; onSearch: (q: string) => void }) {
+  const { t } = useI18n()
+  const id = useId()
+  const [typed, setTyped] = useState(value)
+  const [shown, setShown] = useState(value)
+  if (value !== shown) {
+    setShown(value)
+    setTyped(value)
+  }
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    onSearch(typed.trim())
+  }
+  return (
+    <search>
+      <form className="ui-search" onSubmit={submit}>
+        <label className="ui-label" htmlFor={id}>
+          {t("tickets.search")}
+        </label>
+        <div className="ui-search-row">
+          <input
+            id={id}
+            className="ui-input"
+            type="search"
+            dir="auto"
+            enterKeyHint="search"
+            autoComplete="off"
+            maxLength={SEARCH_MAX_LENGTH}
+            placeholder={t("tickets.searchPlaceholder")}
+            data-testid="ticket-search"
+            value={typed}
+            onChange={(event) => {
+              setTyped(event.target.value)
+              if (event.target.value === "" && value !== "") onSearch("")
+            }}
+          />
+          <button type="submit" className="ui-btn">
+            <Search aria-hidden="true" />
+            {t("tickets.searchSubmit")}
+          </button>
+        </div>
+      </form>
+    </search>
   )
 }
 

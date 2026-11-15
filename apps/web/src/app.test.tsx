@@ -2,6 +2,7 @@
 // and role lands (signed out, two-factor off, agent, admin), the setup screen's states, sign-in with its second
 // step, and a session that ends while a page is open. Texts are read from the locale files.
 
+import { SEARCH_MAX_LENGTH } from "@maane/shared"
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -1532,6 +1533,64 @@ describe("tickets", () => {
     await vi.waitFor(() => expect(where()).toBe("/"))
   })
 
+  it("searches on Enter or its button, keeps the term in the address, and says when nothing matches (plan 4.4)", async () => {
+    await renderAt("/", {
+      "/api/setup/status": status(),
+      "/api/v1/me": agent,
+      "/api/v1/tickets": (request) => (request.url.includes("q=") ? list([]) : list([summary(9)])),
+    })
+    const box = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLInputElement>('[data-testid="ticket-search"]')
+      expect(found).not.toBeNull()
+      return found as HTMLInputElement
+    })
+    expect(box.type).toBe("search")
+    expect(box.dir).toBe("auto")
+    expect(box.maxLength).toBe(SEARCH_MAX_LENGTH)
+    expect(box.closest("search")).not.toBeNull()
+    // Typing alone asks nothing (SR-9); the button runs the search, trimmed.
+    await act(async () => type(box, ` ${SHALOM} `))
+    expect(requests.some((r) => r.url.includes("q="))).toBe(false)
+    await act(async () => button(he("tickets.searchSubmit"))?.click())
+    const encoded = new URLSearchParams({ q: SHALOM }).toString()
+    await vi.waitFor(() => expect(where()).toBe(`/?${encoded}`))
+    expect(requests.some((r) => r.url === `/api/v1/tickets?${encoded}`)).toBe(true)
+    // Without a chosen status the search covers every status, and the filter shows it.
+    const statusFilter = document.querySelector<HTMLSelectElement>('[data-testid="status-filter"]') as HTMLSelectElement
+    await vi.waitFor(() => expect(statusFilter.value).toBe("all"))
+    // Nothing found: the term and a hint, which no status limits.
+    await vi.waitFor(() => expect(text()).toContain(he("tickets.searchEmptyHint")))
+    expect(text()).toContain(SHALOM)
+    expect(text()).not.toContain(he("tickets.searchEmptyStatusHint"))
+    // A chosen status narrows the search, open work too, and the hint says so.
+    await act(async () => {
+      statusFilter.value = "open_work"
+      statusFilter.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    await vi.waitFor(() => expect(where()).toBe(`/?${encoded}&status=open_work`))
+    expect(requests.some((r) => r.url === `/api/v1/tickets?status=open_work&${encoded}`)).toBe(true)
+    await vi.waitFor(() => expect(text()).toContain(he("tickets.searchEmptyStatusHint")))
+    // Emptying the box ends the search at once.
+    await act(async () => type(box, ""))
+    await vi.waitFor(() => expect(where()).toBe("/?status=open_work"))
+    await vi.waitFor(() => expect(document.querySelector('a[data-number="9"]')).not.toBeNull())
+  })
+
+  it("starts the search box from the address, with the other filters", async () => {
+    await renderAt("/?status=solved&q=%2312", {
+      "/api/setup/status": status(),
+      "/api/v1/me": agent,
+      "/api/v1/tickets": list([summary(12)]),
+    })
+    const box = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLInputElement>('[data-testid="ticket-search"]')
+      expect(found?.value).toBe("#12")
+      return found as HTMLInputElement
+    })
+    expect(box).not.toBeNull()
+    expect(requests.some((r) => r.url === "/api/v1/tickets?status=solved&q=%2312")).toBe(true)
+  })
+
   it("shows open work by default and filters by status and category, kept in the address (plan 4.1)", async () => {
     await renderAt("/", {
       "/api/setup/status": status(),
@@ -1569,7 +1628,14 @@ describe("tickets", () => {
       statusFilter.value = "open_work"
       statusFilter.dispatchEvent(new Event("change", { bubbles: true }))
     })
-    await vi.waitFor(() => expect(where()).toBe(`/?category=${CATEGORY}`))
+    // Open work chosen by hand stays chosen, so a search started now keeps it instead of covering every status.
+    await vi.waitFor(() => expect(where()).toBe(`/?status=open_work&category=${CATEGORY}`))
+    const box = document.querySelector<HTMLInputElement>('[data-testid="ticket-search"]') as HTMLInputElement
+    await act(async () => type(box, "#9"))
+    await act(async () => button(he("tickets.searchSubmit"))?.click())
+    await vi.waitFor(() => expect(where()).toBe(`/?status=open_work&category=${CATEGORY}&q=%239`))
+    expect(requests.some((r) => r.url === `/api/v1/tickets?status=open_work&category=${CATEGORY}&q=%239`)).toBe(true)
+    expect(statusFilter.value).toBe("open_work")
   })
 
   it("sets the status, the categories, and the organization from the ticket view (plan 4.1)", async () => {

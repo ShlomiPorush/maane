@@ -352,6 +352,8 @@ export const ticket = pgTable(
   },
   (t) => [
     index("ticket_organization_idx").on(t.organizationId),
+    // Search (plan 4.4): ILIKE '%term%' through pg_trgm's documented GIN operator class.
+    index("ticket_subject_trgm_idx").using("gin", t.subject.op("gin_trgm_ops")),
     check("ticket_status", sql`${t.status} in ('new', 'open', 'pending', 'on_hold', 'solved', 'closed')`),
     check(
       "ticket_reference_code",
@@ -372,7 +374,12 @@ export const ticketParticipant = pgTable(
     name: text("name"),
     createdAt: createdAt(),
   },
-  (t) => [primaryKey({ columns: [t.ticketId, t.address] })],
+  (t) => [
+    primaryKey({ columns: [t.ticketId, t.address] }),
+    // Search (plan 4.4): the customer's address and name.
+    index("ticket_participant_address_trgm_idx").using("gin", t.address.op("gin_trgm_ops")),
+    index("ticket_participant_name_trgm_idx").using("gin", t.name.op("gin_trgm_ops")),
+  ],
 )
 
 /** A ticket opened beside others it matched: the sender was not a participant, or a late original was ambiguous. */
@@ -529,6 +536,8 @@ export const message = pgTable(
     index("message_state_received_idx").on(t.state, t.receivedAt),
     index("message_message_id_idx").on(t.messageIdHeader),
     index("message_ticket_idx").on(t.ticketId),
+    // Search (plan 4.4): the message text, through pg_trgm's documented GIN operator class.
+    index("message_text_trgm_idx").using("gin", t.textBody.op("gin_trgm_ops")),
     uniqueIndex("message_submission").on(t.authorUserId, t.submissionId).where(sql`${t.submissionId} is not null`),
     check("message_state", sql`${t.state} in ('stored', 'processed')`),
     check("message_content", sql`${t.content} in ('parsed', 'unavailable', 'unparsed', 'too_large')`),

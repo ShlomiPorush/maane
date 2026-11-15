@@ -43,6 +43,9 @@ export const TEXT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024
 export const TICKETS_PAGE_SIZE = 50
 export const INTAKE_PAGE_SIZE = 50
 
+/** The longest search term the ticket list takes (plan 4.4), in UTF-16 code units like the input's maxLength. */
+export const SEARCH_MAX_LENGTH = 200
+
 export interface MailAddress {
   address: string
   name: string | null
