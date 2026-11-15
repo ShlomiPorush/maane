@@ -796,6 +796,34 @@ describe("search (plan 4.4)", () => {
     expect(await found(admin, `a${String.fromCharCode(0)}b`)).toEqual([])
   })
 
+  it("finds a snoozed ticket with no status chosen, which the default view without a term still hides (plan 4.2)", async () => {
+    const admin = await firstAdmin()
+    const a = await newOrganization("Alpha")
+    const at = (minutes: number) => new Date(Date.UTC(2026, 10, 15, 9, minutes))
+    const awake = await newTicket(a, { subject: `Invoice ${WORD}`, status: "open", lastActivityAt: at(1) })
+    // A snooze is its time still ahead on the ticket row, which the list compares with now().
+    const snoozed = await newTicket(a, {
+      subject: `Invoice ${WORD}`,
+      status: "open",
+      lastActivityAt: at(2),
+      snoozedUntil: new Date(Date.now() + 2 * 3_600_000),
+    })
+    const listed = async (query: string) => {
+      const answer = await admin.call("GET", `/api/v1/tickets${query}`)
+      expect(answer.status, query).toBe(200)
+      return answer.json.tickets.map((t: { number: number }) => t.number)
+    }
+    // Without a term the default view (open work) leaves the snoozed ticket out; the Snoozed filter shows it.
+    expect(await listed("")).toEqual([awake.number])
+    expect(await listed("?status=snoozed")).toEqual([snoozed.number])
+    // A search with no status chosen covers every status, the snoozed ticket too.
+    expect(await found(admin, STEM, "")).toEqual([snoozed.number, awake.number])
+    // The Snoozed filter and a chosen open work combine with the search.
+    expect(await found(admin, STEM, "&status=snoozed")).toEqual([snoozed.number])
+    expect(await found(admin, STEM, "&status=open_work")).toEqual([awake.number])
+    expect(await found(admin, "nothing like it", "&status=snoozed")).toEqual([])
+  })
+
   it("lets PostgreSQL use the trigram index for the message text, Hebrew included", async () => {
     const a = await newOrganization("Alpha")
     const t = await newTicket(a)

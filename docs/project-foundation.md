@@ -501,7 +501,7 @@ Decisions where the plan was silent (4.2, for the owner's review):
 - The time is typed on the 24-hour clock (a text field, `HH:MM`): a native time field shows AM and PM in some browsers' languages (v3 FW-9). The date is the browser's date field, whose order follows the browser's language (dd/mm in Hebrew, mm/dd in US English).
 - An internal note cannot be scheduled. There is no limit on how far ahead a time may be.
 - Israel-time entry: a time the clock skips when summer time starts (02:00 to 02:59 on that Friday) is refused with the reason; in the hour that repeats when it ends, the first of the two (summer time) is taken.
-- Ending a snooze by hand does what its time does: a pending ticket becomes open. A snooze may be set on a ticket of any status. Every other list filter shows snoozed tickets too, marked.
+- Ending a snooze by hand does what its time does: a pending ticket becomes open. A snooze may be set on a ticket of any status. Every other list filter shows snoozed tickets too, marked. A search with no status chosen covers every status (4.4), so it finds snoozed tickets too; the Snoozed filter and a chosen open work narrow a search as they narrow the list.
 - A check that fails at the send point after the reply was written (the customer wrote in that moment) leaves that reply in the conversation as not sent, with the reason; a check that fails at the job writes nothing.
 
 Open for the owner after 4.2: none beyond the decisions above. Migration `0022_scheduled` follows 4.5's `0019_push_subscriptions` and 4.4's `0020_pg_trgm` and `0021_search`.
