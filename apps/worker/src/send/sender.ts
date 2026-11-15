@@ -6,6 +6,9 @@
 //    The send point checks again what the server checked when the agent wrote the reply: intake is live, the From
 //    address still belongs to the ticket's organization, and the author may still answer the ticket. Then the row
 //    becomes `sending` and the transaction commits, before the first byte leaves.
+//    A row a timed action made (plan 4.2) is checked once more here, in this transaction, the first time it is
+//    claimed: its action must still be `handed` at the row's version (not cancelled or replaced), and the customer
+//    must not have written since the action was made. A failed check ends the action without sending.
 //    The claim gives the attempt an ID of its own (outbox.attempt). Every later step goes on only while the row is
 //    still `sending` under that ID, checked under the row's lock: right before each send, and with each result. An
 //    attempt another run made stale (marked unknown, sent again) stops there, without sending or writing.
@@ -16,15 +19,16 @@
 //    row's state then follows its recipients (OUTBOX_STATES).
 
 import { randomUUID } from "node:crypto"
+import { lockAction, setActionState } from "@maane/server/actions/timed"
 import { SYSTEM, writeAudit } from "@maane/server/audit"
 import type { Db } from "@maane/server/db/client"
-import { authUser, message, outbox, outboxRecipient, ticket, ticketParticipant } from "@maane/server/db/schema"
+import { message, outbox, outboxRecipient, ticket, ticketParticipant } from "@maane/server/db/schema"
 import { queueIdOf, refreshDeliveryFlag } from "@maane/server/delivery/service"
 import { errorFacts, log } from "@maane/server/log"
-import { inScope, visibleOrganizations } from "@maane/server/organizations/scope"
-import { belongsTo, supportRules } from "@maane/server/replies/rules"
+import { sendProblem } from "@maane/server/replies/checks"
 import type { Settings } from "@maane/server/settings/service"
-import { type OutboxState, outboxStateOf, PROVIDERS, type SendProblem } from "@maane/shared"
+import { customerWroteSince } from "@maane/server/tickets/customer-reply"
+import { type ActionReason, type OutboxState, outboxStateOf, PROVIDERS, type SendProblem } from "@maane/shared"
 import { and, eq, inArray, ne, sql } from "drizzle-orm"
 import type { Tx } from "../files/types.ts"
 import { lockIntakeMode } from "../intake/process.ts"
@@ -129,6 +133,8 @@ export class ReplySender {
           from: outbox.fromAddress,
           ticketId: ticket.id,
           authorUserId: message.authorUserId,
+          actionId: outbox.actionId,
+          actionVersion: outbox.actionVersion,
         })
         .from(outbox)
         .innerJoin(message, eq(message.id, outbox.messageId))
@@ -160,8 +166,19 @@ export class ReplySender {
         .where(eq(ticket.id, row.ticketId))
         .for("key share")
       if (!held) return null
-      const problem = await this.#refusal(tx, mode, { ...row, organizationId: held.organizationId })
+      // A timed action's row (plan 4.2): its action, locked after the ticket as every path takes them. Its first claim
+      // (the action `handed`) checks it once more; a later one (Send again after it passed) is an ordinary reply's.
+      const action = row.actionId ? await lockAction(tx, row.actionId) : null
+      const handoff = action?.state === "handed" && action.version === row.actionVersion
+      let problem: SendProblem | null = null
+      if (row.actionId && !handoff && action?.state !== "done")
+        problem = action?.reason === "customer_reply" ? "customer_reply" : "action_ended"
+      else if (handoff && row.actionId && (await customerWroteSince(tx, row.ticketId, row.actionId)))
+        problem = "customer_reply"
+      problem ??= await sendProblem(tx, mode, { ...row, organizationId: held.organizationId })
       if (problem) {
+        if (handoff && action && problem !== "action_ended")
+          await setActionState(tx, action.id, "ended", problem as ActionReason)
         await tx
           .update(outbox)
           .set({ state: "failed", problem, updatedAt: this.#now() })
@@ -183,6 +200,8 @@ export class ReplySender {
         await this.#settle(tx, messageId, true)
         return null
       }
+      // The action passed: it is at the send point now, and its reply goes on as any other.
+      if (handoff && action) await setActionState(tx, action.id, "done")
       const attempt = randomUUID()
       await tx
         .update(outbox)
@@ -202,25 +221,6 @@ export class ReplySender {
         .where(and(eq(outboxRecipient.messageId, messageId), eq(outboxRecipient.state, "pending")))
       return { attempt, mime: row.mime, from: row.from, ticketId: row.ticketId, recipients }
     })
-  }
-
-  /** Why the send point refuses this reply now, or null: listening, a From address or an author no longer allowed. */
-  async #refusal(
-    tx: Tx,
-    mode: string,
-    row: { from: string; organizationId: string; authorUserId: string | null },
-  ): Promise<SendProblem | null> {
-    if (mode !== "live") return "listening"
-    if (!belongsTo(row.from, await supportRules(tx), row.organizationId)) return "from_not_allowed"
-    const [author] = row.authorUserId
-      ? await tx
-          .select({ id: authUser.id, role: authUser.role, banned: authUser.banned })
-          .from(authUser)
-          .where(eq(authUser.id, row.authorUserId))
-      : []
-    if (!author || author.banned) return "author_not_allowed"
-    const scope = await visibleOrganizations(tx, { id: author.id, role: author.role ?? "agent" })
-    return inScope(scope, row.organizationId) ? null : "author_not_allowed"
   }
 
   /**

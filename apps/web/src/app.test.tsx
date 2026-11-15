@@ -1383,6 +1383,7 @@ describe("tickets", () => {
     messages: 1,
     createdAt: when,
     lastActivityAt: when,
+    snoozedUntil: null,
     ...over,
   })
   const list = (tickets: unknown[]) =>
@@ -1415,6 +1416,7 @@ describe("tickets", () => {
     listening = false,
     ticketOver: Record<string, unknown> = {},
     moveTargets: { id: string; name: string }[] = [{ id: ORG_B, name: "Beta" }],
+    scheduled: object[] = [],
   ) =>
     ok({
       ticket: {
@@ -1428,6 +1430,7 @@ describe("tickets", () => {
         createdAt: when,
         lastActivityAt: when,
         categories: [{ id: CATEGORY, name: "Billing" }],
+        snoozedUntil: null,
         ...ticketOver,
       },
       participants: [{ address: "dana@example.com", name: "Dana Customer" }],
@@ -1480,6 +1483,7 @@ describe("tickets", () => {
         { id: CATEGORY_2, name: "Shipping" },
       ],
       moveTargets,
+      scheduled,
     })
 
   it("lists tickets across organizations, and keeps the filters in the address", async () => {
@@ -1821,6 +1825,186 @@ describe("tickets", () => {
     })
     expect(posted.from).toBe("beta@example.com")
     expect(posted.parts).toHaveLength(1)
+  })
+
+  it("schedules a reply for a date and time in Israel time with its status action; refuses an hour Israel skips (plan 4.2)", async () => {
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view(),
+      "/api/v1/tickets/7/messages": { status: 201, body: { scheduled: "00000000-0000-4000-8000-0000000000cc" } },
+    })
+    const later = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLButtonElement>('[data-testid="composer-later"]')
+      expect(found).not.toBeNull()
+      return found as HTMLButtonElement
+    })
+    expect(later.textContent).toBe(he("compose.sendLater"))
+    // Nothing to send yet: the composer says so before asking for a time.
+    await act(async () => later.click())
+    expect(text()).toContain(he("compose.empty"))
+    expect(document.querySelector('[data-testid="composer-when"]')).toBeNull()
+    await act(async () =>
+      document.querySelector<HTMLInputElement>('.ui-composer-ticket-files input[type="checkbox"]')?.click(),
+    )
+    await act(async () => later.click())
+    const form = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLFormElement>('[data-testid="composer-when"]')
+      expect(found).not.toBeNull()
+      return found as HTMLFormElement
+    })
+    expect(form.textContent).toContain(he("when.zone"))
+    const date = form.querySelector<HTMLInputElement>('input[type="date"]') as HTMLInputElement
+    const time = form.querySelector<HTMLInputElement>('input[type="time"]') as HTMLInputElement
+    const submit = () => document.querySelector<HTMLButtonElement>('[data-testid="composer-when-submit"]')?.click()
+    // 26 March 2027: Israel's clock skips from 02:00 to 03:00.
+    await act(async () => {
+      type(date, "2027-03-26")
+      type(time, "02:30")
+    })
+    await act(async () => submit())
+    expect(text()).toContain(he("when.missingHour"))
+    // "Send" leaves the status: the status action is chosen here and applies when the reply goes.
+    await act(async () => form.querySelector<HTMLInputElement>('input[data-pending="false"]')?.click())
+    await act(async () => {
+      type(date, "2027-01-10")
+      type(time, "09:30")
+    })
+    await act(async () => submit())
+    const posted = await vi.waitFor(() => {
+      const found = requests.find((r) => r.method === "POST" && r.url === "/api/v1/tickets/7/messages")
+      expect(found).toBeDefined()
+      return JSON.parse(found?.body ?? "null") as { kind: string; sendAt: string; setPending: boolean }
+    })
+    expect(posted).toMatchObject({ kind: "reply", sendAt: "2027-01-10T07:30:00.000Z", setPending: false })
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="composer-when"]')).toBeNull())
+  })
+
+  it("shows scheduled replies with their state; cancels one after asking, and changes one as a new version (plan 4.2)", async () => {
+    const SCHEDULED = "00000000-0000-4000-8000-0000000000dd"
+    const entry = (over: Record<string, unknown>) => ({
+      id: SCHEDULED,
+      version: 3,
+      state: "scheduled",
+      reason: null,
+      sendAt: "2027-01-10T07:30:00.000Z",
+      createdAt: when,
+      updatedAt: when,
+      author: { id: "u1", name: "Agent Name" },
+      editable: true,
+      from: "help@example.com",
+      to: [{ address: "dana@example.com", name: "Dana Customer" }],
+      cc: [],
+      text: `${SHALOM}\nSecond line`,
+      html: `<p>${SHALOM}</p>`,
+      setPending: true,
+      files: [],
+      messageId: null,
+      outboxState: null,
+      ...over,
+    })
+    const scheduled = [
+      entry({}),
+      entry({ id: "00000000-0000-4000-8000-0000000000ee", state: "cancelled", reason: "customer_reply" }),
+    ]
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [], false, {}, [{ id: ORG_B, name: "Beta" }], scheduled),
+      [`/api/v1/scheduled/${SCHEDULED}/cancel`]: ok({ ok: true }),
+      [`/api/v1/scheduled/${SCHEDULED}`]: ok({ ok: true }),
+    })
+    const card = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>(`[data-scheduled="${SCHEDULED}"]`)
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(card.textContent).toContain(he("scheduled.state.scheduled"))
+    // 07:30 UTC on 10 January is 09:30 in Israel.
+    expect(card.textContent).toContain("10/01/2027 09:30")
+    expect(card.querySelector('p[dir="auto"]')?.textContent).toBe(SHALOM)
+    expect(text()).toContain(he("scheduled.reason.customer_reply"))
+
+    await act(async () => card.querySelector<HTMLButtonElement>('[data-testid="scheduled-cancel"]')?.click())
+    const question = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[role=alertdialog]")
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    const confirm = Array.from(question.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === he("scheduled.cancel"),
+    )
+    await act(async () => confirm?.click())
+    await vi.waitFor(() =>
+      expect(requests.some((r) => r.method === "POST" && r.url === `/api/v1/scheduled/${SCHEDULED}/cancel`)).toBe(true),
+    )
+
+    await act(async () => button(he("scheduled.change"))?.click())
+    const composer = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>(`.ui-composer[data-editing="${SCHEDULED}"]`)
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(composer.textContent).toContain(he("compose.editingHint"))
+    // While it is being changed the composer only saves it (with its time) or stops.
+    expect(composer.querySelector('[data-testid="composer-send"]')).toBeNull()
+    await act(async () => composer.querySelector<HTMLButtonElement>('[data-testid="composer-later"]')?.click())
+    const form = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLFormElement>('[data-testid="composer-when"]')
+      expect(found).not.toBeNull()
+      return found as HTMLFormElement
+    })
+    expect(form.querySelector<HTMLInputElement>('input[type="date"]')?.value).toBe("2027-01-10")
+    expect(form.querySelector<HTMLInputElement>('input[type="time"]')?.value).toBe("09:30")
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-when-submit"]')?.click())
+    const put = await vi.waitFor(() => {
+      const found = requests.find((r) => r.method === "PUT" && r.url === `/api/v1/scheduled/${SCHEDULED}`)
+      expect(found).toBeDefined()
+      return JSON.parse(found?.body ?? "null") as Record<string, unknown>
+    })
+    expect(put).toMatchObject({ version: 3, sendAt: "2027-01-10T07:30:00.000Z", setPending: true })
+    expect(put).not.toHaveProperty("submissionId")
+  })
+
+  it("snoozes a ticket until a time in Israel time, and ends the snooze by hand (plan 4.2)", async () => {
+    let snoozed: string | null = null
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": () => view("v1", [], false, { snoozedUntil: snoozed }),
+      "/api/v1/tickets/7/snooze": (request) => {
+        snoozed = request.method === "PUT" ? (JSON.parse(request.body ?? "{}") as { until: string }).until : null
+        return ok({ ok: true })
+      },
+    })
+    const control = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-testid="ticket-snooze"]')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(control.textContent).toContain(he("ticket.snooze.none"))
+    await act(async () => button(he("ticket.snooze.open"))?.click())
+    const form = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLFormElement>('[data-testid="snooze-when"]')
+      expect(found).not.toBeNull()
+      return found as HTMLFormElement
+    })
+    await act(async () => {
+      type(form.querySelector('input[type="date"]') as HTMLInputElement, "2027-07-01")
+      type(form.querySelector('input[type="time"]') as HTMLInputElement, "08:00")
+    })
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="snooze-when-submit"]')?.click())
+    await vi.waitFor(() => {
+      const put = requests.find((r) => r.method === "PUT" && r.url === "/api/v1/tickets/7/snooze")
+      // Summer time: 08:00 in Israel is 05:00 UTC.
+      expect(JSON.parse(put?.body ?? "null")).toEqual({ until: "2027-07-01T05:00:00.000Z" })
+    })
+    await vi.waitFor(() => expect(control.getAttribute("data-snoozed")).toBe(""))
+    expect(text()).toContain(he("ticket.snooze.tag", { time: "01/07/2027 08:00" }))
+    await act(async () => button(he("ticket.snooze.end"))?.click())
+    await vi.waitFor(() =>
+      expect(requests.some((r) => r.method === "DELETE" && r.url === "/api/v1/tickets/7/snooze")).toBe(true),
+    )
   })
 
   it("shows a ticket's messages in a sandboxed frame, what was blocked, and each file's status in words", async () => {

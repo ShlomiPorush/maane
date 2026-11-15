@@ -16,8 +16,8 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 /** A ticket row locked for a change, with what a change needs to know. */
 export type LockedTicket = { id: string; number: number; status: TicketStatus; organizationId: string }
 
-/** How a status changed, for the audit row: the status control, the composer, or a customer reply. */
-export type StatusVia = "agent" | "reply" | "customer_reply"
+/** How a status changed, for the audit row: the status control, the composer, a customer reply, or a snooze's end. */
+export type StatusVia = "agent" | "reply" | "customer_reply" | "snooze"
 
 /** Who changes it: a user (with their role) or the system (intake). */
 export type StatusActor = { role: string; actor: Actor; ipAddress: string | null } | { role: "system"; actor: Actor }

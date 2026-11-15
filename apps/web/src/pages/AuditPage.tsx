@@ -6,6 +6,7 @@
 import { TICKET_STATUSES } from "@maane/shared"
 import { useQuery } from "@tanstack/react-query"
 import { type AuditEntry, api, type AuditPage as Page, qk } from "../api/endpoints.ts"
+import { formatTime } from "../format/datetime.ts"
 import { formatNumber } from "../format/number.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { PageHead } from "../shell/chrome.tsx"
@@ -58,9 +59,14 @@ export const AUDIT_ACTIONS = [
   "message.resend",
   "message.mark_sent",
   "message.send_refused",
+  "message.schedule",
+  "message.schedule_change",
+  "message.schedule_cancel",
   "ticket.status",
   "ticket.categories",
   "ticket.move",
+  "ticket.snooze",
+  "ticket.unsnooze",
   "category.create",
   "category.rename",
   "category.delete",
@@ -235,6 +241,13 @@ export function describe(
     const target = name(details.to)
     if (entry.action === "ticket.move" && source && target)
       facts.push({ label: t("audit.fact.organization"), value: t("audit.change", { from: source, to: target }) })
+    if (entry.action === "ticket.move" && typeof details.scheduledCancelled === "number")
+      facts.push({ label: t("audit.fact.scheduledCancelled"), value: formatNumber(details.scheduledCancelled) })
+    // Snooze (plan 4.2): until when, and how it ended.
+    if (typeof details.until === "string")
+      facts.push({ label: t("audit.fact.snoozedUntil"), value: formatTime(details.until, { seconds: false }) })
+    if (entry.action === "ticket.unsnooze" && (details.via === "agent" || details.via === "time"))
+      facts.push({ label: t("audit.fact.snoozeEnd"), value: t(`audit.snoozeEnd.${details.via}`) })
     const names = (value: unknown) =>
       Array.isArray(value) && value.length > 0 ? value.filter((item) => typeof item === "string").join(", ") : null
     const added = names(details.added)
@@ -257,6 +270,11 @@ export function describe(
       facts.push({ label: t("audit.fact.recipients"), value: details.recipients.join(", "), ltr: true })
     if (typeof details.problem === "string")
       facts.push({ label: t("audit.fact.problem"), value: t(`delivery.problem.${details.problem}`) })
+    // A scheduled reply (plan 4.2): its time; a reply it made says so.
+    if (typeof details.sendAt === "string")
+      facts.push({ label: t("audit.fact.sendAt"), value: formatTime(details.sendAt, { seconds: false }) })
+    if (typeof details.scheduled === "string")
+      facts.push({ label: t("audit.fact.scheduled"), value: t("audit.scheduledYes") })
   }
   if (entry.action === "session.sign_in" && (details.stage === "password" || details.stage === "second_factor"))
     facts.push({ label: t("audit.fact.stage"), value: t(`audit.stage.${details.stage}`) })

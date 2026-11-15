@@ -12,9 +12,11 @@
 
 import type { TicketStatus } from "@maane/shared"
 import { and, eq, type SQL, sql } from "drizzle-orm"
+import { cancelTicketActions } from "../actions/timed.ts"
 import { SYSTEM } from "../audit.ts"
 import type { Db } from "../db/client.ts"
-import { intakeRecord, ticket } from "../db/schema.ts"
+import { intakeRecord, ticket, timedAction } from "../db/schema.ts"
+import { customerEndsSnooze } from "./snooze.ts"
 import { changeStatus, lockTicket } from "./status.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
@@ -46,6 +48,26 @@ export function customerReplyCondition(record: typeof intakeRecord = intakeRecor
   )} and ${record.ticketId} is not null)`
 }
 
+/**
+ * Whether the customer wrote to the ticket after this timed action was made (plan 4.2), by the definition above: a
+ * customer reply's intake record newer than the action, both by the database's clock.
+ */
+export async function customerWroteSince(tx: Pick<Tx, "select">, ticketId: string, actionId: string): Promise<boolean> {
+  const [row] = await tx
+    .select({ one: sql<number>`1` })
+    .from(intakeRecord)
+    .innerJoin(timedAction, eq(timedAction.id, actionId))
+    .where(
+      and(
+        eq(intakeRecord.ticketId, ticketId),
+        customerReplyCondition(),
+        sql`${intakeRecord.createdAt} > ${timedAction.createdAt}`,
+      ),
+    )
+    .limit(1)
+  return row !== undefined
+}
+
 /** The status a customer reply leaves: open, from every status but closed (a closed ticket gets a follow-up instead). */
 export function statusAfterCustomerReply(status: TicketStatus): TicketStatus {
   return status === "closed" ? "closed" : "open"
@@ -53,7 +75,8 @@ export function statusAfterCustomerReply(status: TicketStatus): TicketStatus {
 
 /**
  * What a customer reply does to its ticket, in the transaction that attached the message: the ticket becomes open
- * (pending, on hold, solved, and new alike), audited as the system's change, and its last activity moves.
+ * (pending, on hold, solved, and new alike), audited as the system's change, and its last activity moves. Plan 4.2:
+ * its scheduled replies that have not gone to the send point are cancelled, and its snooze ends.
  */
 export async function customerReplied(tx: Tx, ticketId: string, at: Date): Promise<void> {
   const locked = await lockTicket(tx, ticketId)
@@ -66,4 +89,6 @@ export async function customerReplied(tx: Tx, ticketId: string, at: Date): Promi
     "customer_reply",
   )
   await tx.update(ticket).set({ lastActivityAt: at }).where(eq(ticket.id, ticketId))
+  await cancelTicketActions(tx, ticketId, "customer_reply")
+  await customerEndsSnooze(tx, ticketId)
 }

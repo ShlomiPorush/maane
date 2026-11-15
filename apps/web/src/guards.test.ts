@@ -15,6 +15,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
+  ACTION_REASONS,
   ADDRESS_KINDS,
   AUTOMATED_SIGNS,
   DELIVERY_STATUSES,
@@ -333,6 +334,8 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "delivery.recipient.": RECIPIENT_STATES,
   "delivery.provider.": PROVIDERS,
   "delivery.problem.": SEND_PROBLEMS,
+  "scheduled.reason.": ACTION_REASONS,
+  "audit.snoozeEnd.": ["agent", "time"],
   "delivery.status.": DELIVERY_STATUSES,
   "settings.sending.": SETTING_ROWS.filter(
     (key) => key.startsWith("smtp2go.") || key.startsWith("failover.") || key === "mail.bounceAddress",

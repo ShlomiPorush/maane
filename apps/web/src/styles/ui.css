@@ -2850,6 +2850,96 @@ textarea.ui-input.ui-textarea {
   padding: 0;
   list-style: none;
 }
+/* Scheduled replies (plan 4.2): a card per reply above the composer, its time at the end of its head. */
+.ui-scheduled-list {
+  display: grid;
+  gap: var(--ui-gap);
+}
+.ui-scheduled {
+  display: grid;
+  gap: 10px;
+  padding: 12px var(--ui-pad-x) 14px;
+}
+.ui-scheduled[data-editing] {
+  box-shadow: inset 0 0 0 2px var(--ui-info);
+}
+.ui-scheduled-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--ui-muted);
+}
+.ui-scheduled-when {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  font-size: var(--ui-fs-meta);
+}
+.ui-scheduled-reason {
+  margin: 0;
+  color: var(--ui-muted);
+}
+.ui-scheduled-text {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-fill);
+  overflow-wrap: anywhere;
+}
+.ui-scheduled-text p {
+  margin: 0;
+}
+.ui-scheduled-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ui-fs-sm);
+}
+.ui-scheduled-files li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.ui-scheduled-file-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--ui-muted);
+}
+.ui-scheduled-acts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* A date and a time side by side (plan 4.2: send later, snooze), one under the other on a phone. */
+.ui-when {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+.ui-snooze-until {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+}
+
+@media (max-width: 760px) {
+  .ui-when {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ui-scheduled-acts .ui-btn {
+    min-height: 44px;
+  }
+}
+
 .ui-composer-ticket-files label {
   display: flex;
   flex-wrap: wrap;

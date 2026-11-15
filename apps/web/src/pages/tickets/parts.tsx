@@ -2,6 +2,7 @@
 // and review tags, and a scan status in words. The word is the status; its colour only reinforces it (FB-14).
 
 import type { MailAddress, PartStatus, TicketStatus } from "@maane/shared"
+import { formatListTime } from "../../format/datetime.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { Tag, type Tone } from "../../ui/tags.tsx"
 
@@ -60,13 +61,23 @@ export function AddressLine({ value }: { value: MailAddress }) {
   )
 }
 
-export function TicketTags({ status, flags }: { status: TicketStatus; flags: string[] }) {
+export function TicketTags({
+  status,
+  flags,
+  snoozedUntil = null,
+}: {
+  status: TicketStatus
+  flags: string[]
+  /** Plan 4.2: a snoozed ticket says until when. */
+  snoozedUntil?: string | null
+}) {
   const { t } = useI18n()
   return (
     <>
       <Tag tone={status === "new" ? "info" : status === "solved" ? "ok" : "neutral"}>
         {t(`ticket.status.${status}`)}
       </Tag>
+      {snoozedUntil ? <Tag tone="info">{t("ticket.snooze.tag", { time: formatListTime(snoozedUntil) })}</Tag> : null}
       {flags.map((flag) => (
         <Tag key={flag} tone="warn">
           {t(`flag.${flag}`)}

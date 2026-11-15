@@ -12,6 +12,7 @@ import {
   type Role,
   type ScannerStatusView,
   type ScannerTestView,
+  type ScheduledInput,
   type SettingKey,
   type SettingView,
   type SmtpTestView,
@@ -199,9 +200,19 @@ export const api = {
       "GET",
       `/intake${query({ mode: filters.mode, flagged: filters.flagged ? 1 : undefined, after })}`,
     ),
-  /** A reply or an internal note; the same submission ID again finds the same message. */
+  /**
+   * A reply or an internal note; the same submission ID again finds the same message. A reply with `sendAt` is
+   * scheduled instead (plan 4.2), and the answer names the scheduled reply.
+   */
   writeMessage: (number: number, input: ReplyInput) =>
-    request<{ id: string }>("POST", `/tickets/${number}/messages`, input),
+    request<{ id: string } | { scheduled: string }>("POST", `/tickets/${number}/messages`, input),
+  /** A new version of a scheduled reply, while it is still scheduled; names the version it changes. */
+  changeScheduled: (id: string, input: ScheduledInput) =>
+    request<{ ok: true }>("PUT", `/scheduled/${encodeURIComponent(id)}`, input),
+  cancelScheduled: (id: string) => request<{ ok: true }>("POST", `/scheduled/${encodeURIComponent(id)}/cancel`),
+  /** Snoozes the ticket until this instant (plan 4.2), replacing its snooze; `wake` ends it by hand. */
+  snooze: (number: number, until: string) => request<{ ok: true }>("PUT", `/tickets/${number}/snooze`, { until }),
+  wake: (number: number) => request<{ ok: true }>("DELETE", `/tickets/${number}/snooze`),
   resend: (messageId: string) => request<{ ok: true }>("POST", `/messages/${encodeURIComponent(messageId)}/resend`),
   markSent: (messageId: string, address: string) =>
     request<{ ok: true }>("POST", `/messages/${encodeURIComponent(messageId)}/mark-sent`, { address }),

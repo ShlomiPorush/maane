@@ -1,6 +1,7 @@
 // The ticket list, the home page (plan 2.4): one list across every organization the user may see, newest activity
 // first (GET /api/v1/tickets), with an organization filter, the review filter, and (plan 4.1) a status filter whose
-// default is open work (new, open, on hold) and a category filter, all kept in the address
+// default is open work (new, open, on hold; plan 4.2 leaves snoozed tickets out of it and adds a Snoozed filter) and a
+// category filter, all kept in the address
 // (?organization=<id>&review=1&status=<filter>&category=<id>; no status is open work). Plan 4.4 adds one search box
 // (?q=<term>) over the subject, the customer's address and name, message text, and the ticket number; without a chosen
 // status it searches every status, and a chosen one narrows it. It runs on Enter or its button (SR-9), narrows the list
@@ -321,7 +322,7 @@ function TicketRow({ ticket }: { ticket: TicketSummary }) {
           <bdi dir="auto" className="ui-ticket-subject">
             {ticket.subject ?? t("tickets.noSubject")}
           </bdi>
-          <TicketTags status={ticket.status} flags={ticket.reviewFlags} />
+          <TicketTags status={ticket.status} flags={ticket.reviewFlags} snoozedUntil={ticket.snoozedUntil} />
         </span>
         <span className="ui-item-meta">
           <Sender sender={ticket.customer} />

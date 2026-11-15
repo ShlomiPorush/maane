@@ -170,7 +170,11 @@
       "categoryNameTaken": "Another category has this name. Choose another one.",
       "pushEndpointRefused": "This browser's push service is not one Maane sends to. Try Chrome, Edge, Firefox, or Safari.",
       "pushEndpointTaken": "This device's notifications still belong to another account. Try again.",
-      "pushSubscriptionInvalid": "The browser gave a subscription Maane cannot use. Try again."
+      "pushSubscriptionInvalid": "The browser gave a subscription Maane cannot use. Try again.",
+      "timePast": "Choose a time in the future.",
+      "scheduledNotOpen": "This scheduled reply is no longer waiting: it went out or was cancelled. The ticket shows where it is now.",
+      "scheduledChanged": "This scheduled reply changed meanwhile. Open it again to change the newest version.",
+      "scheduledNotAuthor": "Only the agent who wrote this scheduled reply can change it. You can still cancel it."
     }
   },
   "auth": {
@@ -287,7 +291,8 @@
       "pending": "Pending",
       "on_hold": "On hold",
       "solved": "Solved",
-      "closed": "Closed"
+      "closed": "Closed",
+      "snoozed": "Snoozed"
     },
     "category": "Category",
     "allCategories": "All categories",
@@ -393,6 +398,23 @@
       "sender_not_participant": "Sender not a participant",
       "ambiguous_original": "Original of several tickets",
       "follow_up": "Follow-up of a closed ticket"
+    },
+    "scheduledReply": "Scheduled",
+    "snooze": {
+      "label": "Snooze",
+      "none": "Not snoozed",
+      "snoozed": "Snoozed",
+      "until": "until",
+      "open": "Snooze",
+      "change": "Change",
+      "end": "End snooze",
+      "title": "Snooze ticket #{number}",
+      "submit": "Snooze",
+      "hint": "The ticket leaves the open work list until then. A customer reply brings it back at once. When the snooze ends, a pending ticket becomes open.",
+      "done": "The ticket is snoozed.",
+      "ended": "The snooze ended.",
+      "failed": "The snooze did not change: {reason}",
+      "tag": "Snoozed until {time}"
     }
   },
   "scan": {
@@ -940,7 +962,12 @@
       "status": "Status",
       "category": "Category",
       "categoriesAdded": "Categories added",
-      "categoriesRemoved": "Categories removed"
+      "categoriesRemoved": "Categories removed",
+      "scheduledCancelled": "Scheduled replies cancelled",
+      "snoozedUntil": "Snoozed until",
+      "snoozeEnd": "Ended",
+      "sendAt": "Send at",
+      "scheduled": "Scheduled reply"
     },
     "stage": {
       "password": "password",
@@ -994,12 +1021,17 @@
         "note": "Internal note written",
         "resend": "Reply sent again",
         "mark_sent": "Reply marked as sent",
-        "send_refused": "Reply not sent"
+        "send_refused": "Reply not sent",
+        "schedule": "Reply scheduled",
+        "schedule_change": "Scheduled reply changed",
+        "schedule_cancel": "Scheduled reply cancelled"
       },
       "ticket": {
         "status": "Ticket status changed",
         "categories": "Ticket categories changed",
-        "move": "Ticket moved to another organization"
+        "move": "Ticket moved to another organization",
+        "snooze": "Ticket snoozed",
+        "unsnooze": "Snooze ended"
       },
       "category": {
         "create": "Category added",
@@ -1007,7 +1039,12 @@
         "delete": "Category deleted"
       }
     },
-    "change": "{from}, now {to}"
+    "change": "{from}, now {to}",
+    "snoozeEnd": {
+      "agent": "by an agent",
+      "time": "at its time"
+    },
+    "scheduledYes": "Sent at its scheduled time"
   },
   "organizations": {
     "title": "Organizations",
@@ -1193,7 +1230,22 @@
     "noteAdded": "The internal note is added.",
     "sendPending": "Send and set pending",
     "sendOnly": "Send",
-    "replyQueuedPending": "The reply is on its way, and the ticket waits for the customer."
+    "replyQueuedPending": "The reply is on its way, and the ticket waits for the customer.",
+    "sendLater": "Send later",
+    "laterTitle": "Send later",
+    "laterSubmit": "Schedule",
+    "scheduling": "Saving",
+    "laterAction": "When it goes",
+    "laterActionHint": "The status changes when the reply goes, not now.",
+    "scheduled": "The reply is scheduled for {time}.",
+    "scheduleChanged": "The scheduled reply now goes at {time}.",
+    "saveChange": "Save changes",
+    "changeTitle": "Change the scheduled reply",
+    "saveChangeSubmit": "Save",
+    "editingTitle": "Changing the reply scheduled for {time}",
+    "editingHint": "Change the text, the recipients, or the files, then save with its time.",
+    "stopEditing": "Stop changing",
+    "replaceDraft": "The composer holds a draft. Drop it and open the scheduled reply?"
   },
   "delivery": {
     "title": "Sending",
@@ -1223,7 +1275,9 @@
       "from_not_allowed": "The From address no longer belongs to this ticket's organization, so Maane sent nothing.",
       "author_not_allowed": "The author may no longer answer this ticket, so Maane sent nothing.",
       "not_configured": "No mail server is set up. Set SMTP2GO or the backup server in Settings.",
-      "unreachable": "Maane could not reach or sign in to any mail server, so nothing was sent."
+      "unreachable": "Maane could not reach or sign in to any mail server, so nothing was sent.",
+      "customer_reply": "The customer wrote before this scheduled reply went out, so Maane sent nothing.",
+      "action_ended": "This scheduled reply was cancelled before it went out, so Maane sent nothing."
     },
     "resend": "Send again",
     "resendTitle": "Send this reply again?",
@@ -1309,5 +1363,42 @@
       "two": "2 tickets",
       "other": "{count} tickets"
     }
+  },
+  "when": {
+    "date": "Date",
+    "time": "Time",
+    "zone": "Israel time (Asia/Jerusalem).",
+    "required": "Choose a date and a time.",
+    "missingHour": "This time does not exist in Israel: the clock skips that hour when summer time starts. Choose another time.",
+    "past": "Choose a time in the future."
+  },
+  "scheduled": {
+    "title": "Scheduled replies",
+    "state": {
+      "scheduled": "Scheduled",
+      "handed": "Going out",
+      "cancelled": "Cancelled",
+      "ended": "Not sent"
+    },
+    "goesAt": "Goes at",
+    "wasAt": "Was due",
+    "editing": "Being changed",
+    "reason": {
+      "agent": "An agent cancelled it.",
+      "customer_reply": "The customer wrote before it went out, so it was cancelled. You can write a new reply.",
+      "move": "The ticket moved to another organization, so it was cancelled.",
+      "listening": "Intake was listening at its time, so Maane sent nothing.",
+      "from_not_allowed": "At its time its From address no longer belonged to the ticket's organization, so Maane sent nothing.",
+      "author_not_allowed": "At its time its author could no longer answer this ticket, so Maane sent nothing."
+    },
+    "thenPending": "When it goes, the ticket is set to pending.",
+    "thenStatus": "When it goes, the status stays as it is.",
+    "change": "Change",
+    "cancel": "Cancel reply",
+    "keep": "Keep it",
+    "cancelTitle": "Cancel this scheduled reply?",
+    "cancelMessage": "It will not be sent. You can write a new reply.",
+    "cancelDone": "The scheduled reply is cancelled.",
+    "cancelFailed": "The scheduled reply was not cancelled: {reason}"
   }
 }

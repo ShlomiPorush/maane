@@ -6,9 +6,10 @@
 // downloads. A ticket outside the user's organizations reads as not found, as the server answers. Replies and internal
 // notes (plan 3.1) show their author, a reply where its sending is per recipient and which of its links were clicked
 // and history files downloaded (plan 3.4), and the composer comes last. The details hold the workflow (plan 4.1): the
-// status, the categories, and moving the ticket to another organization (tickets/Workflow.tsx).
+// status, the categories, moving the ticket to another organization, and (plan 4.2) its snooze (tickets/Workflow.tsx);
+// its scheduled replies show above the composer (tickets/Scheduled.tsx), and a reply one of them made is marked.
 
-import type { AttachmentView, MessageView, TicketView } from "@maane/shared"
+import type { AttachmentView, MessageView, ScheduledReplyView, TicketView } from "@maane/shared"
 import { Download, Eye, Paperclip } from "lucide-react"
 import { useState } from "react"
 import { Link, useParams } from "react-router"
@@ -28,7 +29,8 @@ import { Composer } from "./tickets/Composer.tsx"
 import { Delivery } from "./tickets/Delivery.tsx"
 import { FilePreview } from "./tickets/FilePreview.tsx"
 import { AddressLine, ScanTag, Sender, TicketNumber, TicketTags } from "./tickets/parts.tsx"
-import { CategoriesControl, OrganizationControl, StatusControl } from "./tickets/Workflow.tsx"
+import { ScheduledReplies } from "./tickets/Scheduled.tsx"
+import { CategoriesControl, OrganizationControl, SnoozeControl, StatusControl } from "./tickets/Workflow.tsx"
 
 const NUMBER = /^[1-9][0-9]{0,15}$/
 
@@ -73,7 +75,11 @@ export function TicketPage() {
               <TicketNumber number={view.ticket.number} />
               <span aria-hidden="true">·</span>
               <bdi dir="auto">{view.ticket.organization.name}</bdi>
-              <TicketTags status={view.ticket.status} flags={view.ticket.reviewFlags} />
+              <TicketTags
+                status={view.ticket.status}
+                flags={view.ticket.reviewFlags}
+                snoozedUntil={view.ticket.snoozedUntil}
+              />
             </p>
           ) : null
         }
@@ -97,7 +103,11 @@ export function TicketPage() {
 function Ticket({ view }: { view: TicketView }) {
   const { t } = useI18n()
   const [preview, setPreview] = useState<AttachmentView | null>(null)
+  const [editingId, setEditing] = useState<string | null>(null)
   const { ticket } = view
+  // The scheduled reply being changed, as the view now has it: one that left `scheduled` meanwhile stops the change.
+  const editing: ScheduledReplyView | null =
+    view.scheduled.find((entry) => entry.id === editingId && entry.state === "scheduled") ?? null
   return (
     <>
       <section className="ui-panel" aria-labelledby="ticket-details">
@@ -109,6 +119,12 @@ function Ticket({ view }: { view: TicketView }) {
             <dt>{t("ticket.statusLabel")}</dt>
             <dd>
               <StatusControl view={view} />
+            </dd>
+          </div>
+          <div>
+            <dt>{t("ticket.snooze.label")}</dt>
+            <dd>
+              <SnoozeControl view={view} />
             </dd>
           </div>
           <div>
@@ -176,8 +192,9 @@ function Ticket({ view }: { view: TicketView }) {
       {view.messages.map((message) => (
         <MessageCard key={message.id} message={message} ticketNumber={ticket.number} onPreview={setPreview} />
       ))}
+      <ScheduledReplies view={view} editing={editing?.id ?? null} onEdit={(entry) => setEditing(entry.id)} />
       {/* One composer per ticket: moving to another ticket starts a fresh one (recipients, text, files, submission). */}
-      <Composer key={ticket.number} view={view} />
+      <Composer key={ticket.number} view={view} editing={editing} onEditDone={() => setEditing(null)} />
       {preview ? <FilePreview file={preview} onClose={() => setPreview(null)} /> : null}
     </>
   )
@@ -203,6 +220,7 @@ function MessageCard({
       <header className="ui-message-head">
         <span className="ui-message-from">
           {message.direction !== "in" ? <Tag tone="neutral">{t(`ticket.direction.${message.direction}`)}</Tag> : null}
+          {message.scheduled ? <Tag tone="info">{t("ticket.scheduledReply")}</Tag> : null}
           {message.author ? <bdi dir="auto">{message.author.name}</bdi> : null}
           {message.direction === "note" ? null : message.from ? (
             <AddressLine value={message.from} />

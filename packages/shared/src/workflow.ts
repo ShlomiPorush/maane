@@ -1,5 +1,5 @@
-// The words of the workflow (plan 4.1) that the server and the UI share: the statuses of open work, who may set which
-// status, the ticket list's status filter, and categories.
+// The words of the workflow (plans 4.1 and 4.2) that the server and the UI share: the statuses of open work, who may set
+// which status, the ticket list's status filter (snoozed tickets included), and categories.
 
 import type { TicketStatus } from "./intake.ts"
 
@@ -7,10 +7,21 @@ import type { TicketStatus } from "./intake.ts"
 export const OPEN_WORK_STATUSES = ["new", "open", "on_hold"] as const satisfies readonly TicketStatus[]
 
 /**
- * The ticket list's status filter: open work (the default), every status, or one status. The address and the API
- * carry it as `status`; without it the list shows open work, and a search every status (plan 4.4).
+ * The ticket list's status filter: open work (the default, without snoozed tickets), every status, one status, or the
+ * snoozed tickets of every status (plan 4.2). The address and the API carry it as `status`; without it the list shows
+ * open work, and a search every status, snoozed tickets among them (plan 4.4).
  */
-export const STATUS_FILTERS = ["open_work", "all", "new", "open", "pending", "on_hold", "solved", "closed"] as const
+export const STATUS_FILTERS = [
+  "open_work",
+  "all",
+  "new",
+  "open",
+  "pending",
+  "on_hold",
+  "solved",
+  "closed",
+  "snoozed",
+] as const
 export type StatusFilter = (typeof STATUS_FILTERS)[number]
 export const DEFAULT_STATUS_FILTER: StatusFilter = "open_work"
 
@@ -21,7 +32,7 @@ export function defaultStatusFilter(searching: boolean): StatusFilter {
 
 /** The statuses a filter shows, or null for every status. */
 export function statusesOf(filter: StatusFilter): readonly TicketStatus[] | null {
-  if (filter === "all") return null
+  if (filter === "all" || filter === "snoozed") return null
   if (filter === "open_work") return OPEN_WORK_STATUSES
   return [filter]
 }

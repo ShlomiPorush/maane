@@ -1,4 +1,4 @@
-// Replies, internal notes, and the composer's uploads (plan 3.1), mounted under /api/v1 behind its session, two-factor,
+// Replies, internal notes, scheduled replies (plan 4.2), and the composer's uploads (plan 3.1), mounted under /api/v1 behind its session, two-factor,
 // CSRF, and Origin checks. Every route reads the user's scope (visibleOrganizations) on each request; a ticket or a
 // message outside it answers 404 as if it did not exist. An upload belongs to its uploader alone.
 
@@ -8,7 +8,7 @@ import { z } from "zod"
 import type { Db } from "../db/client.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { visibleOrganizations } from "../organizations/scope.ts"
-import { type Replies, ReplyBody, type ReplyUser } from "../replies/service.ts"
+import { type Replies, ReplyBody, type ReplyUser, ScheduledBody } from "../replies/service.ts"
 import type { Settings } from "../settings/service.ts"
 import { type ApiEnv, clientIp } from "./request.ts"
 
@@ -58,6 +58,25 @@ export function replyRoutes(db: Db, settings: Settings, replies: Replies): Hono<
       if (!parsed.success) throw new Refusal("request_invalid", 400)
       const written = await replies.submit(await scopeOf(c), userOf(c), number, parsed.data)
       return c.json(written, 201)
+    }),
+  )
+
+  // A scheduled reply (plan 4.2): a change (a new version) and a cancellation, while it is still scheduled.
+  routes.put(
+    "/scheduled/:id",
+    refusals(async (c) => {
+      const parsed = ScheduledBody.safeParse(await c.req.json().catch(() => null))
+      if (!parsed.success) throw new Refusal("request_invalid", 400)
+      await replies.changeScheduled(await scopeOf(c), userOf(c), messageId(c), parsed.data)
+      return c.json({ ok: true })
+    }),
+  )
+
+  routes.post(
+    "/scheduled/:id/cancel",
+    refusals(async (c) => {
+      await replies.cancelScheduled(await scopeOf(c), userOf(c), messageId(c))
+      return c.json({ ok: true })
     }),
   )
 

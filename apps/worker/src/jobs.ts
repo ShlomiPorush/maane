@@ -12,12 +12,16 @@ import {
   SCANNER_SELF_TEST,
   SEND_REPLY,
   SMTP_TEST,
+  SNOOZE_END,
+  TIMED_ACTION,
   UPLOAD_SCAN,
 } from "@maane/server/jobs/queue"
 import { errorFacts, log } from "@maane/server/log"
 import type { Settings } from "@maane/server/settings/service"
+import { snoozeEnded } from "@maane/server/tickets/snooze"
 import { type GraphTestResult, PROVIDERS, type Provider } from "@maane/shared"
 import type { PgBoss } from "pg-boss"
+import { TimedActions, timedActionJob } from "./actions/run.ts"
 import type { ActivityPoll } from "./delivery/poll.ts"
 import { selfTestView } from "./files/self-test.ts"
 import type { FileService } from "./files/service.ts"
@@ -92,7 +96,8 @@ export async function graphTest(settings: Settings, graph: GraphGateway): Promis
  * is the result the Settings page polls for); the daily sweep of unreferenced stored files; and Graph intake (plan
  * 2.3): the connection test, stage one every minute, stage two after each sync, every minute, and once at start, and the
  * retry of waiting files every five minutes; sending (plan 3.1) and the activity poll of delivery statuses every ten
- * minutes (plan 3.3). Later phases add scheduled actions and notifications here.
+ * minutes (plan 3.3); timed actions and the end of a snooze, each at its time (plan 4.2). Later phases add
+ * notifications here.
  */
 export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Promise<void> {
   const heartbeatFile = options.heartbeatFile ?? HEARTBEAT_FILE
@@ -131,6 +136,20 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
       const provider = job?.data.provider
       if ((PROVIDERS as readonly unknown[]).includes(provider))
         return smtpTest(send.settings, provider as Provider, send.timeouts)
+    })
+    // Timed actions and snoozes (plan 4.2): each job carries the version it was queued for; an older one does nothing.
+    const actions = new TimedActions({ db: send.db, queue: (db, name, data) => boss.send(name, data, { db }) })
+    await boss.createQueue(TIMED_ACTION, QUEUE_OPTIONS[TIMED_ACTION])
+    await boss.createQueue(SNOOZE_END, QUEUE_OPTIONS[SNOOZE_END])
+    await boss.work<{ actionId?: unknown; version?: unknown }>(TIMED_ACTION, async ([job]) => {
+      const { actionId, version } = job?.data ?? {}
+      if (typeof actionId === "string" && Number.isSafeInteger(version))
+        return { result: await timedActionJob(actions, actionId, version as number) }
+    })
+    await boss.work<{ ticketId?: unknown; version?: unknown }>(SNOOZE_END, async ([job]) => {
+      const { ticketId, version } = job?.data ?? {}
+      if (typeof ticketId === "string" && Number.isSafeInteger(version))
+        return { ended: await snoozeEnded(send.db, ticketId, version as number) }
     })
     const poll = send.poll
     if (poll) {

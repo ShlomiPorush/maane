@@ -155,6 +155,13 @@
       "when": 1794770282145,
       "tag": "0021_search",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1794775096211,
+      "tag": "0022_scheduled",
+      "breakpoints": true
     }
   ]
 }

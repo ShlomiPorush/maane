@@ -18,6 +18,9 @@ import { showToast } from "../../ui/Toast.tsx"
 import { Tag, type Tone } from "../../ui/tags.tsx"
 import { AddressLine } from "./parts.tsx"
 
+/** Problems of a scheduled reply ended before it went out: the server refuses Send again for them. */
+const ENDED = new Set<string>(["customer_reply", "action_ended"])
+
 export const OUTBOX_TONE: Record<OutboxState, Tone> = {
   pending: "info",
   sending: "info",
@@ -104,7 +107,8 @@ export function Delivery({
         <Banner
           tone="fail"
           title={delivery.problem ? t(`delivery.problem.${delivery.problem}`) : t("delivery.refusedAll")}
-          action={actions}
+          // A scheduled reply that a customer reply, a move, or a cancellation ended never goes again (plan 4.2).
+          action={ENDED.has(delivery.problem ?? "") ? undefined : actions}
         />
       ) : null}
       {delivery.unmatchedDelivery ? (

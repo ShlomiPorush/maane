@@ -53,6 +53,8 @@ export type Provider = (typeof PROVIDERS)[number]
  * - `author_not_allowed`: the author may no longer answer this ticket (removed, disabled, or out of its organization).
  * - `not_configured`: neither SMTP2GO nor the failover server is set up.
  * - `unreachable`: no provider could be reached or logged in to, so nothing was sent.
+ * - `customer_reply`: a scheduled reply (plan 4.2) whose customer wrote before it went out.
+ * - `action_ended`: a scheduled reply cancelled or replaced before it went out.
  */
 export const SEND_PROBLEMS = [
   "listening",
@@ -60,6 +62,8 @@ export const SEND_PROBLEMS = [
   "author_not_allowed",
   "not_configured",
   "unreachable",
+  "customer_reply",
+  "action_ended",
 ] as const
 export type SendProblem = (typeof SEND_PROBLEMS)[number]
 
@@ -189,6 +193,79 @@ export interface ReplyInput {
    * ("Send and set pending"); false or absent leaves the status as it is. A note never changes the status.
    */
   setPending?: boolean
+  /**
+   * A reply only: send it at this instant instead of now (plan 4.2), as an ISO time with its offset. The composer enters
+   * it in Israel time; the server refuses a time that is not in the future.
+   */
+  sendAt?: string
+}
+
+/**
+ * Where a timed action is (plan 4.2, one rule for every timed action):
+ * - `scheduled`: waiting for its time; the agent can still change or cancel it.
+ * - `handed`: its time came and its outbox row was made; the send point checks it once more before `sending`.
+ * - `done`: it passed that check and went to the send point; the reply's own state says the rest.
+ * - `cancelled`: by the agent, by a customer reply, or by a move to another organization (ACTION_REASONS).
+ * - `ended`: a check at its time failed, so nothing was sent (the reason says which).
+ */
+export const ACTION_STATES = ["scheduled", "handed", "done", "cancelled", "ended"] as const
+export type ActionState = (typeof ACTION_STATES)[number]
+
+/**
+ * Why a timed action was cancelled or ended: the agent cancelled it, the customer wrote (`customer_reply`), the ticket
+ * moved to another organization (`move`), or a check at its time failed (intake listens, the From address or the author
+ * is no longer allowed).
+ */
+export const ACTION_REASONS = [
+  "agent",
+  "customer_reply",
+  "move",
+  "listening",
+  "from_not_allowed",
+  "author_not_allowed",
+] as const
+export type ActionReason = (typeof ACTION_REASONS)[number]
+
+/** A file of a scheduled reply: one of the agent's uploads, or a file of the ticket's own messages. */
+export interface ScheduledFile {
+  source: "upload" | "part"
+  id: string
+  fileName: string
+  size: number
+}
+
+/** A scheduled reply in the ticket view (plan 4.2): its current version, its time, and where it is. */
+export interface ScheduledReplyView {
+  id: string
+  /** Each change makes a new version; a change names the version it changes. */
+  version: number
+  state: ActionState
+  reason: ActionReason | null
+  /** When it goes, as an instant. */
+  sendAt: string
+  createdAt: string
+  updatedAt: string
+  author: { id: string; name: string } | null
+  /** Only its author changes it (the files are their own uploads); anyone who sees the ticket may cancel it. */
+  editable: boolean
+  from: string
+  to: MailAddress[]
+  cc: MailAddress[]
+  /** The text as it will be sent (the signature included), for reading. */
+  text: string
+  /** What the agent wrote, for the composer to change. */
+  html: string
+  setPending: boolean
+  files: ScheduledFile[]
+  /** Once its time came: the reply it made, and that reply's state. */
+  messageId: string | null
+  outboxState: OutboxState | null
+}
+
+/** A change of a scheduled reply: everything again, its new time, and the version it changes. */
+export interface ScheduledInput extends Omit<ReplyInput, "submissionId" | "kind" | "sendAt"> {
+  sendAt: string
+  version: number
 }
 
 /**
