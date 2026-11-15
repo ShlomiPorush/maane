@@ -35,21 +35,26 @@ describe("pushPayload", () => {
 })
 
 describe("notificationOf", () => {
-  it("notifies for a ticket a customer's message opened or joined, in live mode only", () => {
-    expect(notificationOf("live", "new_ticket", "t", "m")).toEqual({
-      kind: "new_ticket",
-      ticketId: "t",
-      messageId: "m",
-    })
-    expect(notificationOf("live", "new_linked_ticket", "t", "m")?.kind).toBe("new_ticket")
-    expect(notificationOf("live", "joined", "t", "m")).toEqual({
-      kind: "customer_reply",
-      ticketId: "t",
-      messageId: "m",
-    })
-    for (const outcome of ["automated", "copy", "no_address", "unreadable"] as const)
-      expect(notificationOf("live", outcome, "t", "m")).toBeNull()
-    expect(notificationOf("listening", "new_ticket", "t", "m")).toBeNull()
-    expect(notificationOf("live", "joined", null, "m")).toBeNull()
+  const live = (outcome: string, classification: string | null = "customer", ticketId: string | null = "t") => ({
+    mode: "live",
+    outcome,
+    classification,
+    ticketId,
+  })
+
+  it("notifies for a ticket a message opened, and for exactly what 4.1 counts as a customer reply, in live mode only", () => {
+    expect(notificationOf(live("new_ticket"), "m")).toEqual({ kind: "new_ticket", ticketId: "t", messageId: "m" })
+    // Among them the follow-up a reply to a closed ticket opens (plan 4.1).
+    expect(notificationOf(live("new_linked_ticket"), "m")?.kind).toBe("new_ticket")
+    expect(notificationOf(live("joined"), "m")).toEqual({ kind: "customer_reply", ticketId: "t", messageId: "m" })
+    // Joined, but not the customer's mail: not a customer reply (isCustomerReply), so nobody is notified.
+    for (const classification of ["automated", null])
+      expect(notificationOf(live("joined", classification), "m")).toBeNull()
+    for (const outcome of ["automated", "copy", "no_address", "unreadable"])
+      expect(notificationOf(live(outcome), "m")).toBeNull()
+    expect(notificationOf({ ...live("new_ticket"), mode: "listening" }, "m")).toBeNull()
+    expect(notificationOf({ ...live("joined"), mode: "listening" }, "m")).toBeNull()
+    expect(notificationOf(live("joined", "customer", null), "m")).toBeNull()
+    expect(notificationOf(live("new_ticket", "customer", null), "m")).toBeNull()
   })
 })

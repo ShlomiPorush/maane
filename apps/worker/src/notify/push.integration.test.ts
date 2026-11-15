@@ -3,7 +3,7 @@
 // reaches a real push service.
 
 import { randomUUID } from "node:crypto"
-import { organizationMember, pushSubscription } from "@maane/server/db/schema"
+import { organizationMember, pushSubscription, ticket as ticketTable } from "@maane/server/db/schema"
 import { PUSH_NOTIFY, type PushJob } from "@maane/server/jobs/queue"
 import { createTestApp } from "@maane/server/testing/app"
 import { nextIp, TestBrowser, testPassword } from "@maane/server/testing/browser"
@@ -346,6 +346,25 @@ describe("intake's notifications", () => {
     const replyRow = await h.messageOf(reply)
     expect(replyRow.ticketId).toBe(ticket?.id)
     expect(await queued()).toEqual([{ kind: "customer_reply", ticketId: ticket?.id, messageId: replyRow.id }])
+
+    // A reply to a closed ticket opens a follow-up (plan 4.1): a new ticket, which notifies as one.
+    if (!ticket) throw new Error("no ticket")
+    await h.database.db.update(ticketTable).set({ status: "closed" }).where(eq(ticketTable.id, ticket.id))
+    const late = h.graph.add(
+      mime({
+        subject: `Re: ${SUBJECT}`,
+        to: SUPPORT,
+        inReplyTo: original,
+        references: [original],
+        text: { content: BODY },
+      }),
+    )
+    await round()
+    const lateRow = await h.messageOf(late)
+    const followUp = await h.ticketOf(late)
+    expect(followUp?.id).toBeDefined()
+    expect(followUp?.id).not.toBe(ticket.id)
+    expect(await queued()).toEqual([{ kind: "new_ticket", ticketId: followUp?.id, messageId: lateRow.id }])
 
     // Automated mail opens and joins nothing, and notifies nobody.
     h.graph.add(

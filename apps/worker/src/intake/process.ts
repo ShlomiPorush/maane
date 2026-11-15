@@ -37,7 +37,7 @@ import {
 import { type PushJob, transactionWithJobs } from "@maane/server/jobs/queue"
 import { errorFacts, log } from "@maane/server/log"
 import { databaseError } from "@maane/server/organizations/refusal"
-import { customerReplied, isCustomerReply } from "@maane/server/tickets/customer-reply"
+import { customerReplied, type IntakeFacts, isCustomerReply } from "@maane/server/tickets/customer-reply"
 import { lockTicket } from "@maane/server/tickets/status"
 import {
   type IntakeMode,
@@ -90,19 +90,17 @@ type RecordFields = Omit<typeof intakeRecord.$inferInsert, "messageId" | "mode" 
 }
 
 /**
- * Whether a processed message notifies agents (plan 4.5): in live mode, a customer's message that opened a ticket or
- * joined one. Automated mail, copies, and listening mode never notify. The one place that decides it, so the shared
- * definition of a customer reply (plan 4.1) can take its place.
+ * Whether a processed message notifies agents (plan 4.5), the one place that decides it: in live mode, a message that
+ * opened a ticket (among them the follow-up a reply to a closed ticket opens, plan 4.1), and exactly what
+ * `isCustomerReply` (apps/server/src/tickets/customer-reply.ts) counts as a customer reply. Automated mail, copies,
+ * and listening mode never notify.
  */
-export function notificationOf(
-  mode: IntakeMode,
-  outcome: IntakeOutcome,
-  ticketId: string | null | undefined,
-  messageId: string,
-): PushJob | null {
-  if (mode !== "live" || !ticketId) return null
-  if (outcome === "joined") return { kind: "customer_reply", ticketId, messageId }
-  if (outcome === "new_ticket" || outcome === "new_linked_ticket") return { kind: "new_ticket", ticketId, messageId }
+export function notificationOf(record: IntakeFacts, messageId: string): PushJob | null {
+  const ticketId = record.ticketId
+  if (!ticketId) return null
+  if (isCustomerReply(record)) return { kind: "customer_reply", ticketId, messageId }
+  if (record.mode === "live" && (record.outcome === "new_ticket" || record.outcome === "new_linked_ticket"))
+    return { kind: "new_ticket", ticketId, messageId }
   return null
 }
 
@@ -304,7 +302,7 @@ export class IntakeProcessor {
         .set({ ...patch, reviewFlags: [...flags], state: "processed", processedAt: this.#now() })
         .where(eq(message.id, msg.id))
       await tx.insert(intakeRecord).values({ messageId: msg.id, mode, ...record })
-      const notification = notificationOf(mode, record.outcome, record.ticketId, msg.id)
+      const notification = notificationOf({ mode, ...record }, msg.id)
       if (notification) notifications.push(notification)
     }
 
