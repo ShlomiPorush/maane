@@ -49,6 +49,7 @@ beforeEach(async () => {
   app = createTestApp(h.database)
   await app.ready
   push.received.length = 0
+  push.during(null)
 })
 afterEach(async () => {
   await app.close()
@@ -198,6 +199,40 @@ describe("the push-notify job", () => {
     expect(hits(stayingDevice)).toHaveLength(1)
     // Still subscribed: the user may be added again, or see other organizations.
     expect(await subscriptions(removed)).toHaveLength(1)
+  })
+
+  it("checks each device again: a user removed from the organization while one push is pending gets no more", async () => {
+    const admin = await firstAdmin()
+    const agent = await newAgent(admin.b, "agent.leaving", support)
+    const first = await device(agent)
+    const second = await device(agent)
+    const { job } = await customerTicket()
+    // The agent's first push waits at the push service until the agent is no longer allowed on the organization.
+    push.during(async () => {
+      await h.database.db
+        .delete(organizationMember)
+        .where(and(eq(organizationMember.userId, agent), eq(organizationMember.organizationId, support)))
+    })
+
+    expect(await notifier().notify(job)).toEqual({ sent: 1, removed: 0, failed: 0 })
+    expect(hits(first).length + hits(second).length).toBe(1)
+    expect(push.received).toHaveLength(1)
+    expect(await subscriptions(agent)).toHaveLength(2)
+  })
+
+  it("checks each device again: a user disabled while one push is pending gets no more and loses the rest", async () => {
+    const admin = await firstAdmin()
+    const agent = await newAgent(admin.b, "agent.banned", support)
+    await device(agent)
+    await device(agent)
+    const { job } = await customerTicket()
+    push.during(async () => {
+      expect((await admin.b.call("POST", "/api/auth/admin/ban-user", { userId: agent })).status).toBe(200)
+    })
+
+    expect(await notifier().notify(job)).toEqual({ sent: 1, removed: 2, failed: 0 })
+    expect(push.received).toHaveLength(1)
+    expect(await subscriptions(agent)).toHaveLength(0)
   })
 
   it("deletes a subscription the push service answers 404 or 410 for, and keeps one it failed for otherwise", async () => {

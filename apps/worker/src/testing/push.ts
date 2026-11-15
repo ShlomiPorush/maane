@@ -1,7 +1,8 @@
 // A stand-in push service for the notification tests (plan 4.5): HTTPS on 127.0.0.1 with a certificate made for it,
 // trusted only through the https.Agent it hands to web-push's documented `agent` option (never process-wide). It
 // records every request (path, headers, body) and answers 201, or what a test sets for a path: 404 and 410 as a
-// revoked subscription, a redirect with a Location. Nothing reaches a real push service.
+// revoked subscription, a redirect with a Location. A test may also give work the next request waits for. Nothing
+// reaches a real push service.
 
 import { createECDH, randomBytes } from "node:crypto"
 import { Agent, createServer } from "node:https"
@@ -17,6 +18,8 @@ export interface StandInPush {
   received: PushRequest[]
   /** What the stand-in answers on one endpoint from now on. */
   answer(endpoint: string, status: number, headers?: Record<string, string>): void
+  /** Work the next request waits for before it is answered, once: a change made while a push is pending. */
+  during(work: (() => Promise<void>) | null): void
   agent: Agent
   close(): Promise<void>
 }
@@ -25,14 +28,21 @@ export async function startStandInPush(): Promise<StandInPush> {
   const pems = await standInCertificate(["localhost"])
   const received: PushRequest[] = []
   const answers = new Map<string, { status: number; headers: Record<string, string> }>()
+  let pending: (() => Promise<void>) | null = null
   const server = createServer({ key: pems.private, cert: pems.cert }, (request, response) => {
     const chunks: Buffer[] = []
     request.on("data", (chunk: Buffer) => chunks.push(chunk))
-    request.on("end", () => {
+    request.on("end", async () => {
       const path = request.url ?? ""
       received.push({ path, headers: request.headers, body: Buffer.concat(chunks) })
-      const answer = answers.get(path) ?? { status: 201, headers: {} }
-      response.writeHead(answer.status, answer.headers).end()
+      const work = pending
+      pending = null
+      try {
+        await work?.()
+      } finally {
+        const answer = answers.get(path) ?? { status: 201, headers: {} }
+        response.writeHead(answer.status, answer.headers).end()
+      }
     })
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -44,6 +54,9 @@ export async function startStandInPush(): Promise<StandInPush> {
     received,
     answer(endpoint, status, headers = {}) {
       answers.set(new URL(endpoint).pathname, { status, headers })
+    },
+    during(work) {
+      pending = work
     },
     agent,
     close: () =>

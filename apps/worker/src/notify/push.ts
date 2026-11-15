@@ -1,7 +1,8 @@
 // Browser notifications (plan 4.5), the `push-notify` job: one ticket event to the devices of every user who may see
-// the ticket's organization, through web-push's documented sendNotification. Before each user's sends the job reads
-// the user again, in its own check: a disabled (banned) or deleted user's subscriptions are deleted and nothing is
-// sent; a user no longer allowed on the organization gets nothing and keeps the subscriptions for the others. The
+// the ticket's organization, through web-push's documented sendNotification. Right before each device's send the job
+// reads the subscription, its user, and the user's organizations again, in its own check: a subscription deleted
+// meanwhile gets nothing; a disabled (banned) or deleted user's subscriptions are deleted and nothing is sent; a user
+// no longer allowed on the organization gets nothing and keeps the subscriptions for the others. The
 // user's `role` and `banned` are read through the Drizzle schema, as the send point of replies does (sender.ts); no
 // session is read. A push service's 404 or 410 deletes that subscription. Each push goes only to an endpoint of the
 // allow list, checked again right before it, with no redirect followed (web-push makes one HTTPS request and takes any
@@ -101,50 +102,51 @@ export class PushNotifier {
       .where(and(eq(message.id, job.messageId), eq(ticket.id, job.ticketId)))
     if (!event) return result
 
-    const owners = await this.#db.selectDistinct({ userId: pushSubscription.userId }).from(pushSubscription)
-    for (const { userId } of owners) {
-      // The user's own check, right before their sends.
-      const [user] = await this.#db
-        .select({ id: authUser.id, role: authUser.role, banned: authUser.banned })
-        .from(authUser)
-        .where(eq(authUser.id, userId))
-      if (!user || user.banned) {
-        const gone = await this.#db
-          .delete(pushSubscription)
-          .where(eq(pushSubscription.userId, userId))
-          .returning({ id: pushSubscription.id })
-        result.removed += gone.length
-        continue
-      }
-      const scope = await visibleOrganizations(this.#db, { id: user.id, role: user.role ?? "agent" })
-      if (!inScope(scope, event.organizationId)) continue
-      const devices = await this.#db
+    const devices = await this.#db.select({ id: pushSubscription.id }).from(pushSubscription)
+    for (const { id } of devices) {
+      // The device's own check, right before its send: the subscription is still there, its user is still active,
+      // and still allowed on the organization. An earlier send may have taken long enough for any of them to change.
+      const [device] = await this.#db
         .select({
           id: pushSubscription.id,
+          userId: pushSubscription.userId,
           endpoint: pushSubscription.endpoint,
           p256dh: pushSubscription.p256dh,
           auth: pushSubscription.auth,
           locale: pushSubscription.locale,
         })
         .from(pushSubscription)
-        .where(eq(pushSubscription.userId, userId))
-      for (const device of devices) {
-        if (!this.#allowed(device.endpoint)) {
-          result.failed++
-          log.warn("a subscription's endpoint is not a supported push service; nothing was sent to it")
-          continue
-        }
-        const locale: Locale = device.locale === "en" ? "en" : "he"
-        const payload = pushPayload(locale, job.kind, event.number, event.fromName)
-        const outcome = await this.#send(device, payload)
-        if (outcome === "sent") result.sent++
-        else if (outcome === "gone") {
-          await this.#db
-            .delete(pushSubscription)
-            .where(and(eq(pushSubscription.id, device.id), eq(pushSubscription.endpoint, device.endpoint)))
-          result.removed++
-        } else result.failed++
+        .where(eq(pushSubscription.id, id))
+      if (!device) continue
+      const [user] = await this.#db
+        .select({ id: authUser.id, role: authUser.role, banned: authUser.banned })
+        .from(authUser)
+        .where(eq(authUser.id, device.userId))
+      if (!user || user.banned) {
+        const gone = await this.#db
+          .delete(pushSubscription)
+          .where(eq(pushSubscription.userId, device.userId))
+          .returning({ id: pushSubscription.id })
+        result.removed += gone.length
+        continue
       }
+      const scope = await visibleOrganizations(this.#db, { id: user.id, role: user.role ?? "agent" })
+      if (!inScope(scope, event.organizationId)) continue
+      if (!this.#allowed(device.endpoint)) {
+        result.failed++
+        log.warn("a subscription's endpoint is not a supported push service; nothing was sent to it")
+        continue
+      }
+      const locale: Locale = device.locale === "en" ? "en" : "he"
+      const payload = pushPayload(locale, job.kind, event.number, event.fromName)
+      const outcome = await this.#send(device, payload)
+      if (outcome === "sent") result.sent++
+      else if (outcome === "gone") {
+        await this.#db
+          .delete(pushSubscription)
+          .where(and(eq(pushSubscription.id, device.id), eq(pushSubscription.endpoint, device.endpoint)))
+        result.removed++
+      } else result.failed++
     }
     if (result.sent + result.removed + result.failed > 0)
       log.info("browser notifications", { kind: job.kind, ...result })
