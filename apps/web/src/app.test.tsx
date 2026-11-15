@@ -1857,9 +1857,9 @@ describe("tickets", () => {
     const date = form.querySelector<HTMLInputElement>('input[type="date"]') as HTMLInputElement
     const time = form.querySelector<HTMLInputElement>('input[data-field="time"]') as HTMLInputElement
     const submit = () => document.querySelector<HTMLButtonElement>('[data-testid="composer-when-submit"]')?.click()
-    // 26 March 2027: Israel's clock skips from 02:00 to 03:00.
+    // 27 March 2099: Israel's clock skips from 02:00 to 03:00.
     await act(async () => {
-      type(date, "2027-03-26")
+      type(date, "2099-03-27")
       type(time, "02:30")
     })
     await act(async () => submit())
@@ -1867,7 +1867,7 @@ describe("tickets", () => {
     // "Send" leaves the status: the status action is chosen here and applies when the reply goes.
     await act(async () => form.querySelector<HTMLInputElement>('input[data-pending="false"]')?.click())
     await act(async () => {
-      type(date, "2027-01-10")
+      type(date, "2099-01-10")
       type(time, "09:30")
     })
     await act(async () => submit())
@@ -1876,7 +1876,7 @@ describe("tickets", () => {
       expect(found).toBeDefined()
       return JSON.parse(found?.body ?? "null") as { kind: string; sendAt: string; setPending: boolean }
     })
-    expect(posted).toMatchObject({ kind: "reply", sendAt: "2027-01-10T07:30:00.000Z", setPending: false })
+    expect(posted).toMatchObject({ kind: "reply", sendAt: "2099-01-10T07:30:00.000Z", setPending: false })
     await vi.waitFor(() => expect(document.querySelector('[data-testid="composer-when"]')).toBeNull())
   })
 
@@ -1887,7 +1887,7 @@ describe("tickets", () => {
       version: 3,
       state: "scheduled",
       reason: null,
-      sendAt: "2027-01-10T07:30:00.000Z",
+      sendAt: "2099-01-10T07:30:00.000Z",
       createdAt: when,
       updatedAt: when,
       author: { id: "u1", name: "Agent Name" },
@@ -1921,7 +1921,7 @@ describe("tickets", () => {
     })
     expect(card.textContent).toContain(he("scheduled.state.scheduled"))
     // 07:30 UTC on 10 January is 09:30 in Israel.
-    expect(card.textContent).toContain("10/01/2027 09:30")
+    expect(card.textContent).toContain("10/01/2099 09:30")
     expect(card.querySelector('p[dir="auto"]')?.textContent).toBe(SHALOM)
     expect(text()).toContain(he("scheduled.reason.customer_reply"))
 
@@ -1954,7 +1954,7 @@ describe("tickets", () => {
       expect(found).not.toBeNull()
       return found as HTMLFormElement
     })
-    expect(form.querySelector<HTMLInputElement>('input[type="date"]')?.value).toBe("2027-01-10")
+    expect(form.querySelector<HTMLInputElement>('input[type="date"]')?.value).toBe("2099-01-10")
     expect(form.querySelector<HTMLInputElement>('input[data-field="time"]')?.value).toBe("09:30")
     await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-when-submit"]')?.click())
     const put = await vi.waitFor(() => {
@@ -1962,8 +1962,65 @@ describe("tickets", () => {
       expect(found).toBeDefined()
       return JSON.parse(found?.body ?? "null") as Record<string, unknown>
     })
-    expect(put).toMatchObject({ version: 3, sendAt: "2027-01-10T07:30:00.000Z", setPending: true })
+    expect(put).toMatchObject({ version: 3, sendAt: "2099-01-10T07:30:00.000Z", setPending: true })
     expect(put).not.toHaveProperty("submissionId")
+  })
+
+  it("shows a scheduled reply still waiting minutes after its time as late, with the way out (plan 4.2)", async () => {
+    const LATE = "00000000-0000-4000-8000-0000000000d1"
+    const RECENT = "00000000-0000-4000-8000-0000000000d2"
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
+    const entry = (id: string, sendAt: string) => ({
+      id,
+      version: 1,
+      state: "scheduled",
+      reason: null,
+      sendAt,
+      createdAt: when,
+      updatedAt: when,
+      author: { id: "u1", name: "Agent Name" },
+      editable: true,
+      from: "help@example.com",
+      to: [{ address: "dana@example.com", name: "Dana Customer" }],
+      cc: [],
+      text: "Hello",
+      html: "<p>Hello</p>",
+      setPending: false,
+      files: [],
+      messageId: null,
+      outboxState: null,
+    })
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view(
+        "v1",
+        [],
+        false,
+        {},
+        [{ id: ORG_B, name: "Beta" }],
+        [entry(LATE, ago(10)), entry(RECENT, ago(1))],
+      ),
+    })
+    const card = (id: string) =>
+      vi.waitFor(() => {
+        const found = document.querySelector<HTMLElement>(`[data-scheduled="${id}"]`)
+        expect(found).not.toBeNull()
+        return found as HTMLElement
+      })
+    // Ten minutes past its time and still scheduled: its job did not run, so the view says so and offers the way out.
+    const late = await card(LATE)
+    expect(late.getAttribute("data-late")).toBe("true")
+    expect(late.textContent).toContain(he("scheduled.state.late"))
+    expect(late.textContent).toContain(he("scheduled.wasAt"))
+    expect(late.querySelector('[data-testid="scheduled-late"]')?.textContent).toBe(he("scheduled.late"))
+    expect(late.querySelector('[data-testid="scheduled-cancel"]')).not.toBeNull()
+    // A minute past its time is the job's ordinary delay: still scheduled, nothing said.
+    const recent = await card(RECENT)
+    expect(recent.hasAttribute("data-late")).toBe(false)
+    expect(recent.textContent).toContain(he("scheduled.state.scheduled"))
+    expect(recent.textContent).not.toContain(he("scheduled.state.late"))
+    expect(recent.querySelector('[data-testid="scheduled-late"]')).toBeNull()
   })
 
   it("snoozes a ticket until a time in Israel time, and ends the snooze by hand (plan 4.2)", async () => {
@@ -1990,17 +2047,17 @@ describe("tickets", () => {
       return found as HTMLFormElement
     })
     await act(async () => {
-      type(form.querySelector('input[type="date"]') as HTMLInputElement, "2027-07-01")
+      type(form.querySelector('input[type="date"]') as HTMLInputElement, "2099-07-01")
       type(form.querySelector('input[data-field="time"]') as HTMLInputElement, "08:00")
     })
     await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="snooze-when-submit"]')?.click())
     await vi.waitFor(() => {
       const put = requests.find((r) => r.method === "PUT" && r.url === "/api/v1/tickets/7/snooze")
       // Summer time: 08:00 in Israel is 05:00 UTC.
-      expect(JSON.parse(put?.body ?? "null")).toEqual({ until: "2027-07-01T05:00:00.000Z" })
+      expect(JSON.parse(put?.body ?? "null")).toEqual({ until: "2099-07-01T05:00:00.000Z" })
     })
     await vi.waitFor(() => expect(control.getAttribute("data-snoozed")).toBe(""))
-    expect(text()).toContain(he("ticket.snooze.tag", { time: "01/07/2027 08:00" }))
+    expect(text()).toContain(he("ticket.snooze.tag", { time: "01/07/2099 08:00" }))
     await act(async () => button(he("ticket.snooze.end"))?.click())
     await vi.waitFor(() =>
       expect(requests.some((r) => r.method === "DELETE" && r.url === "/api/v1/tickets/7/snooze")).toBe(true),

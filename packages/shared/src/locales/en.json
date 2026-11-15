@@ -1379,8 +1379,10 @@
       "scheduled": "Scheduled",
       "handed": "Going out",
       "cancelled": "Cancelled",
-      "ended": "Not sent"
+      "ended": "Not sent",
+      "late": "Late"
     },
+    "late": "This reply has not gone out at its time. You can cancel it and write it again.",
     "goesAt": "Goes at",
     "wasAt": "Was due",
     "editing": "Being changed",

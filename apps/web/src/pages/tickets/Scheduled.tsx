@@ -3,7 +3,9 @@
 // until it starts sending, anyone who sees the ticket can cancel it (asked first). Once its time came it shows where the reply is (3.1's states;
 // the reply itself is in the conversation, marked as scheduled), and a cancelled or ended one says why: the agent
 // cancelled it, the customer wrote first (the agent can write again), the ticket moved to another organization, or a
-// check at its time failed.
+// check at its time failed. A reply still scheduled more than LATE_MS after its time shows as late: its job did not
+// run or gave up (pg-boss retries it a few times), so it says the reply has not gone out and the agent can cancel it
+// and write again.
 
 import type { ActionReason, ScheduledReplyView, TicketView } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
@@ -49,8 +51,17 @@ export function ScheduledReplies({
   )
 }
 
+/** How long after its time a reply still scheduled shows as late. */
+const LATE_MS = 5 * 60 * 1000
+
+/** Whether a reply is still scheduled more than LATE_MS after its time, judged when the view renders. */
+function isLate(entry: Pick<ScheduledReplyView, "state" | "sendAt">, now = Date.now()): boolean {
+  return entry.state === "scheduled" && now - Date.parse(entry.sendAt) > LATE_MS
+}
+
 /** The words and tone of where a scheduled reply is. */
 function stateOf(entry: ScheduledReplyView): { tone: Tone; key: string } {
+  if (isLate(entry)) return { tone: "fail", key: "scheduled.state.late" }
   if (entry.state === "scheduled") return { tone: "info", key: "scheduled.state.scheduled" }
   if (entry.state === "cancelled") return { tone: "neutral", key: "scheduled.state.cancelled" }
   if (entry.state === "ended") return { tone: "fail", key: "scheduled.state.ended" }
@@ -73,6 +84,7 @@ function ScheduledCard({
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
   const open = entry.state === "scheduled"
+  const late = isLate(entry)
   const state = stateOf(entry)
 
   const cancel = async () => {
@@ -101,6 +113,7 @@ function ScheduledCard({
       className="ui-panel ui-scheduled"
       data-scheduled={entry.id}
       data-state={entry.state}
+      data-late={late || undefined}
       data-editing={editing || undefined}
     >
       <header className="ui-message-head">
@@ -111,10 +124,15 @@ function ScheduledCard({
           {editing ? <Tag tone="info">{t("scheduled.editing")}</Tag> : null}
         </span>
         <span className="ui-scheduled-when">
-          <span className="ui-muted">{open ? t("scheduled.goesAt") : t("scheduled.wasAt")}</span>
+          <span className="ui-muted">{open && !late ? t("scheduled.goesAt") : t("scheduled.wasAt")}</span>
           <Time value={entry.sendAt} mode="full" />
         </span>
       </header>
+      {late ? (
+        <p className="ui-scheduled-reason" data-testid="scheduled-late">
+          {t("scheduled.late")}
+        </p>
+      ) : null}
       {entry.reason ? (
         <p className="ui-scheduled-reason">{t(`scheduled.reason.${entry.reason as ActionReason}`)}</p>
       ) : null}
