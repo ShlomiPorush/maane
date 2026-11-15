@@ -12,7 +12,7 @@ import { type ScheduledReplyView, type SettingKey, type TicketList, type TicketV
 import { and, asc, count, eq, sql } from "drizzle-orm"
 import { simpleParser } from "mailparser"
 import { PgBoss } from "pg-boss"
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { requeueOverdue, TimedActions } from "./actions/run.ts"
 import { ReplySender } from "./send/sender.ts"
 import type { SmtpTimeouts } from "./send/smtp.ts"
@@ -344,6 +344,66 @@ describe("a scheduled reply", () => {
     const [action] = await db().select({ id: timedAction.id }).from(timedAction).where(eq(timedAction.ticketId, t.id))
     expect(await actions().run(action?.id ?? "", 1)).toBe("handed")
     expect(await outboxOfAction(action?.id ?? "")).toHaveLength(1)
+  })
+
+  it("lets one of a reply sent now and a scheduled reply racing with the same ID through, in either order (review T8)", async () => {
+    const admin = await firstAdmin()
+    const { b: agent, id: userId } = await newAgent(admin, "an.agent", [org])
+    const t = await customerTicket()
+    /** Backends of this database waiting for a lock: the requests held at the ticket lock. */
+    const waiting = async () => {
+      const rows = await db().execute<{ n: number }>(
+        sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+      )
+      return rows.rows[0]?.n ?? 0
+    }
+    for (const order of [
+      ["now", "later"],
+      ["later", "now"],
+    ] as const) {
+      const submissionId = randomUUID()
+      // The ticket held locked here, so both requests pass the checks before their transaction and wait at its lock.
+      let release = () => {}
+      const released = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let held = () => {}
+      const holding = new Promise<void>((resolve) => {
+        held = resolve
+      })
+      const holder = db().transaction(async (tx) => {
+        await tx.execute(sql`select id from ticket where id = ${t.id} for update`)
+        held()
+        await released
+      })
+      await holding
+      const answers: ReturnType<TestBrowser["call"]>[] = []
+      try {
+        // One after the other, so the first in the order takes the lock first.
+        for (const [index, kind] of order.entries()) {
+          const values = kind === "now" ? { submissionId } : { submissionId, sendAt: inHours(2) }
+          answers.push(agent.call("POST", `/api/v1/tickets/${t.number}/messages`, reply(values)))
+          await vi.waitFor(async () => expect(await waiting()).toBe(index + 1), { timeout: 15_000, interval: 50 })
+        }
+      } finally {
+        release()
+      }
+      await holder
+      const [first, second] = await Promise.all(answers)
+      expect(first?.status, order.join()).toBe(201)
+      expect(second?.status, order.join()).toBe(409)
+      expect(second?.json).toEqual({ error: "submission_reused" })
+      const messages = await db()
+        .select({ id: message.id })
+        .from(message)
+        .where(and(eq(message.authorUserId, userId), eq(message.submissionId, submissionId)))
+      const scheduled = await db()
+        .select({ id: timedAction.id })
+        .from(timedAction)
+        .where(and(eq(timedAction.authorUserId, userId), eq(timedAction.submissionId, submissionId)))
+      expect(messages.length + scheduled.length, order.join()).toBe(1)
+      expect(scheduled.length, order.join()).toBe(order[0] === "later" ? 1 : 0)
+    }
   })
 })
 

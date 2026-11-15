@@ -248,6 +248,8 @@ export class Replies {
       const locked = await lockTicket(tx, t.id)
       if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
       if (isReply && locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
+      // Again under the ticket lock: a scheduled reply with this ID that committed while this request waited for it.
+      if (await this.#scheduledBy(user.id, input.submissionId, tx)) throw new Refusal("submission_reused", 409)
       const id = await writeMessage(
         tx,
         { ticketId: t.id, authorUserId: user.id, submissionId: input.submissionId, at: now, ready },
@@ -409,6 +411,8 @@ export class Replies {
       const locked = await lockTicket(tx, t.id)
       if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
       if (locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
+      // Again under the ticket lock: a reply or a note with this ID that committed while this request waited for it.
+      if (await this.#submitted(user.id, input.submissionId, tx)) throw new Refusal("submission_reused", 409)
       const [row] = await tx
         .insert(timedAction)
         .values({
@@ -470,8 +474,8 @@ export class Replies {
     }
   }
 
-  async #scheduledBy(userId: string, submissionId: string): Promise<string | null> {
-    const [row] = await this.db
+  async #scheduledBy(userId: string, submissionId: string, db: Db = this.db): Promise<string | null> {
+    const [row] = await db
       .select({ id: timedAction.id })
       .from(timedAction)
       .where(and(eq(timedAction.authorUserId, userId), eq(timedAction.submissionId, submissionId)))
@@ -606,8 +610,8 @@ export class Replies {
     }))
   }
 
-  async #submitted(userId: string, submissionId: string): Promise<{ id: string } | null> {
-    const [row] = await this.db
+  async #submitted(userId: string, submissionId: string, db: Db = this.db): Promise<{ id: string } | null> {
+    const [row] = await db
       .select({ id: message.id })
       .from(message)
       .where(and(eq(message.authorUserId, userId), eq(message.submissionId, submissionId)))
