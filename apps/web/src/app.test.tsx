@@ -2501,7 +2501,8 @@ describe("browser notifications on this device", () => {
     })
     const answers: Answers = {
       "/api/setup/status": status(),
-      "/api/v1/me": totpRequired,
+      // Once signed out, the session is gone, as Better Auth's signOut leaves it.
+      "/api/v1/me": () => (events.includes("signOut") ? signedOut : totpRequired),
       "/api/v1/notifications/subscription": (request) => {
         events.push(`${request.method} ${request.body}`)
         return ok({ on: false })
@@ -2525,7 +2526,8 @@ describe("browser notifications on this device", () => {
     })
     const answers: Answers = {
       "/api/setup/status": status(),
-      "/api/v1/me": totpRequired,
+      // Once signed out, the session is gone, as Better Auth's signOut leaves it.
+      "/api/v1/me": () => (events.includes("signOut") ? signedOut : totpRequired),
       "/api/v1/notifications/subscription": deleted,
     }
     await renderAt("/enroll", answers)
