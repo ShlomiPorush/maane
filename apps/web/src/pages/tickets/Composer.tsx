@@ -25,6 +25,7 @@ import { EditorContent, useEditor, useEditorState } from "@tiptap/react"
 import StarterKit from "@tiptap/starter-kit"
 import { Bold, CalendarClock, Italic, List, ListOrdered, Paperclip, Quote, Send, X } from "lucide-react"
 import { useEffect, useId, useRef, useState } from "react"
+import { ApiError } from "../../api/client.ts"
 import { api, qk } from "../../api/endpoints.ts"
 import { errorText } from "../../api/errors.ts"
 import { formatTime } from "../../format/datetime.ts"
@@ -199,13 +200,16 @@ export function Composer({
     setFiles([])
   }
 
-  // A scheduled reply to change comes into the composer; a draft in it is dropped only when the agent agrees.
-  const loaded = useRef<string | null>(null)
+  // A scheduled reply to change comes into the composer; a draft in it is dropped only when the agent agrees. The change
+  // is pinned to the reply and the version its content was loaded from until the agent saves or stops: a newer view
+  // never moves it, and a reply that went out or was cancelled meanwhile gets the server's refusal on save, never a new
+  // reply in its place.
+  const loaded = useRef<{ id: string; version: number } | null>(null)
   const draft = useRef(false)
   draft.current = dirty && loaded.current === null
   // biome-ignore lint/correctness/useExhaustiveDependencies: loads once per scheduled reply chosen
   useEffect(() => {
-    if (!editor || !editing || loaded.current === editing.id) return
+    if (!editor || !editing || loaded.current?.id === editing.id) return
     const load = async () => {
       if (draft.current) {
         const yes = await confirmDialog({
@@ -221,7 +225,7 @@ export function Composer({
         }
       }
       if (!mounted.current) return
-      loaded.current = editing.id
+      loaded.current = { id: editing.id, version: editing.version }
       setKind("reply")
       setFrom(editing.from)
       setTo(listText(editing.to))
@@ -235,12 +239,6 @@ export function Composer({
     }
     void load()
   }, [editor, editing?.id])
-
-  // The scheduled reply left `scheduled` while it was being changed (its time came, or it was cancelled): what the
-  // composer holds stays as an ordinary draft.
-  useEffect(() => {
-    if (!editing) loaded.current = null
-  }, [editing])
 
   const stopEditing = () => {
     loaded.current = null
@@ -323,18 +321,27 @@ export function Composer({
       queryClient.invalidateQueries({ queryKey: ["tickets"] }),
     ])
 
+  /** A submission ID is kept only while no answer came: a refusal wrote nothing, so the next click is a new one. */
+  const answered = (failure: unknown) => {
+    if (failure instanceof ApiError && failure.status >= 400 && failure.status < 500) submission.current = null
+  }
+
   /** "Send later" and "Save changes": the time dialog does the request; a refusal stays in it. */
   const schedule = async (at: Date) => {
     const input = collect(laterPending && canSetPending)
     if (!input) throw new Error(t("compose.empty"))
-    if (editing) {
+    const target = loaded.current
+    if (target) {
       const { submissionId: _submission, kind: _kind, sendAt: _sendAt, ...rest } = input
-      await api.changeScheduled(editing.id, { ...rest, sendAt: at.toISOString(), version: editing.version })
+      await api.changeScheduled(target.id, { ...rest, sendAt: at.toISOString(), version: target.version })
       showToast(t("compose.scheduleChanged", { time: formatTime(at, { seconds: false }) }), "success")
       if (mounted.current) stopEditing()
     } else {
       submission.current = input.submissionId
-      await api.writeMessage(view.ticket.number, { ...input, sendAt: at.toISOString() })
+      await api.writeMessage(view.ticket.number, { ...input, sendAt: at.toISOString() }).catch((failure: unknown) => {
+        answered(failure)
+        throw failure
+      })
       submission.current = null
       showToast(t("compose.scheduled", { time: formatTime(at, { seconds: false }) }), "success")
       if (mounted.current) clear()
@@ -367,6 +374,7 @@ export function Composer({
       )
       await refresh()
     } catch (failure) {
+      answered(failure)
       if (mounted.current) setError(errorText(t, failure))
     } finally {
       if (mounted.current) setBusy(false)

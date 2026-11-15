@@ -155,6 +155,11 @@ export interface DeliveryView {
    * attempt could have reached.
    */
   unmatchedDelivery: UnmatchedDelivery | null
+  /**
+   * A scheduled reply that ended before it went out (plan 4.2): cancelled, changed, or stopped by a check at the send
+   * point. It is never sent again; the agent can write a new reply.
+   */
+  scheduledEnded: boolean
 }
 
 /** What the composer of a ticket starts from. */

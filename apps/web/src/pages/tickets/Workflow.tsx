@@ -221,7 +221,8 @@ export function SnoozeControl({ view }: { view: TicketView }) {
         <AlarmClock aria-hidden="true" />
         {until ? t("ticket.snooze.change") : t("ticket.snooze.open")}
       </button>
-      {until ? (
+      {/* Also for a snooze whose time passed and whose end is late: the agent need not wait for it. */}
+      {until || view.ticket.snoozeOverdue ? (
         <button type="button" className="ui-btn ui-btn-sm" disabled={busy} onClick={() => void wake()}>
           {t("ticket.snooze.end")}
         </button>

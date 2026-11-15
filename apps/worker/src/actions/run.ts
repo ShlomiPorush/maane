@@ -7,24 +7,25 @@
 // sending, with its reason. Otherwise the reply is written from the version the server built, with its outbox row
 // (at most one per action and version) and its `send-reply` job, and the action becomes `handed`; the send point checks
 // it once more in the transaction that takes the row to `sending`. A rerun after a crash finds the action `handed` (or
-// the version's outbox row) and makes no second message.
+// the version's outbox row) and makes no second message. The message gets a submission ID of its own on each run: the
+// composer's belongs to the scheduling, and a later version must never meet an earlier version's message.
 //
-// "Send and set pending" applies here, when the reply goes to the send point (in this transaction, by the one status
-// writer, as the author), not when it was scheduled; a ticket the author may no longer set to pending (closed meanwhile)
-// keeps its status.
+// "Send and set pending" is not applied here: the send point's claim applies it, in the transaction that hands the
+// reply to `sending` (apps/worker/src/send/sender.ts), so a reply stopped before it goes leaves the status as it was.
 
+import { randomUUID } from "node:crypto"
 import { lockAction, setActionState, ticketOfAction } from "@maane/server/actions/timed"
-import { type Actor, SYSTEM, writeAudit } from "@maane/server/audit"
+import { SYSTEM, writeAudit } from "@maane/server/audit"
 import type { Db } from "@maane/server/db/client"
-import { authUser, scheduledReply, ticket, timedAction } from "@maane/server/db/schema"
-import { SEND_REPLY, transactionWithJobs } from "@maane/server/jobs/queue"
+import { scheduledReply, ticket, timedAction } from "@maane/server/db/schema"
+import { SEND_REPLY, SNOOZE_END, TIMED_ACTION, transactionWithJobs } from "@maane/server/jobs/queue"
 import { errorFacts, log } from "@maane/server/log"
 import { sendProblem } from "@maane/server/replies/checks"
 import { ActionWritten, type ReplyFile, writeMessage } from "@maane/server/replies/write"
 import { customerWroteSince } from "@maane/server/tickets/customer-reply"
-import { changeStatus, lockTicket } from "@maane/server/tickets/status"
-import { type ActionReason, type MailAddress, mayChangeStatus } from "@maane/shared"
-import { eq } from "drizzle-orm"
+import { lockTicket } from "@maane/server/tickets/status"
+import type { ActionReason, MailAddress } from "@maane/shared"
+import { and, eq, sql } from "drizzle-orm"
 import type { Db as QueueDb } from "pg-boss"
 import { lockIntakeMode } from "../intake/process.ts"
 
@@ -35,18 +36,15 @@ export interface TimedActionsOptions {
   db: Db
   /** Queues a job inside the transaction (pg-boss's documented `db` option). */
   queue: (db: QueueDb, name: string, data: object) => Promise<unknown>
-  now?: () => Date
 }
 
 export class TimedActions {
   readonly #db: Db
   readonly #queue: TimedActionsOptions["queue"]
-  readonly #now: () => Date
 
   constructor(options: TimedActionsOptions) {
     this.#db = options.db
     this.#queue = options.queue
-    this.#now = options.now ?? (() => new Date())
   }
 
   /** Runs the action's version that the job was queued for. */
@@ -58,13 +56,8 @@ export class TimedActions {
         const locked = ticketId ? await lockTicket(tx, ticketId) : null
         const action = locked ? await lockAction(tx, actionId) : null
         if (!locked || !action || action.state !== "scheduled" || action.version !== version) return "stale"
-        const [content] = await tx
-          .select({ reply: scheduledReply, submissionId: timedAction.submissionId })
-          .from(scheduledReply)
-          .innerJoin(timedAction, eq(timedAction.id, scheduledReply.actionId))
-          .where(eq(scheduledReply.actionId, actionId))
-        if (!content?.submissionId || !action.authorUserId) return "stale"
-        const reply = content.reply
+        const [reply] = await tx.select().from(scheduledReply).where(eq(scheduledReply.actionId, actionId))
+        if (!reply || !action.authorUserId) return "stale"
         const problem = (await customerWroteSince(tx, locked.id, actionId))
           ? "customer_reply"
           : await sendProblem(tx, mode, {
@@ -77,15 +70,15 @@ export class TimedActions {
           log.info("a scheduled reply ended at its time without sending", { actionId, reason: problem })
           return problem
         }
-        const at = this.#now()
+        const at = new Date()
         const files = reply.files as ReplyFile[]
         const messageId = await writeMessage(
           tx,
           {
             ticketId: locked.id,
             authorUserId: action.authorUserId,
-            // The composer's submission: one click, one message, also at its time.
-            submissionId: content.submissionId,
+            // Its own on each run: the outbox row's unique (action, version) keeps a rerun from writing twice.
+            submissionId: randomUUID(),
             at,
             ready: {
               kind: "reply",
@@ -109,16 +102,6 @@ export class TimedActions {
           (data) => this.#queue(jobs, SEND_REPLY, data),
         )
         if (!messageId) return "stale"
-        if (reply.setPending) {
-          const [author] = await tx
-            .select({ username: authUser.username, name: authUser.name, role: authUser.role })
-            .from(authUser)
-            .where(eq(authUser.id, action.authorUserId))
-          const role = author?.role ?? "agent"
-          const actor: Actor = { userId: action.authorUserId, label: author?.username ?? author?.name ?? "?" }
-          if (mayChangeStatus(role, locked.status, "pending"))
-            await changeStatus(tx, locked, "pending", { role, actor, ipAddress: null }, "reply")
-        }
         await tx.update(ticket).set({ lastActivityAt: at }).where(eq(ticket.id, locked.id))
         await setActionState(tx, actionId, "handed")
         await writeAudit(tx, SYSTEM, {
@@ -143,6 +126,34 @@ export class TimedActions {
       throw error
     }
   }
+}
+
+/** How long past its time a scheduled reply or a snooze waits for its own job before `timed-recover` queues another. */
+export const OVERDUE = "5 minutes"
+
+/**
+ * The `timed-recover` job (TIMED_RECOVER): queues again the `timed-action` job of every reply still `scheduled` and the
+ * `snooze-end` job of every snooze still on, OVERDUE past their time by the database's clock. A job that failed for good,
+ * or that the queue no longer holds after a long outage, is made up for; one that still runs meanwhile is harmless, as
+ * each names its version. Returns how many it queued.
+ */
+export async function requeueOverdue(
+  db: Db,
+  send: (name: string, data: object) => Promise<unknown>,
+): Promise<{ actions: number; snoozes: number }> {
+  const actions = await db
+    .select({ actionId: timedAction.id, version: timedAction.version })
+    .from(timedAction)
+    .where(and(eq(timedAction.state, "scheduled"), sql`${timedAction.dueAt} < now() - ${OVERDUE}::interval`))
+  const snoozes = await db
+    .select({ ticketId: ticket.id, version: ticket.snoozeVersion })
+    .from(ticket)
+    .where(sql`${ticket.snoozedUntil} < now() - ${OVERDUE}::interval`)
+  for (const data of actions) await send(TIMED_ACTION, data)
+  for (const data of snoozes) await send(SNOOZE_END, data)
+  if (actions.length + snoozes.length > 0)
+    log.warn("timed jobs past their time were queued again", { actions: actions.length, snoozes: snoozes.length })
+  return { actions: actions.length, snoozes: snoozes.length }
 }
 
 /** Runs a timed action and logs what failed around it: the queue tries again, and the version keeps it safe. */

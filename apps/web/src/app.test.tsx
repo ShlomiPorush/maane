@@ -1431,6 +1431,7 @@ describe("tickets", () => {
         lastActivityAt: when,
         categories: [{ id: CATEGORY, name: "Billing" }],
         snoozedUntil: null,
+        snoozeOverdue: false,
         ...ticketOver,
       },
       participants: [{ address: "dana@example.com", name: "Dana Customer" }],
@@ -1966,6 +1967,162 @@ describe("tickets", () => {
     expect(put).not.toHaveProperty("submissionId")
   })
 
+  it("keeps a change on the version it loaded and on its reply: never a newer version, never a new reply (review T3, T4)", async () => {
+    const EDITED = "00000000-0000-4000-8000-0000000000d5"
+    const OTHER = "00000000-0000-4000-8000-0000000000d6"
+    const entry = (id: string, over: Record<string, unknown> = {}) => ({
+      id,
+      version: 3,
+      state: "scheduled",
+      reason: null,
+      sendAt: "2099-01-10T07:30:00.000Z",
+      createdAt: when,
+      updatedAt: when,
+      author: { id: "u1", name: "Agent Name" },
+      editable: id === EDITED,
+      from: "help@example.com",
+      to: [{ address: "dana@example.com", name: "Dana Customer" }],
+      cc: [],
+      text: "Hello",
+      html: "<p>Hello</p>",
+      setPending: false,
+      files: [],
+      messageId: null,
+      outboxState: null,
+      ...over,
+    })
+    let edited: Record<string, unknown> = entry(EDITED)
+    let answer: TransportResponse = { status: 409, body: { error: "scheduled_changed" } }
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": () =>
+        view("v1", [], false, {}, [{ id: ORG_B, name: "Beta" }], [edited, entry(OTHER, { editable: false })]),
+      [`/api/v1/scheduled/${OTHER}/cancel`]: () => {
+        // Meanwhile another tab saved a newer version of the reply being changed here.
+        edited = entry(EDITED, { version: 4, text: "Newer", html: "<p>Newer</p>" })
+        return ok({ ok: true })
+      },
+      [`/api/v1/scheduled/${EDITED}/cancel`]: () => {
+        edited = entry(EDITED, { state: "cancelled", reason: "agent" })
+        return ok({ ok: true })
+      },
+      [`/api/v1/scheduled/${EDITED}`]: () => answer,
+      "/api/v1/tickets/7/messages": { status: 201, body: { id: "00000000-0000-4000-8000-0000000000bb" } },
+    })
+    const card = (id: string) => document.querySelector<HTMLElement>(`[data-scheduled="${id}"]`)
+    await vi.waitFor(() => expect(card(EDITED)).not.toBeNull())
+    await act(async () => button(he("scheduled.change"))?.click())
+    await vi.waitFor(() => expect(document.querySelector(`.ui-composer[data-editing="${EDITED}"]`)).not.toBeNull())
+    const views = () => requests.filter((r) => r.method === "GET" && r.url.startsWith("/api/v1/tickets/7")).length
+    const cancel = async (id: string) => {
+      const before = views()
+      await act(async () => card(id)?.querySelector<HTMLButtonElement>('[data-testid="scheduled-cancel"]')?.click())
+      await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
+      const yes = Array.from(document.querySelectorAll<HTMLButtonElement>("[role=alertdialog] button")).find(
+        (b) => b.textContent?.trim() === he("scheduled.cancel"),
+      )
+      await act(async () => yes?.click())
+      await vi.waitFor(() => expect(views()).toBeGreaterThan(before))
+    }
+    const save = async () => {
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-later"]')?.click())
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="composer-when"]')).not.toBeNull())
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-when-submit"]')?.click())
+    }
+    const puts = () => requests.filter((r) => r.method === "PUT" && r.url === `/api/v1/scheduled/${EDITED}`)
+
+    // A newer version arrived in the view: saving still names the version the composer loaded, and the server refuses.
+    await cancel(OTHER)
+    await save()
+    await vi.waitFor(() => expect(puts()).toHaveLength(1))
+    const first = JSON.parse(puts()[0]?.body ?? "null") as { version: number; html: string }
+    expect(first.version).toBe(3)
+    expect(first.html).toContain("Hello")
+    await vi.waitFor(() => expect(text()).toContain(he("errors.code.scheduledChanged")))
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(`[role=dialog] button[aria-label="${he("common.close")}"]`)?.click(),
+    )
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="composer-when"]')).toBeNull())
+
+    // The reply was cancelled meanwhile: the change stays on it, the server's refusal shows, and nothing new is sent.
+    answer = { status: 409, body: { error: "scheduled_not_open" } }
+    await cancel(EDITED)
+    expect(document.querySelector(`.ui-composer[data-editing="${EDITED}"]`)).not.toBeNull()
+    await save()
+    await vi.waitFor(() => expect(puts()).toHaveLength(2))
+    expect(JSON.parse(puts()[1]?.body ?? "null")).toMatchObject({ version: 3 })
+    await vi.waitFor(() => expect(text()).toContain(he("errors.code.scheduledNotOpen")))
+    expect(requests.some((r) => r.method === "POST" && r.url === "/api/v1/tickets/7/messages")).toBe(false)
+  })
+
+  it("starts a new submission after a refusal, and keeps it while no answer came (review T8)", async () => {
+    const answers: TransportResponse[] = [
+      { status: 500, body: { error: "internal" } },
+      { status: 409, body: { error: "submission_reused" } },
+      { status: 201, body: { id: "00000000-0000-4000-8000-0000000000bb" } },
+    ]
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view(),
+      "/api/v1/tickets/7/messages": () => answers.shift() ?? ok({}),
+    })
+    const box = () => document.querySelector<HTMLInputElement>('.ui-composer-ticket-files input[type="checkbox"]')
+    await vi.waitFor(() => expect(box()).not.toBeNull())
+    await act(async () => box()?.click())
+    const posts = () =>
+      requests
+        .filter((r) => r.method === "POST" && r.url === "/api/v1/tickets/7/messages")
+        .map((r) => (JSON.parse(r.body ?? "null") as { submissionId: string }).submissionId)
+    const send = async (count: number) => {
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-send"]')?.click())
+      await vi.waitFor(() => expect(posts()).toHaveLength(count))
+    }
+    // The server failed without saying whether it wrote: the retry is the same submission.
+    await send(1)
+    await vi.waitFor(() => expect(text()).toContain(he("errors.server")))
+    await send(2)
+    expect(posts()[1]).toBe(posts()[0])
+    // A refusal wrote nothing: the next click is a new submission.
+    await vi.waitFor(() => expect(text()).toContain(he("errors.code.submissionReused")))
+    await send(3)
+    expect(posts()[2]).not.toBe(posts()[1])
+  })
+
+  it("offers Send again for a failed reply, but not for a scheduled reply that ended before it went out (review T7)", async () => {
+    const failed = (id: string, scheduledEnded: boolean) =>
+      reply({
+        id,
+        scheduled: true,
+        delivery: {
+          state: "failed",
+          problem: "listening",
+          unmatchedDelivery: null,
+          scheduledEnded,
+          recipients: [
+            { address: "dana@example.com", name: null, kind: "to", state: "pending", provider: null, marked: false },
+          ],
+        },
+      })
+    const ENDED = "00000000-0000-4000-8000-0000000000a1"
+    const PASSED = "00000000-0000-4000-8000-0000000000a2"
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [failed(ENDED, true), failed(PASSED, false)]),
+    })
+    const card = (id: string) => document.querySelector<HTMLElement>(`[data-message="${id}"]`)
+    await vi.waitFor(() => expect(card(PASSED)).not.toBeNull())
+    const resend = (id: string) =>
+      Array.from(card(id)?.querySelectorAll("button") ?? []).filter(
+        (b) => b.textContent?.trim() === he("delivery.resend"),
+      )
+    expect(card(ENDED)?.textContent).toContain(he("delivery.problem.listening"))
+    expect(resend(ENDED)).toHaveLength(0)
+    expect(resend(PASSED)).toHaveLength(1)
+  })
+
   it("shows a scheduled reply still waiting minutes after its time as late, with the way out (plan 4.2)", async () => {
     const LATE = "00000000-0000-4000-8000-0000000000d1"
     const RECENT = "00000000-0000-4000-8000-0000000000d2"
@@ -1999,7 +2156,7 @@ describe("tickets", () => {
         false,
         {},
         [{ id: ORG_B, name: "Beta" }],
-        [entry(LATE, ago(10)), entry(RECENT, ago(1))],
+        [entry(LATE, ago(45)), entry(RECENT, ago(10))],
       ),
     })
     const card = (id: string) =>
@@ -2008,14 +2165,15 @@ describe("tickets", () => {
         expect(found).not.toBeNull()
         return found as HTMLElement
       })
-    // Ten minutes past its time and still scheduled: its job did not run, so the view says so and offers the way out.
+    // 45 minutes past its time and still scheduled (its job and the worker's retries did not send it): the view says so
+    // and offers the way out.
     const late = await card(LATE)
     expect(late.getAttribute("data-late")).toBe("true")
     expect(late.textContent).toContain(he("scheduled.state.late"))
     expect(late.textContent).toContain(he("scheduled.wasAt"))
     expect(late.querySelector('[data-testid="scheduled-late"]')?.textContent).toBe(he("scheduled.late"))
     expect(late.querySelector('[data-testid="scheduled-cancel"]')).not.toBeNull()
-    // A minute past its time is the job's ordinary delay: still scheduled, nothing said.
+    // Ten minutes past its time is within the worker's retries: still scheduled, nothing said.
     const recent = await card(RECENT)
     expect(recent.hasAttribute("data-late")).toBe(false)
     expect(recent.textContent).toContain(he("scheduled.state.scheduled"))
@@ -2058,6 +2216,20 @@ describe("tickets", () => {
     })
     await vi.waitFor(() => expect(control.getAttribute("data-snoozed")).toBe(""))
     expect(text()).toContain(he("ticket.snooze.tag", { time: "01/07/2099 08:00" }))
+    await act(async () => button(he("ticket.snooze.end"))?.click())
+    await vi.waitFor(() =>
+      expect(requests.some((r) => r.method === "DELETE" && r.url === "/api/v1/tickets/7/snooze")).toBe(true),
+    )
+  })
+
+  it("still offers to end a snooze whose time passed while its end is late (review T2)", async () => {
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [], false, { snoozedUntil: null, snoozeOverdue: true }),
+      "/api/v1/tickets/7/snooze": ok({ ok: true }),
+    })
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="ticket-snooze"]')).not.toBeNull())
     await act(async () => button(he("ticket.snooze.end"))?.click())
     await vi.waitFor(() =>
       expect(requests.some((r) => r.method === "DELETE" && r.url === "/api/v1/tickets/7/snooze")).toBe(true),

@@ -13,7 +13,7 @@ import { and, asc, count, eq, sql } from "drizzle-orm"
 import { simpleParser } from "mailparser"
 import { PgBoss } from "pg-boss"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
-import { TimedActions } from "./actions/run.ts"
+import { requeueOverdue, TimedActions } from "./actions/run.ts"
 import { ReplySender } from "./send/sender.ts"
 import type { SmtpTimeouts } from "./send/smtp.ts"
 import { type StandInClamd, startStandInClamd } from "./testing/clamd.ts"
@@ -221,9 +221,9 @@ describe("a scheduled reply", () => {
     const { b: colleague } = await newAgent(admin, "a.colleague", [org])
     expect((await scheduledOf(colleague, t.number, id)).editable).toBe(false)
 
-    // Its time: the job writes the reply and its send job, sets pending now, and the send point sends it.
+    // Its time: the job writes the reply and its send job; the status waits for the send point, which sends it.
     expect(await actions().run(id, 1)).toBe("handed")
-    expect(await statusOf(t.id)).toBe("pending")
+    expect(await statusOf(t.id)).toBe("new")
     const [made] = await outboxOfAction(id)
     expect(made).toMatchObject({ state: "pending", actionVersion: 1 })
     const sendJobs = await db().execute<{ n: number }>(
@@ -231,6 +231,16 @@ describe("a scheduled reply", () => {
     )
     expect(sendJobs.rows[0]?.n).toBe(1)
     expect(await sender().send(made?.messageId ?? "")).toBe("accepted")
+    // "Send and set pending" applied in the claim that handed it to sending, as its author.
+    expect(await statusOf(t.id)).toBe("pending")
+    const [pending] = await db()
+      .select({ actor: auditLog.actorLabel, details: auditLog.details })
+      .from(auditLog)
+      .where(and(eq(auditLog.entityId, t.id), eq(auditLog.action, "ticket.status")))
+    expect(pending).toEqual({
+      actor: "an.agent",
+      details: { ticket: t.number, from: "new", to: "pending", via: "reply" },
+    })
     expect((await scheduledOf(agent, t.number, id)).state).toBe("done")
     expect((await scheduledOf(agent, t.number, id)).outboxState).toBe("accepted")
     // The email is dated at its time, and the ticket view marks the reply as a scheduled one.
@@ -242,7 +252,7 @@ describe("a scheduled reply", () => {
     expect(await repliesOf(t.id)).toBe(1)
   })
 
-  it("refuses a time that is not ahead, a note, a change once its reply is written, and a cancellation once sent", async () => {
+  it("refuses a time that is not ahead, a note, and a change or a cancellation once it ended", async () => {
     const admin = await firstAdmin()
     const { b: agent } = await newAgent(admin, "an.agent", [org])
     const t = await customerTicket()
@@ -255,14 +265,85 @@ describe("a scheduled reply", () => {
     expect((await post({ sendAt: "tomorrow" })).json).toEqual({ error: "request_invalid" })
     const id = await schedule(agent, t.number)
     expect(await actions().run(id, 1)).toBe("handed")
-    const change = await agent.call("PUT", `/api/v1/scheduled/${id}`, { ...reply(), sendAt: inHours(4), version: 1 })
-    expect(change.json).toEqual({ error: "scheduled_not_open" })
     // Until it starts sending it can still be cancelled; the send point then sends nothing.
     expect((await agent.call("POST", `/api/v1/scheduled/${id}/cancel`)).status).toBe(200)
     const [made] = await outboxOfAction(id)
     expect(await sender().send(made?.messageId ?? "")).toBe("failed")
     expect((await outboxOfAction(id))[0]?.problem).toBe("action_ended")
     expect((await agent.call("POST", `/api/v1/scheduled/${id}/cancel`)).json).toEqual({ error: "scheduled_not_open" })
+    const change = await agent.call("PUT", `/api/v1/scheduled/${id}`, { ...reply(), sendAt: inHours(4), version: 1 })
+    expect(change.json).toEqual({ error: "scheduled_not_open" })
+  })
+
+  it("sets pending only when it goes: a cancel or a failed check at the send point leaves the status (review T1, T7)", async () => {
+    const admin = await firstAdmin()
+    const { b: agent } = await newAgent(admin, "an.agent", [org])
+    const t = await customerTicket()
+    const cancelled = await schedule(agent, t.number, { setPending: true })
+    const refused = await schedule(agent, t.number, { setPending: true })
+    expect(await actions().run(cancelled, 1)).toBe("handed")
+    expect(await actions().run(refused, 1)).toBe("handed")
+    const before = smtp2go.received.length
+    // Cancelled after its reply was written: the send point stops it, and the status stays.
+    expect((await agent.call("POST", `/api/v1/scheduled/${cancelled}/cancel`)).status).toBe(200)
+    const [first] = await outboxOfAction(cancelled)
+    expect(await sender().send(first?.messageId ?? "")).toBe("failed")
+    expect(await statusOf(t.id)).toBe("new")
+    // The send point's own check fails (intake listens): the action ends there, and the status stays.
+    await h.mode("listening")
+    const [second] = await outboxOfAction(refused)
+    expect(await sender().send(second?.messageId ?? "")).toBe("failed")
+    expect((await outboxOfAction(refused))[0]?.problem).toBe("listening")
+    expect(await scheduledOf(agent, t.number, refused)).toMatchObject({ state: "ended", reason: "listening" })
+    expect(await statusOf(t.id)).toBe("new")
+    expect(smtp2go.received.length).toBe(before)
+    // Send again is never offered for a scheduled reply that ended before it went out, and the server refuses it.
+    await h.mode("live")
+    const shown = await view(agent, t.number)
+    for (const made of [first, second])
+      expect(shown.messages.find((m) => m.id === made?.messageId)?.delivery).toMatchObject({
+        state: "failed",
+        scheduledEnded: true,
+      })
+    const resend = await agent.call("POST", `/api/v1/messages/${second?.messageId}/resend`)
+    expect(resend.json).toEqual({ error: "reply_not_retryable" })
+  })
+
+  it("stores the agent's text cleaned, as a reply sent now is: a NUL never reaches the database (review T6)", async () => {
+    const admin = await firstAdmin()
+    const { b: agent } = await newAgent(admin, "an.agent", [org])
+    const t = await customerTicket()
+    const nul = String.fromCharCode(0)
+    const id = await schedule(agent, t.number, { html: `<p>One${nul}two</p>` })
+    const shown = await scheduledOf(agent, t.number, id)
+    expect(shown.html).not.toContain(nul)
+    expect(shown.html).toContain(`One${String.fromCodePoint(0xfffd)}two`)
+    const change = { ...reply({ html: `<p>Three${nul}</p>` }), sendAt: inHours(3), version: 1 }
+    expect((await agent.call("PUT", `/api/v1/scheduled/${id}`, change)).status).toBe(200)
+    expect((await scheduledOf(agent, t.number, id)).html).not.toContain(nul)
+  })
+
+  it("refuses a submission ID the other kind took: a lost answer then a note never blocks the scheduled reply (review T8)", async () => {
+    const admin = await firstAdmin()
+    const { b: agent } = await newAgent(admin, "an.agent", [org])
+    const t = await customerTicket()
+    const post = (values: Record<string, unknown>) =>
+      agent.call("POST", `/api/v1/tickets/${t.number}/messages`, reply(values))
+    const note = { kind: "note", from: null, to: [], html: "<p>A note</p>" }
+    // Scheduled first (its answer lost), then a note from the same composer with the same ID.
+    const first = randomUUID()
+    expect((await post({ submissionId: first, sendAt: inHours(2) })).status).toBe(201)
+    const reused = await post({ submissionId: first, ...note })
+    expect(reused.status).toBe(409)
+    expect(reused.json).toEqual({ error: "submission_reused" })
+    // The other way round: a note first, then a scheduled reply with its ID.
+    const second = randomUUID()
+    expect((await post({ submissionId: second, ...note })).status).toBe(201)
+    expect((await post({ submissionId: second, sendAt: inHours(2) })).json).toEqual({ error: "submission_reused" })
+    // The scheduled reply still goes at its time.
+    const [action] = await db().select({ id: timedAction.id }).from(timedAction).where(eq(timedAction.ticketId, t.id))
+    expect(await actions().run(action?.id ?? "", 1)).toBe("handed")
+    expect(await outboxOfAction(action?.id ?? "")).toHaveLength(1)
   })
 })
 
@@ -308,6 +389,47 @@ describe("changing and cancelling a scheduled reply", () => {
       { action: "message.schedule", actor: "an.agent" },
       { action: "message.schedule_change", actor: "an.agent" },
     ])
+  })
+
+  it("after its reply was written (handed): only the new version's text goes, once (review T5)", async () => {
+    const admin = await firstAdmin()
+    const { b: agent } = await newAgent(admin, "an.agent", [org])
+    const t = await customerTicket()
+    const id = await schedule(agent, t.number, { html: "<p>First text</p>" })
+    expect(await actions().run(id, 1)).toBe("handed")
+    const [old] = await outboxOfAction(id)
+    const oldId = old?.messageId ?? ""
+    expect((await scheduledOf(agent, t.number, id)).editable).toBe(true)
+    const { submissionId: _unused, kind: _kind, ...changed } = reply({ html: "<p>Changed text</p>" })
+    expect(
+      (await agent.call("PUT", `/api/v1/scheduled/${id}`, { ...changed, sendAt: inHours(1), version: 1 })).status,
+    ).toBe(200)
+    expect(await scheduledOf(agent, t.number, id)).toMatchObject({ state: "scheduled", version: 2 })
+    const before = smtp2go.received.length
+
+    // The first version's reply reaches the send point: a newer version ends it there without sending.
+    expect(await sender().send(oldId)).toBe("failed")
+    expect((await db().select().from(outbox).where(eq(outbox.messageId, oldId)))[0]?.problem).toBe("action_ended")
+    // The new version's job writes its own reply (one outbox row per version), and it goes.
+    expect(await actions().run(id, 2)).toBe("handed")
+    const made = (await outboxOfAction(id)).find((row) => row.actionVersion === 2)
+    expect(made?.messageId).not.toBe(oldId)
+    expect(await sender().send(made?.messageId ?? "")).toBe("accepted")
+    expect(smtp2go.received.length).toBe(before + 1)
+    const parsed = await simpleParser(smtp2go.received.at(-1)?.raw ?? Buffer.alloc(0))
+    expect(parsed.text).toContain("Changed text")
+    expect(parsed.text).not.toContain("First text")
+
+    // Once the new version passed, the old reply still never goes: not by Send again, nor by its row claimed again.
+    expect((await agent.call("POST", `/api/v1/messages/${oldId}/resend`)).json).toEqual({
+      error: "reply_not_retryable",
+    })
+    await db().update(outbox).set({ state: "pending", problem: null }).where(eq(outbox.messageId, oldId))
+    expect(await sender().send(oldId)).toBe("failed")
+    expect(smtp2go.received.length).toBe(before + 1)
+    const shown = await view(agent, t.number)
+    expect(shown.messages.find((m) => m.id === oldId)?.delivery?.scheduledEnded).toBe(true)
+    expect(shown.messages.find((m) => m.id === made?.messageId)?.delivery?.scheduledEnded).toBe(false)
   })
 
   it("cancelled by any agent of the ticket: its job does nothing, and the view says so", async () => {
@@ -452,6 +574,39 @@ describe("the queue", () => {
     const job = await boss.getJobById(SNOOZE_END, far ?? "")
     expect(job?.startAfter.getTime()).toBe(at.getTime())
     expect(job?.keepUntil.getTime()).toBeGreaterThan(at.getTime())
+  })
+
+  it("queues again the jobs of a scheduled reply and a snooze left waiting past their time (review T2)", async () => {
+    const admin = await firstAdmin()
+    const { b: agent } = await newAgent(admin, "an.agent", [org])
+    const t = await customerTicket()
+    const u = await customerTicket("Another question")
+    const overdue = await schedule(agent, t.number)
+    const ahead = await schedule(agent, t.number)
+    await agent.call("PUT", `/api/v1/tickets/${u.number}/status`, { status: "pending" })
+    expect((await agent.call("PUT", `/api/v1/tickets/${u.number}/snooze`, { until: inHours(2) })).status).toBe(200)
+    // Their times passed an hour ago and the queue no longer holds their jobs (failed for good, or lost).
+    const hourAgo = new Date(Date.now() - HOUR)
+    await db().update(timedAction).set({ dueAt: hourAgo }).where(eq(timedAction.id, overdue))
+    await db().update(ticket).set({ snoozedUntil: hourAgo }).where(eq(ticket.id, u.id))
+    await db().execute(sql`delete from pgboss.job where name in (${TIMED_ACTION}, ${SNOOZE_END})`)
+    // The ticket still shows its snooze's end by hand, though the time passed.
+    expect((await view(agent, u.number)).ticket).toMatchObject({ snoozedUntil: null, snoozeOverdue: true })
+
+    const send = (name: string, data: object) => boss.send(name, data)
+    expect(await requeueOverdue(db(), send)).toEqual({ actions: 1, snoozes: 1 })
+    expect((await timedJobs(overdue)).map((job) => job.version)).toEqual([1])
+    expect(await timedJobs(ahead)).toEqual([])
+    const snoozes = await db().execute<{ data: { version: number } }>(
+      sql`select data from pgboss.job where name = ${SNOOZE_END} and data->>'ticketId' = ${u.id}`,
+    )
+    expect(snoozes.rows).toHaveLength(1)
+    // The jobs it queued do what the lost ones would have.
+    expect(await actions().run(overdue, 1)).toBe("handed")
+    expect(await snoozeEnded(db(), u.id, snoozes.rows[0]?.data.version ?? 0)).toBe(true)
+    expect(await statusOf(u.id)).toBe("open")
+    expect((await view(agent, u.number)).ticket.snoozeOverdue).toBe(false)
+    expect(await requeueOverdue(db(), send)).toEqual({ actions: 0, snoozes: 0 })
   })
 })
 

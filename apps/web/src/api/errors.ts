@@ -64,6 +64,7 @@ export const ERROR_TEXT: Record<string, string> = {
   scheduled_not_open: "errors.code.scheduledNotOpen",
   scheduled_changed: "errors.code.scheduledChanged",
   scheduled_not_author: "errors.code.scheduledNotAuthor",
+  submission_reused: "errors.code.submissionReused",
   category_not_found: "errors.code.categoryNotFound",
   category_name_invalid: "errors.code.categoryNameInvalid",
   category_name_taken: "errors.code.categoryNameTaken",

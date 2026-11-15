@@ -30,6 +30,14 @@ export type LockedAction = {
 /** The states in which an action has not sent anything yet and can still be cancelled by the system. */
 export const OPEN_ACTION_STATES = ["scheduled", "handed"] as const satisfies readonly ActionState[]
 
+/**
+ * Whether the reply a timed action wrote at this version passed the send point (the action `done` at that version):
+ * only then may it go again (Send again). An earlier version's reply, ended by a change, never does.
+ */
+export function actionPassed(action: { state: string; version: number } | null, version: number | null): boolean {
+  return action?.state === "done" && action.version === version
+}
+
 /** The action locked FOR UPDATE, or null. Its ticket must be locked first. */
 export async function lockAction(tx: Pick<Tx, "select">, id: string): Promise<LockedAction | null> {
   const [row] = await tx

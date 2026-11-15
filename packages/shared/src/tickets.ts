@@ -153,6 +153,8 @@ export interface TicketView {
     categories: CategoryRef[]
     /** Snoozed until this instant (plan 4.2), while that is still ahead; else null. */
     snoozedUntil: string | null
+    /** A snooze whose time passed and that has not ended yet (its job is late): the agent can still end it by hand. */
+    snoozeOverdue: boolean
   }
   participants: MailAddress[]
   /** Tickets this one is linked to, either way, that the user may see. */

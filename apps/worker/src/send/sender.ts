@@ -8,7 +8,9 @@
 //    becomes `sending` and the transaction commits, before the first byte leaves.
 //    A row a timed action made (plan 4.2) is checked once more here, in this transaction, the first time it is
 //    claimed: its action must still be `handed` at the row's version (not cancelled or replaced), and the customer
-//    must not have written since the action was made. A failed check ends the action without sending.
+//    must not have written since the action was made. A failed check ends the action without sending. When it passes,
+//    its status action ("Send and set pending") applies in this transaction, and only then. A later claim (Send again)
+//    goes on only for the row of the version that passed (`done` at the row's version).
 //    The claim gives the attempt an ID of its own (outbox.attempt). Every later step goes on only while the row is
 //    still `sending` under that ID, checked under the row's lock: right before each send, and with each result. An
 //    attempt another run made stale (marked unknown, sent again) stops there, without sending or writing.
@@ -19,16 +21,33 @@
 //    row's state then follows its recipients (OUTBOX_STATES).
 
 import { randomUUID } from "node:crypto"
-import { lockAction, setActionState } from "@maane/server/actions/timed"
+import { actionPassed, lockAction, setActionState } from "@maane/server/actions/timed"
 import { SYSTEM, writeAudit } from "@maane/server/audit"
 import type { Db } from "@maane/server/db/client"
-import { message, outbox, outboxRecipient, ticket, ticketParticipant } from "@maane/server/db/schema"
+import {
+  authUser,
+  message,
+  outbox,
+  outboxRecipient,
+  scheduledReply,
+  ticket,
+  ticketParticipant,
+} from "@maane/server/db/schema"
 import { queueIdOf, refreshDeliveryFlag } from "@maane/server/delivery/service"
 import { errorFacts, log } from "@maane/server/log"
 import { sendProblem } from "@maane/server/replies/checks"
 import type { Settings } from "@maane/server/settings/service"
 import { customerWroteSince } from "@maane/server/tickets/customer-reply"
-import { type ActionReason, type OutboxState, outboxStateOf, PROVIDERS, type SendProblem } from "@maane/shared"
+import { changeStatus, type LockedTicket } from "@maane/server/tickets/status"
+import {
+  type ActionReason,
+  mayChangeStatus,
+  type OutboxState,
+  outboxStateOf,
+  PROVIDERS,
+  type SendProblem,
+  type TicketStatus,
+} from "@maane/shared"
 import { and, eq, inArray, ne, sql } from "drizzle-orm"
 import type { Tx } from "../files/types.ts"
 import { lockIntakeMode } from "../intake/process.ts"
@@ -171,7 +190,9 @@ export class ReplySender {
       const action = row.actionId ? await lockAction(tx, row.actionId) : null
       const handoff = action?.state === "handed" && action.version === row.actionVersion
       let problem: SendProblem | null = null
-      if (row.actionId && !handoff && action?.state !== "done")
+      // Only the row of the version that passed goes again: an earlier version's row (changed after it was written)
+      // never does.
+      if (row.actionId && !handoff && !actionPassed(action, row.actionVersion))
         problem = action?.reason === "customer_reply" ? "customer_reply" : "action_ended"
       else if (handoff && row.actionId && (await customerWroteSince(tx, row.ticketId, row.actionId)))
         problem = "customer_reply"
@@ -219,8 +240,40 @@ export class ReplySender {
         .update(outboxRecipient)
         .set({ possibleSends: sql`${outboxRecipient.possibleSends} + 1` })
         .where(and(eq(outboxRecipient.messageId, messageId), eq(outboxRecipient.state, "pending")))
+      // A scheduled reply's status action ("Send and set pending"), now that it goes, and only then: the last write of
+      // the claim, so the ticket's stronger lock comes after the recipients' rows, as the webhook's order needs.
+      if (handoff && action?.authorUserId) await this.#statusAction(tx, row.ticketId, action.id, action.authorUserId)
       return { attempt, mime: row.mime, from: row.from, ticketId: row.ticketId, recipients }
     })
+  }
+
+  /**
+   * Sets the ticket to pending for a scheduled reply that asked for it, by the one status writer, as its author. The
+   * ticket is locked FOR NO KEY UPDATE (it does not conflict with the KEY SHARE this claim and others hold, so two
+   * claims of one ticket wait for each other instead of deadlocking) and its status read again under that lock. A ticket
+   * the author may no longer set to pending (closed meanwhile, not an admin) keeps its status.
+   */
+  async #statusAction(tx: Tx, ticketId: string, actionId: string, authorUserId: string): Promise<void> {
+    const [content] = await tx
+      .select({ setPending: scheduledReply.setPending })
+      .from(scheduledReply)
+      .where(eq(scheduledReply.actionId, actionId))
+    if (!content?.setPending) return
+    const [held] = await tx
+      .select({ id: ticket.id, number: ticket.number, status: ticket.status, organizationId: ticket.organizationId })
+      .from(ticket)
+      .where(eq(ticket.id, ticketId))
+      .for("no key update")
+    const [author] = await tx
+      .select({ username: authUser.username, name: authUser.name, role: authUser.role })
+      .from(authUser)
+      .where(eq(authUser.id, authorUserId))
+    if (!held) return
+    const locked: LockedTicket = { ...held, status: held.status as TicketStatus }
+    const role = author?.role ?? "agent"
+    if (!mayChangeStatus(role, locked.status, "pending")) return
+    const actor = { userId: authorUserId, label: author?.username ?? author?.name ?? "?" }
+    await changeStatus(tx, locked, "pending", { role, actor, ipAddress: null }, "reply")
   }
 
   /**

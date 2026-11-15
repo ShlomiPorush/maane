@@ -39,6 +39,7 @@ import {
 } from "@maane/shared"
 import { and, asc, type Column, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm"
 import { alias, QueryBuilder } from "drizzle-orm/pg-core"
+import { actionPassed } from "../actions/timed.ts"
 import { Categories } from "../categories/service.ts"
 import type { Db } from "../db/client.ts"
 import {
@@ -55,6 +56,7 @@ import {
   ticketCategory,
   ticketLink,
   ticketParticipant,
+  timedAction,
 } from "../db/schema.ts"
 import { storedFilePath } from "../files/paths.ts"
 import { linkViews } from "../links/service.ts"
@@ -463,8 +465,12 @@ export class Tickets {
             unmatchedDeliverySource: outbox.unmatchedDeliverySource,
             unmatchedDeliveryEvent: outbox.unmatchedDeliveryEvent,
             actionId: outbox.actionId,
+            actionVersion: outbox.actionVersion,
+            actionState: timedAction.state,
+            actionCurrent: timedAction.version,
           })
           .from(outbox)
+          .leftJoin(timedAction, eq(timedAction.id, outbox.actionId))
           .where(inArray(outbox.messageId, replyIds))
       : []
     const recipients = replyIds.length
@@ -533,6 +539,15 @@ export class Tickets {
             deliveryDetail: r.deliveryDetail,
           })),
         unmatchedDelivery: unmatchedOf(sent),
+        // A scheduled reply stopped before it went out (plan 4.2): Send again refuses it, so the view never offers it.
+        scheduledEnded:
+          sent.actionId !== null &&
+          !actionPassed(
+            sent.actionState === null || sent.actionCurrent === null
+              ? null
+              : { state: sent.actionState, version: sent.actionCurrent },
+            sent.actionVersion,
+          ),
       }
     }
     const views: MessageView[] = messages.map((m) => {
@@ -598,6 +613,7 @@ export class Tickets {
         lastActivityAt: t.lastActivityAt.toISOString(),
         categories: await workflow.categoriesOf(t.id),
         snoozedUntil: snoozedUntil(t.snoozedUntil),
+        snoozeOverdue: t.snoozedUntil !== null && t.snoozedUntil.getTime() <= Date.now(),
       },
       participants,
       links: links.map((link) => ({ number: link.number, reason: link.reason as LinkReason })),

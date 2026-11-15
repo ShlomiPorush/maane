@@ -174,7 +174,8 @@
       "timePast": "Choose a time in the future.",
       "scheduledNotOpen": "This scheduled reply is no longer waiting: it went out or was cancelled. The ticket shows where it is now.",
       "scheduledChanged": "This scheduled reply changed meanwhile. Open it again to change the newest version.",
-      "scheduledNotAuthor": "Only the agent who wrote this scheduled reply can change it. You can still cancel it."
+      "scheduledNotAuthor": "Only the agent who wrote this scheduled reply can change it. You can still cancel it.",
+      "submissionReused": "Your earlier request from this composer went through. Check the ticket, then send this one again."
     }
   },
   "auth": {

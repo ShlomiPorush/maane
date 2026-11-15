@@ -14,6 +14,7 @@ import {
   SMTP_TEST,
   SNOOZE_END,
   TIMED_ACTION,
+  TIMED_RECOVER,
   UPLOAD_SCAN,
 } from "@maane/server/jobs/queue"
 import { errorFacts, log } from "@maane/server/log"
@@ -21,7 +22,7 @@ import type { Settings } from "@maane/server/settings/service"
 import { snoozeEnded } from "@maane/server/tickets/snooze"
 import { type GraphTestResult, PROVIDERS, type Provider } from "@maane/shared"
 import type { PgBoss } from "pg-boss"
-import { TimedActions, timedActionJob } from "./actions/run.ts"
+import { requeueOverdue, TimedActions, timedActionJob } from "./actions/run.ts"
 import type { ActivityPoll } from "./delivery/poll.ts"
 import { selfTestView } from "./files/self-test.ts"
 import type { FileService } from "./files/service.ts"
@@ -96,7 +97,8 @@ export async function graphTest(settings: Settings, graph: GraphGateway): Promis
  * is the result the Settings page polls for); the daily sweep of unreferenced stored files; and Graph intake (plan
  * 2.3): the connection test, stage one every minute, stage two after each sync, every minute, and once at start, and the
  * retry of waiting files every five minutes; sending (plan 3.1) and the activity poll of delivery statuses every ten
- * minutes (plan 3.3); timed actions and the end of a snooze, each at its time (plan 4.2). Later phases add
+ * minutes (plan 3.3); timed actions and the end of a snooze, each at its time, and every five minutes again for what
+ * is still waiting past its time (plan 4.2). Later phases add
  * notifications here.
  */
 export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Promise<void> {
@@ -151,6 +153,10 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
       if (typeof ticketId === "string" && Number.isSafeInteger(version))
         return { ended: await snoozeEnded(send.db, ticketId, version as number) }
     })
+    // What a failed or lost job left waiting past its time is queued again (pg-boss's documented schedule).
+    await boss.createQueue(TIMED_RECOVER, { policy: "exclusive", expireInSeconds: 5 * 60 })
+    await boss.schedule(TIMED_RECOVER, "*/5 * * * *")
+    await boss.work(TIMED_RECOVER, async () => requeueOverdue(send.db, (name, data) => boss.send(name, data)))
     const poll = send.poll
     if (poll) {
       // One run at a time; a failed run leaves the cursor where it was, and the next one reads its window again.

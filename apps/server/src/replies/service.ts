@@ -10,7 +10,7 @@
 //
 // A scheduled reply (plan 4.2) is built here too, at once, dated at its time, and stored as its timed action's version
 // (`scheduled_reply`): the worker writes it at its time through write.ts, as submit writes a reply sent now. Its author
-// changes it (a new version, built again) and anyone who sees the ticket cancels it while it is still `scheduled`.
+// changes it (a new version, built again) and anyone who sees the ticket cancels it, until it starts sending.
 
 import { createHash, randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
@@ -37,7 +37,7 @@ import {
 } from "@maane/shared"
 import { and, asc, desc, eq, exists, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import { z } from "zod"
-import { lockAction, OPEN_ACTION_STATES, setActionState } from "../actions/timed.ts"
+import { actionPassed, lockAction, OPEN_ACTION_STATES, setActionState } from "../actions/timed.ts"
 import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import {
@@ -233,6 +233,8 @@ export class Replies {
     if (input.sendAt !== undefined) return this.#schedule(scope, user, number, input, new Date(input.sendAt))
     const existing = await this.#submitted(user.id, input.submissionId)
     if (existing) return existing
+    // One submission is one click: an ID a scheduled reply took is refused here, never written as a second message.
+    if (await this.#scheduledBy(user.id, input.submissionId)) throw new Refusal("submission_reused", 409)
     const found = await this.#ticket(scope, number)
     if (!found) throw new Refusal("not_found", 404)
     const t = found.ticket
@@ -288,7 +290,7 @@ export class Replies {
     user: ReplyUser,
     input: Pick<ReplyBodyInput, "kind" | "from" | "to" | "cc" | "html" | "uploads" | "parts">,
     date: Date,
-  ): Promise<ReadyMessage & { files: PickedFile[] }> {
+  ): Promise<ReadyMessage & { files: PickedFile[]; agentHtml: string }> {
     const t = found.ticket
     const isReply = input.kind === "reply"
     let from: string | null = null
@@ -374,6 +376,8 @@ export class Replies {
       files,
       built,
       links: links?.rows ?? [],
+      // The agent's text alone, cleaned as the body is (no NUL, sanitized), without the signature.
+      agentHtml: html,
     }
   }
 
@@ -392,6 +396,8 @@ export class Replies {
     if (input.kind !== "reply") throw new Refusal("request_invalid", 400)
     const existing = await this.#scheduledBy(user.id, input.submissionId)
     if (existing) return { scheduled: existing }
+    // An ID a reply or a note sent now took is refused, as the other way round.
+    if (await this.#submitted(user.id, input.submissionId)) throw new Refusal("submission_reused", 409)
     if (sendAt.getTime() <= Date.now()) throw new Refusal("time_past", 400)
     const found = await this.#ticket(scope, number)
     if (!found) throw new Refusal("not_found", 404)
@@ -433,11 +439,12 @@ export class Replies {
   }
 
   /** The columns of a scheduled reply's version, from what #prepare made. */
-  #content(ready: ReadyMessage & { files: PickedFile[] }, input: { html: string; setPending?: boolean }) {
+  #content(ready: ReadyMessage & { files: PickedFile[]; agentHtml: string }, input: { setPending?: boolean }) {
     if (!ready.built || !ready.from) throw new Error("a scheduled reply without its email")
     return {
       setPending: input.setPending === true,
-      editorHtml: input.html,
+      // What the composer loads again for a change: the agent's text as #prepare cleaned it, never the raw request.
+      editorHtml: ready.agentHtml,
       fromAddress: ready.from,
       toAddresses: ready.to,
       ccAddresses: ready.cc,
@@ -484,8 +491,9 @@ export class Replies {
 
   /**
    * Changes a scheduled reply (plan 4.2): a new version with everything again (text, recipients, files, time), built
-   * again, while it is still `scheduled` and the change names its current version. The older version's job then finds
-   * a newer version and does nothing. Only its author changes it: its files are their own uploads.
+   * again, until it starts sending (`scheduled` or `handed`) and when the change names its current version. The older
+   * version's job, and its reply if it was written, then find a newer version and do nothing. Only its author changes
+   * it: its files are their own uploads.
    */
   async changeScheduled(
     scope: OrganizationScope,
@@ -508,12 +516,15 @@ export class Replies {
       if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
       if (locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
       const held = await lockAction(tx, actionId)
-      if (held?.state !== "scheduled") throw new Refusal("scheduled_not_open", 409)
+      // Until it starts sending: also once its reply was written (`handed`). The send point then finds a newer version
+      // and ends that reply without sending, and the new version's job writes its own (one outbox row per version).
+      if (!held || !(OPEN_ACTION_STATES as readonly string[]).includes(held.state))
+        throw new Refusal("scheduled_not_open", 409)
       if (held.version !== input.version) throw new Refusal("scheduled_changed", 409)
       const version = held.version + 1
       await tx
         .update(timedAction)
-        .set({ version, dueAt: sendAt, updatedAt: sql`now()` })
+        .set({ version, state: "scheduled", reason: null, dueAt: sendAt, updatedAt: sql`now()` })
         .where(eq(timedAction.id, actionId))
       await tx.update(scheduledReply).set(this.#content(ready, input)).where(eq(scheduledReply.actionId, actionId))
       await this.jobs.sendIn(jobs, TIMED_ACTION, { actionId, version }, { startAfter: sendAt })
@@ -577,7 +588,7 @@ export class Replies {
       author: action.authorUserId
         ? { id: action.authorUserId, name: names.get(action.authorUserId) ?? action.authorUserId }
         : null,
-      editable: action.state === "scheduled" && action.authorUserId === userId,
+      editable: (OPEN_ACTION_STATES as readonly string[]).includes(action.state) && action.authorUserId === userId,
       from: content.fromAddress,
       to: content.toAddresses as MailAddress[],
       cc: content.ccAddresses as MailAddress[],
@@ -825,6 +836,7 @@ export class Replies {
         number: ticket.number,
         state: outbox.state,
         actionId: outbox.actionId,
+        actionVersion: outbox.actionVersion,
       })
       .from(message)
       .innerJoin(ticket, eq(ticket.id, message.ticketId))
@@ -854,7 +866,7 @@ export class Replies {
       // a customer reply, a move, or a failed check ended before it went out is never sent by Send again.
       if (row.actionId) {
         const action = await lockAction(tx, row.actionId)
-        if (action?.state !== "done") throw new Refusal("reply_not_retryable", 409)
+        if (!actionPassed(action, row.actionVersion)) throw new Refusal("reply_not_retryable", 409)
       }
       await tx
         .update(outboxRecipient)

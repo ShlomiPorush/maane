@@ -1,11 +1,11 @@
 // A ticket's scheduled replies (plan 4.2), above the composer: each with its time (Israel time), its author, its
-// recipients, and its state. While it is still scheduled, its author can change it (in the composer: a new version);
-// until it starts sending, anyone who sees the ticket can cancel it (asked first). Once its time came it shows where the reply is (3.1's states;
-// the reply itself is in the conversation, marked as scheduled), and a cancelled or ended one says why: the agent
-// cancelled it, the customer wrote first (the agent can write again), the ticket moved to another organization, or a
-// check at its time failed. A reply still scheduled more than LATE_MS after its time shows as late: its job did not
-// run or gave up (pg-boss retries it a few times), so it says the reply has not gone out and the agent can cancel it
-// and write again.
+// recipients, and its state. Until it starts sending, its author can change it (in the composer: a new version) and
+// anyone who sees the ticket can cancel it (asked first). Once it went to the send point it shows where the reply is
+// (3.1's states; the reply itself is in the conversation, marked as scheduled), and a cancelled or ended one says why:
+// the agent cancelled it, the customer wrote first (the agent can write again), the ticket moved to another
+// organization, or a check at its time failed. A reply still scheduled more than LATE_MS after its time shows as late:
+// its job runs at its time and the worker runs it again every few minutes while it is overdue, so this much delay means
+// something keeps it from going; the view says it has not gone out and the agent can cancel it and write again.
 
 import type { ActionReason, ScheduledReplyView, TicketView } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
@@ -52,7 +52,7 @@ export function ScheduledReplies({
 }
 
 /** How long after its time a reply still scheduled shows as late. */
-const LATE_MS = 5 * 60 * 1000
+const LATE_MS = 30 * 60 * 1000
 
 /** Whether a reply is still scheduled more than LATE_MS after its time, judged when the view renders. */
 function isLate(entry: Pick<ScheduledReplyView, "state" | "sendAt">, now = Date.now()): boolean {
@@ -83,7 +83,8 @@ function ScheduledCard({
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
-  const open = entry.state === "scheduled"
+  // Until it starts sending: also once its reply was written and waits for the send point, which stops it there.
+  const open = entry.state === "scheduled" || entry.state === "handed"
   const late = isLate(entry)
   const state = stateOf(entry)
 
@@ -124,7 +125,9 @@ function ScheduledCard({
           {editing ? <Tag tone="info">{t("scheduled.editing")}</Tag> : null}
         </span>
         <span className="ui-scheduled-when">
-          <span className="ui-muted">{open && !late ? t("scheduled.goesAt") : t("scheduled.wasAt")}</span>
+          <span className="ui-muted">
+            {entry.state === "scheduled" && !late ? t("scheduled.goesAt") : t("scheduled.wasAt")}
+          </span>
           <Time value={entry.sendAt} mode="full" />
         </span>
       </header>
@@ -205,21 +208,6 @@ function ScheduledCard({
             </button>
           </div>
         </>
-      ) : null}
-      {entry.state === "handed" ? (
-        // Its reply is written and waits for the send point: it can still be stopped there.
-        <div className="ui-scheduled-acts">
-          <button
-            type="button"
-            className="ui-btn ui-btn-sm"
-            disabled={busy}
-            onClick={() => void cancel()}
-            data-testid="scheduled-cancel"
-          >
-            <X aria-hidden="true" />
-            {t("scheduled.cancel")}
-          </button>
-        </div>
       ) : null}
     </article>
   )

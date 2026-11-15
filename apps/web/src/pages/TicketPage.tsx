@@ -103,11 +103,10 @@ export function TicketPage() {
 function Ticket({ view }: { view: TicketView }) {
   const { t } = useI18n()
   const [preview, setPreview] = useState<AttachmentView | null>(null)
-  const [editingId, setEditing] = useState<string | null>(null)
+  // The scheduled reply being changed, as it was when the agent chose it: a newer view never moves or drops the change
+  // (one that went out or was cancelled meanwhile gets the server's refusal when saved).
+  const [editing, setEditing] = useState<ScheduledReplyView | null>(null)
   const { ticket } = view
-  // The scheduled reply being changed, as the view now has it: one that left `scheduled` meanwhile stops the change.
-  const editing: ScheduledReplyView | null =
-    view.scheduled.find((entry) => entry.id === editingId && entry.state === "scheduled") ?? null
   return (
     <>
       <section className="ui-panel" aria-labelledby="ticket-details">
@@ -192,7 +191,7 @@ function Ticket({ view }: { view: TicketView }) {
       {view.messages.map((message) => (
         <MessageCard key={message.id} message={message} ticketNumber={ticket.number} onPreview={setPreview} />
       ))}
-      <ScheduledReplies view={view} editing={editing?.id ?? null} onEdit={(entry) => setEditing(entry.id)} />
+      <ScheduledReplies view={view} editing={editing?.id ?? null} onEdit={setEditing} />
       {/* One composer per ticket: moving to another ticket starts a fresh one (recipients, text, files, submission). */}
       <Composer key={ticket.number} view={view} editing={editing} onEditDone={() => setEditing(null)} />
       {preview ? <FilePreview file={preview} onClose={() => setPreview(null)} /> : null}

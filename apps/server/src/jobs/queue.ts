@@ -35,6 +35,12 @@ export const DELIVERY_POLL = "delivery-poll"
 export const TIMED_ACTION = "timed-action"
 /** The end of a snooze at its time (plan 4.2): `{ ticketId, version }`, queued with `startAfter` at that time. */
 export const SNOOZE_END = "snooze-end"
+/**
+ * Every five minutes (plan 4.2): queues again the job of each scheduled reply and each snooze whose time passed a while
+ * ago and that still waits (its job failed for good, or was lost). Both jobs are safe to run twice: each names its
+ * version, and a reply has at most one outbox row per action and version.
+ */
+export const TIMED_RECOVER = "timed-recover"
 
 /**
  * A browser notification about one ticket (plan 4.5): `PushJob`, IDs only. Intake queues it in the transaction that
