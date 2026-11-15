@@ -36,8 +36,8 @@ export async function forgetDevice(): Promise<void> {
 /**
  * Ends a subscription this browser holds that the server does not count as the signed-in user's: one a previous user
  * left when their session ended without signing out, so their notifications would reach the next user of the browser.
- * Only a clear answer ends it; a failed check changes nothing, and the next start of the app checks again. Returns
- * whether it ended one.
+ * Only the server's clear "not this user's" ends it. Resolves once the server answered (true when it ended one); throws
+ * when there is no answer yet (the check or the browser failed), and the caller asks again.
  */
 export async function dropForeignSubscription(): Promise<boolean> {
   const device = pushDevice()
@@ -45,7 +45,8 @@ export async function dropForeignSubscription(): Promise<boolean> {
   const subscription = await device.current()
   if (!subscription) return false
   const { on } = await api.notificationState(subscription.endpoint)
-  if (on) return false
+  if (on === true) return false
+  if (on !== false) throw new Error("the notification state has no answer")
   // The device may have subscribed again meanwhile (turned on in the Account page): only the endpoint asked about ends.
   const now = await device.current()
   if (now?.endpoint !== subscription.endpoint) return false

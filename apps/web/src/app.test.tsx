@@ -2449,6 +2449,30 @@ describe("browser notifications on this device", () => {
     expect(events).toEqual([])
   })
 
+  it("asks again after a failed check until the server answers, and then ends someone else's subscription", async () => {
+    const events = fakeDevice(true)
+    let asked = 0
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": () => {
+        asked += 1
+        return asked === 1 ? { status: 500, body: { error: "internal" } } : ok({ publicKey: PUBLIC_KEY, on: false })
+      },
+    }
+    await renderAt("/", answers)
+    await vi.waitFor(() => expect(asked).toBe(1))
+    await settle()
+    expect(events).toEqual([])
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    await vi.waitFor(() => expect(events).toEqual(["unsubscribe"]))
+    expect(asked).toBe(2)
+    // Answered: the checks stop.
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    await settle()
+    expect(asked).toBe(2)
+  })
+
   it("replaces a subscription this browser holds for someone else instead of taking it over", async () => {
     const events = fakeDevice(true)
     const answers: Answers = {

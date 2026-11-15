@@ -153,21 +153,47 @@ function SessionKeeper({
   return null
 }
 
+/** How often a check of the browser's subscription that got no answer is asked again. */
+const FOREIGN_RECHECK_MS = 30_000
+
 /**
  * Ends a push subscription this browser holds that the server does not count as the signed-in user's (plan 4.5): a
  * previous user's whose session ended without signing out, so their notifications would reach this user. Runs once for
- * each user signed in here, on any page. A failed check changes nothing; the next start of the app checks again.
+ * each user signed in here, on any page, until the server answers: a failed check changes nothing and is asked again
+ * every 30 seconds and when the window regains focus.
  */
 function ForeignSubscription() {
   const queryClient = useQueryClient()
   useEffect(() => {
-    dropForeignSubscription()
-      .then((ended) => {
-        if (ended) void queryClient.invalidateQueries({ queryKey: qk.notifications })
-      })
-      .catch(() => {
-        // Left as it is until the next check.
-      })
+    let answered = false
+    let checking = false
+    const stop = () => {
+      clearInterval(timer)
+      window.removeEventListener("focus", check)
+    }
+    function check() {
+      if (answered || checking) return
+      checking = true
+      dropForeignSubscription()
+        .then((ended) => {
+          answered = true
+          stop()
+          if (ended) void queryClient.invalidateQueries({ queryKey: qk.notifications })
+        })
+        .catch(() => {
+          // No answer yet: the next check asks again.
+        })
+        .finally(() => {
+          checking = false
+        })
+    }
+    const timer = setInterval(check, FOREIGN_RECHECK_MS)
+    window.addEventListener("focus", check)
+    check()
+    return () => {
+      answered = true
+      stop()
+    }
   }, [queryClient])
   return null
 }
