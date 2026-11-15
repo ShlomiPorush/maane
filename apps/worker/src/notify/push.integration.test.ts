@@ -220,6 +220,20 @@ describe("the push-notify job", () => {
     expect(await subscriptions(agent)).toHaveLength(2)
   })
 
+  it("checks each device again: a ticket moved to another organization while one push is pending sends no more", async () => {
+    const admin = await firstAdmin()
+    const agent = await newAgent(admin.b, "agent.support", support)
+    await device(agent)
+    await device(agent)
+    const { job } = await customerTicket()
+    push.during(async () => {
+      await h.database.db.update(ticketTable).set({ organizationId: other }).where(eq(ticketTable.id, job.ticketId))
+    })
+
+    expect(await notifier().notify(job)).toEqual({ sent: 1, removed: 0, failed: 0 })
+    expect(push.received).toHaveLength(1)
+  })
+
   it("checks each device again: a user disabled while one push is pending gets no more and loses the rest", async () => {
     const admin = await firstAdmin()
     const agent = await newAgent(admin.b, "agent.banned", support)

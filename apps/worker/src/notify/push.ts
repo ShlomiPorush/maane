@@ -130,8 +130,14 @@ export class PushNotifier {
         result.removed += gone.length
         continue
       }
+      // The ticket's organization as it is now: a move during an earlier send changes who may see it.
+      const [current] = await this.#db
+        .select({ organizationId: ticket.organizationId })
+        .from(ticket)
+        .where(eq(ticket.id, job.ticketId))
+      if (!current) break
       const scope = await visibleOrganizations(this.#db, { id: user.id, role: user.role ?? "agent" })
-      if (!inScope(scope, event.organizationId)) continue
+      if (!inScope(scope, current.organizationId)) continue
       if (!this.#allowed(device.endpoint)) {
         result.failed++
         log.warn("a subscription's endpoint is not a supported push service; nothing was sent to it")
