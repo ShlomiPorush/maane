@@ -4,7 +4,8 @@
 // (/change-password, which ends the other sessions); new backup codes (/two-factor/generate-backup-codes); and
 // two-factor turned off (/two-factor/disable) to set up a new authenticator app at once (/enroll). Every dialog with
 // typed input asks before dropping it (DS-9), and new backup codes not marked saved are never closed without a
-// warning. Signing out of this browser is in the account menu.
+// warning. Browser notifications on this device (DeviceNotifications, plan 4.5). Signing out of this browser is in the
+// account menu.
 
 import { PASSWORD_MAX, PASSWORD_MIN } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
@@ -15,6 +16,7 @@ import { AuthCallError, authClient, authData } from "../api/auth.ts"
 import { qk } from "../api/endpoints.ts"
 import { errorKey, errorText } from "../api/errors.ts"
 import { useI18n } from "../i18n/i18n.tsx"
+import { DeviceNotifications } from "../notifications/DeviceNotifications.tsx"
 import { PageHead } from "../shell/chrome.tsx"
 import { ACCOUNT_PATH } from "../shell/navigation.ts"
 import { usePageMeta } from "../shell/pageMeta.tsx"
@@ -170,6 +172,7 @@ function AccountSections() {
           </div>
         ))}
       </Group>
+      <DeviceNotifications />
       <Group id="account-password" title={t("account.passwordGroup")}>
         <Row label={t("account.passwordRow")} hint={t("account.passwordHint")}>
           <button type="button" className="ui-btn" onClick={() => setDialog("password")}>

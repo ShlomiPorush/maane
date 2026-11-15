@@ -63,6 +63,9 @@ export const ERROR_TEXT: Record<string, string> = {
   category_not_found: "errors.code.categoryNotFound",
   category_name_invalid: "errors.code.categoryNameInvalid",
   category_name_taken: "errors.code.categoryNameTaken",
+  push_endpoint_refused: "errors.code.pushEndpointRefused",
+  push_endpoint_taken: "errors.code.pushEndpointTaken",
+  push_subscription_invalid: "errors.code.pushSubscriptionInvalid",
   internal: "errors.server",
   // Maane's refusals on Better Auth's routes (apps/server/src/auth/auth.ts)
   UNAUTHORIZED: "errors.code.unauthorized",
