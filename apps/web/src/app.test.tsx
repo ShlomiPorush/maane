@@ -1628,7 +1628,14 @@ describe("tickets", () => {
       statusFilter.value = "open_work"
       statusFilter.dispatchEvent(new Event("change", { bubbles: true }))
     })
-    await vi.waitFor(() => expect(where()).toBe(`/?category=${CATEGORY}`))
+    // Open work chosen by hand stays chosen, so a search started now keeps it instead of covering every status.
+    await vi.waitFor(() => expect(where()).toBe(`/?status=open_work&category=${CATEGORY}`))
+    const box = document.querySelector<HTMLInputElement>('[data-testid="ticket-search"]') as HTMLInputElement
+    await act(async () => type(box, "#9"))
+    await act(async () => button(he("tickets.searchSubmit"))?.click())
+    await vi.waitFor(() => expect(where()).toBe(`/?status=open_work&category=${CATEGORY}&q=%239`))
+    expect(requests.some((r) => r.url === `/api/v1/tickets?status=open_work&category=${CATEGORY}&q=%239`)).toBe(true)
+    expect(statusFilter.value).toBe("open_work")
   })
 
   it("sets the status, the categories, and the organization from the ticket view (plan 4.1)", async () => {

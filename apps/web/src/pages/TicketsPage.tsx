@@ -91,7 +91,8 @@ export function TicketsPage() {
         onOrganization={(id) => setFilter("organization", id || null)}
         onFlagged={(on) => setFilter("review", on ? "1" : null)}
         status={filters.status ?? defaultStatusFilter(Boolean(filters.q))}
-        onStatus={(status) => setFilter("status", status === defaultStatusFilter(Boolean(filters.q)) ? null : status)}
+        // A chosen status stays in the address even when it equals today's default: the default changes with search.
+        onStatus={(status) => setFilter("status", status)}
         categories={categories}
         category={filters.category ?? ""}
         onCategory={(id) => setFilter("category", id || null)}
