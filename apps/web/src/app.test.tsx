@@ -81,7 +81,10 @@ vi.mock("./api/auth.ts", async (importOriginal) => {
 
 const he = (key: string, vars?: Record<string, string | number>) => translate("he", key, vars)
 
-type Answers = Record<string, TransportResponse | ((request: TransportRequest) => TransportResponse)>
+type Answers = Record<
+  string,
+  TransportResponse | ((request: TransportRequest) => TransportResponse | Promise<TransportResponse>)
+>
 
 let requests: TransportRequest[] = []
 let mounted: { root: Root; host: HTMLElement } | null = null
@@ -2471,6 +2474,47 @@ describe("browser notifications on this device", () => {
     await act(async () => window.dispatchEvent(new Event("focus")))
     await settle()
     expect(asked).toBe(2)
+  })
+
+  it("leaves a subscription being turned on alone while a check that failed asks again", async () => {
+    const events = fakeDevice(true)
+    let failing = true
+    let on = false
+    let release = () => {}
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": () =>
+        failing ? { status: 500, body: { error: "internal" } } : ok({ publicKey: PUBLIC_KEY, on }),
+      // Saving the new subscription takes a while: the check below runs in between.
+      "/api/v1/notifications/subscription": (request) => {
+        events.push(request.method)
+        return new Promise((resolve) => {
+          release = () => {
+            on = true
+            resolve(ok({ on: true }))
+          }
+        })
+      },
+    }
+    await renderAt("/", answers)
+    await vi.waitFor(() => expect(requests.some((r) => r.url === "/api/v1/notifications/state")).toBe(true))
+    await settle()
+    failing = false
+    await act(async () => router?.navigate("/account"))
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.off")))
+    await act(async () => button(he("notifications.turnOn"))?.click())
+    await vi.waitFor(() => expect(events).toContain("PUT"))
+    expect(events).toEqual(["unsubscribe", `subscribe ${PUBLIC_KEY}`, "PUT"])
+    // The server does not count the new subscription yet; the check must not end it.
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    await settle()
+    expect(events).toEqual(["unsubscribe", `subscribe ${PUBLIC_KEY}`, "PUT"])
+    await act(async () => release())
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.on")))
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    await settle()
+    expect(events).toEqual(["unsubscribe", `subscribe ${PUBLIC_KEY}`, "PUT"])
   })
 
   it("replaces a subscription this browser holds for someone else instead of taking it over", async () => {

@@ -15,6 +15,7 @@ import { ErrorState, Loading, StaleNote } from "../ui/states.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { Tag } from "../ui/tags.tsx"
 import { DeviceRefusal, type PushDevice, pushDevice } from "./device.ts"
+import { whileRegistering } from "./forget.ts"
 
 type DeviceState =
   | { support: "unsupported" }
@@ -56,12 +57,16 @@ export function DeviceNotifications() {
   }
 
   const turnOn = (publicKey: string) =>
-    change(async () => {
-      // A subscription the server does not count as this user's is replaced, never handed to them.
-      await (await device.current())?.unsubscribe()
-      const subscription = await device.subscribe(publicKey)
-      await api.subscribeDevice(subscription, language)
-    }, t("notifications.turnedOn"))
+    change(
+      () =>
+        whileRegistering(async () => {
+          // A subscription the server does not count as this user's is replaced, never handed to them.
+          await (await device.current())?.unsubscribe()
+          const subscription = await device.subscribe(publicKey)
+          await api.subscribeDevice(subscription, language)
+        }),
+      t("notifications.turnedOn"),
+    )
 
   const turnOff = () =>
     change(async () => {

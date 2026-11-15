@@ -5,6 +5,21 @@
 import { api } from "../api/endpoints.ts"
 import { pushDevice } from "./device.ts"
 
+/** Turn-ons running in this tab, and how many have started: a check never ends a subscription being registered. */
+let registering = 0
+let started = 0
+
+/** Runs a turn-on (subscribe, then save on the server) so that dropForeignSubscription leaves its subscription alone. */
+export async function whileRegistering<T>(work: () => Promise<T>): Promise<T> {
+  registering += 1
+  started += 1
+  try {
+    return await work()
+  } finally {
+    registering -= 1
+  }
+}
+
 /** The browser could not read or end its subscription: notifications would still reach this device. */
 export class DeviceNotForgotten extends Error {
   constructor(cause: unknown) {
@@ -42,11 +57,14 @@ export async function forgetDevice(): Promise<void> {
 export async function dropForeignSubscription(): Promise<boolean> {
   const device = pushDevice()
   if (!device.supported()) return false
+  const before = started
   const subscription = await device.current()
   if (!subscription) return false
   const { on } = await api.notificationState(subscription.endpoint)
   if (on === true) return false
   if (on !== false) throw new Error("the notification state has no answer")
+  // A turn-on that ran during the check may be saving this very subscription: no answer yet, so ask again later.
+  if (registering > 0 || started !== before) throw new Error("a subscription is being registered")
   // The device may have subscribed again meanwhile (turned on in the Account page): only the endpoint asked about ends.
   const now = await device.current()
   if (now?.endpoint !== subscription.endpoint) return false
