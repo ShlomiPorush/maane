@@ -203,7 +203,7 @@ Everything else is set in Maane itself, in Settings. A variable in the lower par
 
 Browser notifications (Web Push) need a VAPID key pair in `app.env`: `MAANE_VAPID_PUBLIC_KEY` and `MAANE_VAPID_PRIVATE_KEY`. The server and the worker refuse to start without them, or with values that are not one key pair. The image makes them with web-push's own generator. Run this block once, after the block above on a new deployment, and before you start a release with browser notifications on an existing one.
 
-It appends the two lines to `app.env` and changes nothing else in it. It refuses, and writes nothing, when `app.env` is missing or not mode 600, when `app.env` already has a `MAANE_VAPID_` line of either name (set or empty), when the generator fails or prints something else, or when another run holds the file. It prints no key. Set `version` to the release you run or are about to run:
+It appends the two lines to `app.env` and changes nothing else in it. It refuses, and writes nothing, when `app.env` is missing or not mode 600, when `app.env` already sets either key in any form Compose reads (set or empty, also indented, after `export`, or with spaces around `=`), when the generator fails or prints something else, or when another run holds the file. It prints no key. Set `version` to the release you run or are about to run:
 
 ```bash
 (
@@ -217,8 +217,9 @@ It appends the two lines to `app.env` and changes nothing else in it. It refuses
   # One run at a time: the lock is on app.env itself.
   exec 9<app.env
   flock -n 9 || { echo "error: another run is changing app.env; nothing was written" >&2; exit 1; }
-  if grep -qE '^MAANE_VAPID_(PUBLIC|PRIVATE)_KEY=' app.env; then
-    echo "error: app.env already has a VAPID key line; nothing was written (a new pair disconnects every device)" >&2
+  # Any form Compose reads counts: leading spaces, export, and spaces or another separator after the name.
+  if grep -qE '^[[:space:]]*(export[[:space:]]+)?MAANE_VAPID_(PUBLIC|PRIVATE)_KEY([^][A-Za-z0-9_.-]|$)' app.env; then
+    echo "error: app.env already sets a VAPID key; nothing was written (a new pair disconnects every device)" >&2
     exit 1
   fi
   # web-push's generateVAPIDKeys in the release's image, without network or privileges.

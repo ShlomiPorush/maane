@@ -200,6 +200,9 @@ ensure_stack_env() {
 # development data directory gets it once, also when its app.env is older than phase 4, and never a second one:
 # replacing it would disconnect every device's notifications. Verification and try-pr stacks are new for each run.
 VAPID_ENV_NAMES=(MAANE_VAPID_PUBLIC_KEY MAANE_VAPID_PRIVATE_KEY)
+# A line that sets either key in any form Compose's env_file parser reads: leading whitespace, `export `, and spaces
+# or another separator after the name. The name must end there, so MAANE_VAPID_PUBLIC_KEY_OLD and comments do not count.
+VAPID_LINE='^[[:space:]]*(export[[:space:]]+)?MAANE_VAPID_(PUBLIC|PRIVATE)_KEY([^][A-Za-z0-9_.-]|$)'
 
 # Prints a new pair as the two lines app.env takes, from the given image, without network or privileges. Returns 3
 # when the image has no generator (a pull request from before phase 4, which reads no VAPID keys).
@@ -213,8 +216,9 @@ vapid_generator() {
     --entrypoint node "$image" dist/worker/vapid-keys.js
 }
 
-# Appends a VAPID pair to DIR/app.env when it holds none. Both keys there: nothing changes. One of them, or an empty
-# one: refused, because a new pair would replace the one the devices subscribed with. The output is never printed.
+# Appends a VAPID pair to DIR/app.env when it holds none. Both keys there: nothing changes. One of them, an empty one,
+# or one in another form Compose reads (VAPID_LINE): refused, because a new pair would replace the one the devices
+# subscribed with. The output is never printed.
 ensure_vapid_keys() {
   local dir="$1" image="$2" file lock keys rc shape
   file="$dir/app.env"
@@ -228,8 +232,8 @@ ensure_vapid_keys() {
     exec {lock}>&-
     return 0
   fi
-  if grep -qE '^MAANE_VAPID_(PUBLIC|PRIVATE)_KEY=' "$file"; then
-    die "$file holds only one of the VAPID keys, or an empty one. Restore the pair; a new one would disconnect every device's notifications"
+  if grep -qE "$VAPID_LINE" "$file"; then
+    die "$file already sets a VAPID key, but not both as plain NAME=value lines. Fix it by hand; a new pair would disconnect every device's notifications"
   fi
   if keys="$(vapid_generator "$image")"; then
     rc=0

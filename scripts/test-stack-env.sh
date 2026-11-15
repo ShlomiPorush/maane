@@ -85,6 +85,33 @@ MAANE_VAPID_PRIVATE_KEY="; do
   check "leaves half a pair unchanged" [ "$(sha256sum <"$dir/app.env")" = "$after" ]
 done
 
+# A key in any other form Compose reads (leading whitespace, export, spaces or a colon around the separator) is a key
+# already there: refused and left as it is, so no second pair overrides the one the devices use.
+n=0
+TAB="$(printf '\t')"
+public="$(random_b64url 87)"
+private="$(random_b64url 43)"
+for form in "  MAANE_VAPID_PUBLIC_KEY=$public" "${TAB}MAANE_VAPID_PRIVATE_KEY=$private" \
+  "MAANE_VAPID_PUBLIC_KEY = $public" "MAANE_VAPID_PRIVATE_KEY =$private" "MAANE_VAPID_PUBLIC_KEY: $public" \
+  "export MAANE_VAPID_PUBLIC_KEY=$public" "  export${TAB}MAANE_VAPID_PRIVATE_KEY = $private" \
+  "export MAANE_VAPID_PUBLIC_KEY=$public
+export MAANE_VAPID_PRIVATE_KEY=$private"; do
+  n=$((n + 1))
+  dir="$(new_dir)"
+  printf '%s\n' "$form" >>"$dir/app.env"
+  after="$(sha256sum <"$dir/app.env")"
+  if run "$dir"; then check "refuses a key in another form ($n)" false; else check "refuses a key in another form ($n)" true; fi
+  check "leaves a key in another form unchanged ($n)" [ "$(sha256sum <"$dir/app.env")" = "$after" ]
+done
+
+# A comment, or another name that starts the same, is not a key: the pair is added.
+for other in "# MAANE_VAPID_PUBLIC_KEY=" "MAANE_VAPID_PUBLIC_KEY_OLD=$public"; do
+  dir="$(new_dir)"
+  printf '%s\n' "$other" >>"$dir/app.env"
+  check "adds the pair next to a comment or another name" run "$dir"
+  check "one public key next to a comment or another name" [ "$(count "$dir" MAANE_VAPID_PUBLIC_KEY)" = 1 ]
+done
+
 # A generator that fails or prints something else changes nothing; an image without one is left alone.
 for GENERATOR in fail odd; do
   dir="$(new_dir)"
