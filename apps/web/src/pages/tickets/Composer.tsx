@@ -118,11 +118,14 @@ export function Composer({
   view,
   editing = null,
   onEditDone = () => {},
+  onEditKeep = () => {},
 }: {
   view: TicketView
   /** A scheduled reply its author is changing (plan 4.2), loaded into the composer. */
   editing?: ScheduledReplyView | null
   onEditDone?: () => void
+  /** The agent kept changing this reply rather than load another one in its place. */
+  onEditKeep?: (scheduled: ScheduledReplyView) => void
 }) {
   const { t } = useI18n()
   const compose = view.compose
@@ -205,8 +208,14 @@ export function Composer({
   // never moves it, and a reply that went out or was cancelled meanwhile gets the server's refusal on save, never a new
   // reply in its place.
   const loaded = useRef<{ id: string; version: number } | null>(null)
+  // The reply being changed as it was loaded, and its fields as the composer held them then: a change to another
+  // scheduled reply asks first when any of them was edited since.
+  const loadedView = useRef<ScheduledReplyView | null>(null)
+  const baseline = useRef("")
+  const fields = () =>
+    JSON.stringify([editor?.getHTML() ?? "", chosenFrom, to, cc, files.map((file) => file.key), laterPending])
   const draft = useRef(false)
-  draft.current = dirty && loaded.current === null
+  draft.current = loaded.current === null ? dirty : fields() !== baseline.current
   // biome-ignore lint/correctness/useExhaustiveDependencies: loads once per scheduled reply chosen
   useEffect(() => {
     if (!editor || !editing || loaded.current?.id === editing.id) return
@@ -220,12 +229,15 @@ export function Composer({
           focusCancel: true,
         })
         if (!yes) {
-          onEditDone()
+          // The change in progress stays; with none, the composer keeps its draft.
+          if (loadedView.current) onEditKeep(loadedView.current)
+          else onEditDone()
           return
         }
       }
       if (!mounted.current) return
       loaded.current = { id: editing.id, version: editing.version }
+      loadedView.current = editing
       setKind("reply")
       setFrom(editing.from)
       setTo(listText(editing.to))
@@ -235,6 +247,14 @@ export function Composer({
       editor.commands.setContent(editing.html)
       setEmpty(editor.isEmpty)
       setError(null)
+      baseline.current = JSON.stringify([
+        editor.getHTML(),
+        editing.from,
+        listText(editing.to),
+        listText(editing.cc),
+        editing.files.map((file) => file.id),
+        editing.setPending && canSetPending,
+      ])
       editor.commands.focus()
     }
     void load()
@@ -242,6 +262,7 @@ export function Composer({
 
   const stopEditing = () => {
     loaded.current = null
+    loadedView.current = null
     clear()
     setTo(listText(compose.to))
     setCc(listText(compose.cc))

@@ -194,7 +194,13 @@ function Ticket({ view }: { view: TicketView }) {
       ))}
       <ScheduledReplies view={view} editing={editing?.id ?? null} onEdit={setEditing} />
       {/* One composer per ticket: moving to another ticket starts a fresh one (recipients, text, files, submission). */}
-      <Composer key={ticket.number} view={view} editing={editing} onEditDone={() => setEditing(null)} />
+      <Composer
+        key={ticket.number}
+        view={view}
+        editing={editing}
+        onEditDone={() => setEditing(null)}
+        onEditKeep={setEditing}
+      />
       {preview ? <FilePreview file={preview} onClose={() => setPreview(null)} /> : null}
     </>
   )

@@ -2056,6 +2056,87 @@ describe("tickets", () => {
     expect(requests.some((r) => r.method === "POST" && r.url === "/api/v1/tickets/7/messages")).toBe(false)
   })
 
+  it("asks before a change to another scheduled reply drops unsaved edits of the one being changed (review T11)", async () => {
+    const FIRST = "00000000-0000-4000-8000-0000000000d7"
+    const SECOND = "00000000-0000-4000-8000-0000000000d8"
+    const entry = (id: string, address: string) => ({
+      id,
+      version: 1,
+      state: "scheduled",
+      reason: null,
+      sendAt: "2099-01-10T07:30:00.000Z",
+      createdAt: when,
+      updatedAt: when,
+      author: { id: "u1", name: "Agent Name" },
+      editable: true,
+      from: "help@example.com",
+      to: [{ address, name: null }],
+      cc: [],
+      text: "Hello",
+      html: "<p>Hello</p>",
+      setPending: false,
+      files: [],
+      messageId: null,
+      outboxState: null,
+    })
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view(
+        "v1",
+        [],
+        false,
+        {},
+        [{ id: ORG_B, name: "Beta" }],
+        [entry(FIRST, "dana@example.com"), entry(SECOND, "lee@example.com")],
+      ),
+    })
+    const change = async (id: string) => {
+      const card = await vi.waitFor(() => {
+        const found = document.querySelector<HTMLElement>(`[data-scheduled="${id}"]`)
+        expect(found).not.toBeNull()
+        return found as HTMLElement
+      })
+      const found = Array.from(card.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === he("scheduled.change"),
+      )
+      await act(async () => found?.click())
+    }
+    const editingId = () => document.querySelector(".ui-composer")?.getAttribute("data-editing")
+    const toField = () => document.querySelector<HTMLInputElement>('.ui-composer input[id$="-to"]') as HTMLInputElement
+    const answer = async (label: string) => {
+      const question = await vi.waitFor(() => {
+        const found = document.querySelector<HTMLElement>("[role=alertdialog]")
+        expect(found).not.toBeNull()
+        return found as HTMLElement
+      })
+      const found = Array.from(question.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+      await act(async () => found?.click())
+      await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).toBeNull())
+    }
+
+    // Nothing changed in the first: the second loads at once.
+    await change(FIRST)
+    await vi.waitFor(() => expect(editingId()).toBe(FIRST))
+    await change(SECOND)
+    await vi.waitFor(() => expect(editingId()).toBe(SECOND))
+    expect(document.querySelector("[role=alertdialog]")).toBeNull()
+    expect(toField().value).toBe("lee@example.com")
+
+    // An unsaved edit: the switch asks; keeping it stays on the reply being changed, with the edit.
+    await act(async () => type(toField(), "kim@example.com"))
+    await change(FIRST)
+    await answer(he("unsaved.keepEditing"))
+    await vi.waitFor(() => expect(editingId()).toBe(SECOND))
+    expect(toField().value).toBe("kim@example.com")
+
+    // Discarding it loads the other reply.
+    await change(FIRST)
+    await answer(he("unsaved.discard"))
+    await vi.waitFor(() => expect(editingId()).toBe(FIRST))
+    expect(toField().value).toBe("dana@example.com")
+  })
+
   it("starts a new submission after a refusal, and keeps it while no answer came (review T8)", async () => {
     const answers: TransportResponse[] = [
       { status: 500, body: { error: "internal" } },
