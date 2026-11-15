@@ -26,7 +26,9 @@ export const ENDPOINT_MAX = 2048
  * never needs to resolve a name.
  */
 export function pushEndpointAllowed(endpoint: string): boolean {
-  if (endpoint.length === 0 || endpoint.length > ENDPOINT_MAX || !URL.canParse(endpoint)) return false
+  // Printable ASCII only, so the length bounds the bytes the unique index keeps.
+  if (endpoint.length === 0 || endpoint.length > ENDPOINT_MAX || !/^[!-~]+$/.test(endpoint)) return false
+  if (!URL.canParse(endpoint)) return false
   const url = new URL(endpoint)
   if (url.protocol !== "https:" || url.port !== "" || url.username !== "" || url.password !== "") return false
   const host = url.hostname.toLowerCase()

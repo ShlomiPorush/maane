@@ -35,6 +35,8 @@ describe("pushEndpointAllowed", () => {
       "https://maane-postgres/push",
       "file:///etc/passwd",
       `https://fcm.googleapis.com/${"a".repeat(ENDPOINT_MAX)}`,
+      `https://fcm.googleapis.com/fcm/send/${String.fromCodePoint(0x5d0).repeat(1000)}`,
+      "https://fcm.googleapis.com/fcm/send/a b",
     ])
       expect(pushEndpointAllowed(endpoint), endpoint).toBe(false)
   })

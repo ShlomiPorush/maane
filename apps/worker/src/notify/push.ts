@@ -51,12 +51,17 @@ const hidden = (code: number) =>
   (code >= 0x202a && code <= 0x202e) ||
   (code >= 0x2066 && code <= 0x2069)
 
-/** The customer's display name as a notification shows it: nothing hidden, one line, at most NAME_MAX characters. */
+/**
+ * The customer's display name as a notification shows it: nothing hidden, one line, at most NAME_MAX characters, and
+ * nothing when it holds an address.
+ */
 export function shownName(name: string | null): string {
   if (!name) return ""
   // Line breaks and tabs become spaces first, so they still part the words they stood between.
   const spaced = name.replace(/[\t\n\v\f\r]/g, " ")
   const visible = [...spaced].filter((char) => !hidden(char.codePointAt(0) ?? 0)).join("")
+  // A display name that holds an address ("dana@example.com" <dana@example.com>) is not shown: never an address.
+  if (/\S@\S/.test(visible)) return ""
   return [...visible.replace(/\s+/g, " ").trim()].slice(0, NAME_MAX).join("").trim()
 }
 

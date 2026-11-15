@@ -27,6 +27,10 @@ describe("pushPayload", () => {
     expect(shownName(`Dana${rlo} moc.elpmaxe${isolate}\n\tCustomer`)).toBe("Dana moc.elpmaxe Customer")
     expect([...shownName("x".repeat(500))]).toHaveLength(NAME_MAX)
     expect(shownName("   ")).toBe("")
+    // A display name that is, or holds, an address shows nothing.
+    expect(shownName("dana@example.com")).toBe("")
+    expect(shownName("Dana Customer (dana@example.com)")).toBe("")
+    expect(pushPayload("en", "new_ticket", 3, "dana@example.com").body).toBe("")
   })
 })
 

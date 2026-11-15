@@ -204,8 +204,11 @@ VAPID_ENV_NAMES=(MAANE_VAPID_PUBLIC_KEY MAANE_VAPID_PRIVATE_KEY)
 # Prints a new pair as the two lines app.env takes, from the given image, without network or privileges. Returns 3
 # when the image has no generator (a pull request from before phase 4, which reads no VAPID keys).
 vapid_generator() {
-  local image="$1"
-  docker run --rm --network none --entrypoint test "$image" -f dist/worker/vapid-keys.js || return 3
+  local image="$1" rc=0
+  docker run --rm --network none --entrypoint test "$image" -f dist/worker/vapid-keys.js || rc=$?
+  # test answers 1 when the file is missing; any other failure is Docker's own and stays a failure.
+  if [ "$rc" = 1 ]; then return 3; fi
+  [ "$rc" = 0 ] || return "$rc"
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --entrypoint node "$image" dist/worker/vapid-keys.js
 }
