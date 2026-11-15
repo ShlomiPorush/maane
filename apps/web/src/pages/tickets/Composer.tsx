@@ -6,6 +6,8 @@
 // so a repeated or lost request finds the same message. While intake listens, only internal notes can be written.
 // A reply's default action is "Send and set pending" (plan 4.1): the server sets the status in the reply's own
 // transaction; "Send" leaves the status. A closed ticket offers only "Send" to an agent (only an admin leaves closed).
+// "Send later" (plan 4.2) schedules the reply for a date and time in Israel time, with its status action, which applies
+// when it goes. A scheduled reply its author changes comes back into the composer; saving makes a new version.
 // TipTap's own stylesheet stays off (injectCSS: false): the UI's policy allows no inline <style>; ui.css styles it.
 
 import {
@@ -14,24 +16,29 @@ import {
   type MailAddress,
   mayChangeStatus,
   type ReplyInput,
+  type ScheduledReplyView,
   type TicketView,
   type UploadView,
 } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react"
 import StarterKit from "@tiptap/starter-kit"
-import { Bold, Italic, List, ListOrdered, Paperclip, Quote, Send, X } from "lucide-react"
+import { Bold, CalendarClock, Italic, List, ListOrdered, Paperclip, Quote, Send, X } from "lucide-react"
 import { useEffect, useId, useRef, useState } from "react"
+import { ApiError } from "../../api/client.ts"
 import { api, qk } from "../../api/endpoints.ts"
 import { errorText } from "../../api/errors.ts"
+import { formatTime } from "../../format/datetime.ts"
 import { formatBytes } from "../../format/number.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { useMe } from "../../shell/session.ts"
+import { confirmDialog } from "../../ui/confirm.tsx"
 import { Banner } from "../../ui/states.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag, type Tone } from "../../ui/tags.tsx"
 import { useUnsaved } from "../../ui/unsaved.tsx"
 import { FormError } from "../auth/parts.tsx"
+import { WhenDialog } from "./When.tsx"
 
 /** How often an upload's scan is read, and how long the composer waits for it. */
 const SCAN_POLL_MS = 1_500
@@ -68,7 +75,58 @@ export function parseAddresses(text: string, known: MailAddress[]): MailAddress[
 
 const listText = (list: MailAddress[]) => list.map((entry) => entry.address).join(", ")
 
-export function Composer({ view }: { view: TicketView }) {
+/** A scheduled reply's file as the composer holds it again (its upload was scanned and kept when it was written). */
+function pickedOf(file: ScheduledReplyView["files"][number]): Picked {
+  if (file.source === "upload")
+    return {
+      key: file.id,
+      source: "upload",
+      name: file.fileName,
+      size: file.size,
+      upload: {
+        id: file.id,
+        fileName: file.fileName,
+        size: file.size,
+        status: "clean",
+        signature: null,
+        blockedBy: null,
+      },
+      failed: null,
+    }
+  return {
+    key: file.id,
+    source: "part",
+    name: file.fileName,
+    size: file.size,
+    part: {
+      id: file.id,
+      kind: "attachment",
+      fileName: file.fileName,
+      size: file.size,
+      status: "clean",
+      signature: null,
+      blockedBy: null,
+      unavailableReason: null,
+      detectedType: null,
+      preview: null,
+      download: true,
+    },
+  }
+}
+
+export function Composer({
+  view,
+  editing = null,
+  onEditDone = () => {},
+  onEditKeep = () => {},
+}: {
+  view: TicketView
+  /** A scheduled reply its author is changing (plan 4.2), loaded into the composer. */
+  editing?: ScheduledReplyView | null
+  onEditDone?: () => void
+  /** The agent kept changing this reply rather than load another one in its place. */
+  onEditKeep?: (scheduled: ScheduledReplyView) => void
+}) {
   const { t } = useI18n()
   const compose = view.compose
   const queryClient = useQueryClient()
@@ -133,6 +191,83 @@ export function Composer({ view }: { view: TicketView }) {
 
   const dirty = !empty || files.length > 0
   useUnsaved("composer", { count: dirty ? 1 : 0, kind: "leave" })
+  const [later, setLater] = useState(false)
+  const role = useMe().data?.role ?? "agent"
+  // "Send and set pending" only where this user may set pending (not on a closed ticket, unless an admin).
+  const canSetPending = mayChangeStatus(role, view.ticket.status, "pending")
+  const [laterPending, setLaterPending] = useState(canSetPending)
+
+  const clear = () => {
+    editor?.commands.clearContent()
+    setEmpty(true)
+    setFiles([])
+  }
+
+  // A scheduled reply to change comes into the composer; a draft in it is dropped only when the agent agrees. The change
+  // is pinned to the reply and the version its content was loaded from until the agent saves or stops: a newer view
+  // never moves it, and a reply that went out or was cancelled meanwhile gets the server's refusal on save, never a new
+  // reply in its place.
+  const loaded = useRef<{ id: string; version: number } | null>(null)
+  // The reply being changed as it was loaded, and its fields as the composer held them then: a change to another
+  // scheduled reply asks first when any of them was edited since.
+  const loadedView = useRef<ScheduledReplyView | null>(null)
+  const baseline = useRef("")
+  const fields = () =>
+    JSON.stringify([editor?.getHTML() ?? "", chosenFrom, to, cc, files.map((file) => file.key), laterPending])
+  const draft = useRef(false)
+  draft.current = loaded.current === null ? dirty : fields() !== baseline.current
+  // biome-ignore lint/correctness/useExhaustiveDependencies: loads once per scheduled reply chosen
+  useEffect(() => {
+    if (!editor || !editing || loaded.current?.id === editing.id) return
+    const load = async () => {
+      if (draft.current) {
+        const yes = await confirmDialog({
+          title: t("unsaved.discardTitle"),
+          message: t("compose.replaceDraft"),
+          confirmText: t("unsaved.discard"),
+          cancelText: t("unsaved.keepEditing"),
+          focusCancel: true,
+        })
+        if (!yes) {
+          // The change in progress stays; with none, the composer keeps its draft.
+          if (loadedView.current) onEditKeep(loadedView.current)
+          else onEditDone()
+          return
+        }
+      }
+      if (!mounted.current) return
+      loaded.current = { id: editing.id, version: editing.version }
+      loadedView.current = editing
+      setKind("reply")
+      setFrom(editing.from)
+      setTo(listText(editing.to))
+      setCc(listText(editing.cc))
+      setFiles(editing.files.map(pickedOf))
+      setLaterPending(editing.setPending && canSetPending)
+      editor.commands.setContent(editing.html)
+      setEmpty(editor.isEmpty)
+      setError(null)
+      baseline.current = JSON.stringify([
+        editor.getHTML(),
+        editing.from,
+        listText(editing.to),
+        listText(editing.cc),
+        editing.files.map((file) => file.id),
+        editing.setPending && canSetPending,
+      ])
+      editor.commands.focus()
+    }
+    void load()
+  }, [editor, editing?.id])
+
+  const stopEditing = () => {
+    loaded.current = null
+    loadedView.current = null
+    clear()
+    setTo(listText(compose.to))
+    setCc(listText(compose.cc))
+    onEditDone()
+  }
 
   const scanning = files.some((file) => file.source === "upload" && (!file.upload || file.upload.status === "scanning"))
   const sendable = files.filter(
@@ -173,17 +308,14 @@ export function Composer({ view }: { view: TicketView }) {
           ],
     )
 
-  const role = useMe().data?.role ?? "agent"
-  // "Send and set pending" only where this user may set pending (not on a closed ticket, unless an admin).
-  const canSetPending = mayChangeStatus(role, view.ticket.status, "pending")
-
-  const send = async (setPending: boolean) => {
-    if (!editor) return
+  /** What the composer holds as a request, or null (with the reason shown) when it cannot go. */
+  const collect = (setPending: boolean): ReplyInput | null => {
+    if (!editor) return null
     setError(null)
     if (empty && sendable.length === 0) {
       setError(t("compose.empty"))
       editor.commands.focus()
-      return
+      return null
     }
     const known = [...compose.to, ...compose.cc]
     const input: ReplyInput = {
@@ -199,8 +331,52 @@ export function Composer({ view }: { view: TicketView }) {
     }
     if (kind === "reply" && input.to.length === 0) {
       setError(t("compose.toRequired"))
-      return
+      return null
     }
+    return input
+  }
+
+  const refresh = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: qk.ticket(view.ticket.number) }),
+      queryClient.invalidateQueries({ queryKey: ["tickets"] }),
+    ])
+
+  /** A submission ID is kept only while no answer came: a refusal wrote nothing, so the next click is a new one. */
+  const answered = (failure: unknown) => {
+    if (failure instanceof ApiError && failure.status >= 400 && failure.status < 500) submission.current = null
+  }
+
+  /** "Send later" and "Save changes": the time dialog does the request; a refusal stays in it. */
+  const schedule = async (at: Date) => {
+    const input = collect(laterPending && canSetPending)
+    if (!input) throw new Error(t("compose.empty"))
+    const target = loaded.current
+    if (target) {
+      const { submissionId: _submission, kind: _kind, sendAt: _sendAt, ...rest } = input
+      await api.changeScheduled(target.id, { ...rest, sendAt: at.toISOString(), version: target.version })
+      showToast(t("compose.scheduleChanged", { time: formatTime(at, { seconds: false }) }), "success")
+      if (mounted.current) stopEditing()
+    } else {
+      submission.current = input.submissionId
+      await api.writeMessage(view.ticket.number, { ...input, sendAt: at.toISOString() }).catch((failure: unknown) => {
+        answered(failure)
+        throw failure
+      })
+      submission.current = null
+      showToast(t("compose.scheduled", { time: formatTime(at, { seconds: false }) }), "success")
+      if (mounted.current) clear()
+    }
+    await refresh()
+  }
+
+  const openLater = () => {
+    if (collect(laterPending && canSetPending)) setLater(true)
+  }
+
+  const send = async (setPending: boolean) => {
+    const input = collect(setPending)
+    if (!editor || !input) return
     // The same ID until the server answers: a repeated click or a retry after a lost answer finds the same message.
     submission.current = input.submissionId
     setBusy(true)
@@ -208,9 +384,7 @@ export function Composer({ view }: { view: TicketView }) {
       await api.writeMessage(view.ticket.number, input)
       submission.current = null
       if (!mounted.current) return
-      editor.commands.clearContent()
-      setEmpty(true)
-      setFiles([])
+      clear()
       showToast(
         kind === "note"
           ? t("compose.noteAdded")
@@ -219,11 +393,9 @@ export function Composer({ view }: { view: TicketView }) {
             : t("compose.replyQueued"),
         "success",
       )
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: qk.ticket(view.ticket.number) }),
-        queryClient.invalidateQueries({ queryKey: ["tickets"] }),
-      ])
+      await refresh()
     } catch (failure) {
+      answered(failure)
       if (mounted.current) setError(errorText(t, failure))
     } finally {
       if (mounted.current) setBusy(false)
@@ -249,7 +421,12 @@ export function Composer({ view }: { view: TicketView }) {
   )
 
   return (
-    <section className="ui-panel ui-composer" aria-labelledby={`${formId}-title`} data-kind={kind}>
+    <section
+      className="ui-panel ui-composer"
+      aria-labelledby={`${formId}-title`}
+      data-kind={kind}
+      data-editing={editing ? editing.id : undefined}
+    >
       <div className="ui-panel-head">
         <h2 id={`${formId}-title`}>{t("compose.title")}</h2>
         <fieldset className="ui-seg" aria-label={t("compose.kind")}>
@@ -259,7 +436,7 @@ export function Composer({ view }: { view: TicketView }) {
               type="button"
               data-kind={option}
               aria-pressed={kind === option}
-              disabled={busy || (option === "reply" && compose.listening)}
+              disabled={busy || (option === "reply" && compose.listening) || (option === "note" && Boolean(editing))}
               onClick={() => setKind(option)}
             >
               {t(`compose.kinds.${option}`)}
@@ -269,6 +446,19 @@ export function Composer({ view }: { view: TicketView }) {
       </div>
       <div className="ui-composer-body">
         {compose.listening ? <Banner tone="info" title={t("compose.listening")} /> : null}
+        {editing ? (
+          <Banner
+            tone="info"
+            title={t("compose.editingTitle", { time: formatTime(editing.sendAt, { seconds: false }) })}
+            action={
+              <button type="button" className="ui-btn ui-btn-sm" disabled={busy} onClick={stopEditing}>
+                {t("compose.stopEditing")}
+              </button>
+            }
+          >
+            {t("compose.editingHint")}
+          </Banner>
+        ) : null}
         {kind === "reply" ? (
           <ReplyFields
             compose={compose}
@@ -369,7 +559,19 @@ export function Composer({ view }: { view: TicketView }) {
             {t("compose.attach")}
           </button>
           {scanning ? <span className="ui-hint">{t("compose.waitScan")}</span> : null}
-          {kind === "reply" && canSetPending ? (
+          {kind === "reply" ? (
+            <button
+              type="button"
+              className={editing ? "ui-btn ui-btn-primary" : "ui-btn"}
+              disabled={busy || scanning || !editor || compose.listening}
+              onClick={openLater}
+              data-testid="composer-later"
+            >
+              <CalendarClock aria-hidden="true" />
+              {editing ? t("compose.saveChange") : t("compose.sendLater")}
+            </button>
+          ) : null}
+          {kind === "reply" && canSetPending && !editing ? (
             <button
               type="button"
               className="ui-btn"
@@ -380,25 +582,58 @@ export function Composer({ view }: { view: TicketView }) {
               {t("compose.sendOnly")}
             </button>
           ) : null}
-          <button
-            type="button"
-            className="ui-btn ui-btn-primary"
-            disabled={busy || scanning || !editor}
-            aria-busy={busy || undefined}
-            onClick={() => void send(kind === "reply" && canSetPending)}
-            data-testid="composer-send"
-          >
-            <Send aria-hidden="true" />
-            {busy
-              ? t("compose.sending")
-              : kind === "note"
-                ? t("compose.addNote")
-                : canSetPending
-                  ? t("compose.sendPending")
-                  : t("compose.sendReply")}
-          </button>
+          {editing ? null : (
+            <button
+              type="button"
+              className="ui-btn ui-btn-primary"
+              disabled={busy || scanning || !editor}
+              aria-busy={busy || undefined}
+              onClick={() => void send(kind === "reply" && canSetPending)}
+              data-testid="composer-send"
+            >
+              <Send aria-hidden="true" />
+              {busy
+                ? t("compose.sending")
+                : kind === "note"
+                  ? t("compose.addNote")
+                  : canSetPending
+                    ? t("compose.sendPending")
+                    : t("compose.sendReply")}
+            </button>
+          )}
         </div>
       </div>
+      {later ? (
+        <WhenDialog
+          title={editing ? t("compose.changeTitle") : t("compose.laterTitle")}
+          submitLabel={editing ? t("compose.saveChangeSubmit") : t("compose.laterSubmit")}
+          busyLabel={t("compose.scheduling")}
+          initial={editing?.sendAt}
+          onSubmit={schedule}
+          onClose={() => setLater(false)}
+          testId="composer-when"
+        >
+          {canSetPending ? (
+            <fieldset className="ui-check-list">
+              <legend className="ui-label">{t("compose.laterAction")}</legend>
+              {[true, false].map((pending) => (
+                <label key={String(pending)} className="ui-check-label">
+                  <input
+                    type="radio"
+                    className="ui-check"
+                    name={`${formId}-later-action`}
+                    checked={laterPending === pending}
+                    onChange={() => setLaterPending(pending)}
+                    data-pending={pending}
+                  />
+                  {pending ? t("compose.sendPending") : t("compose.sendOnly")}
+                </label>
+              ))}
+              <p className="ui-hint">{t("compose.laterActionHint")}</p>
+            </fieldset>
+          ) : null}
+        </WhenDialog>
+      ) : null}
     </section>
   )
 }

@@ -39,6 +39,7 @@ import {
 } from "@maane/shared"
 import { and, asc, type Column, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm"
 import { alias, QueryBuilder } from "drizzle-orm/pg-core"
+import { actionPassed } from "../actions/timed.ts"
 import { Categories } from "../categories/service.ts"
 import type { Db } from "../db/client.ts"
 import {
@@ -55,6 +56,7 @@ import {
   ticketCategory,
   ticketLink,
   ticketParticipant,
+  timedAction,
 } from "../db/schema.ts"
 import { storedFilePath } from "../files/paths.ts"
 import { linkViews } from "../links/service.ts"
@@ -254,11 +256,19 @@ export function searchCondition(term: string, scope: OrganizationScope): SQL {
   return inArray(ticket.id, found)
 }
 
+/** A snooze while its time is ahead; a past one (its job not run yet) reads as none. */
+function snoozedUntil(until: Date | null): string | null {
+  return until && until.getTime() > Date.now() ? until.toISOString() : null
+}
+
 export interface ListFilters {
   organization?: string
   /** A search term (plan 4.4), trimmed and well formed; it narrows the list like any other filter. */
   search?: string
-  /** Open work (new, open, on hold) by default (plan 4.1), every status, or one. */
+  /**
+   * Open work (new, open, on hold, not snoozed) by default (plans 4.1, 4.2), every status, one, or the snoozed; every
+   * status while searching unless one is chosen (plan 4.4).
+   */
   status: StatusFilter
   /** Only the tickets that carry this category. */
   category?: string
@@ -330,6 +340,7 @@ export class Tickets {
         messages: messages?.count ?? 0,
         createdAt: row.createdAt.toISOString(),
         lastActivityAt: row.lastActivityAt.toISOString(),
+        snoozedUntil: snoozedUntil(row.snoozedUntil),
       }
     })
     const last = rows.at(-1)
@@ -347,10 +358,15 @@ export class Tickets {
     if (filters.cursor && !cursor) throw new CursorError()
     const flagged = sql`(cardinality(${ticket.reviewFlags}) > 0 or exists (select 1 from ${message} where ${message.ticketId} = ${ticket.id} and cardinality(${message.reviewFlags}) > 0))`
     const statuses = statusesOf(filters.status)
+    // A snooze holds while its time is ahead, by the database's clock: the list never waits for its job (plan 4.2).
+    const snoozed = sql`(${ticket.snoozedUntil} is not null and ${ticket.snoozedUntil} > now())`
     const conditions = [
       inScope(scope, ticket.organizationId),
       filters.organization ? eq(ticket.organizationId, filters.organization) : undefined,
       statuses ? inArray(ticket.status, [...statuses]) : undefined,
+      // Open work leaves snoozed tickets out; the snoozed filter shows only them, of every status. A search with no
+      // status chosen runs on every status (plan 4.4), so it finds a snoozed ticket too.
+      filters.status === "open_work" ? sql`not ${snoozed}` : filters.status === "snoozed" ? snoozed : undefined,
       filters.category
         ? sql`exists (select 1 from ${ticketCategory} where ${ticketCategory.ticketId} = ${ticket.id} and ${ticketCategory.categoryId} = ${filters.category})`
         : undefined,
@@ -371,6 +387,7 @@ export class Tickets {
         organizationName: organization.name,
         createdAt: ticket.createdAt,
         lastActivityAt: ticket.lastActivityAt,
+        snoozedUntil: ticket.snoozedUntil,
         cursorAt: microseconds(ticket.lastActivityAt),
       })
       .from(ticket)
@@ -396,7 +413,7 @@ export class Tickets {
   async view(
     scope: OrganizationScope,
     number: number,
-  ): Promise<(Omit<TicketView, "compose"> & { ticketId: string; organizationSignature: string }) | null> {
+  ): Promise<(Omit<TicketView, "compose" | "scheduled"> & { ticketId: string; organizationSignature: string }) | null> {
     const [row] = await this.db
       .select({ ticket, organizationName: organization.name, signature: organization.signature })
       .from(ticket)
@@ -447,8 +464,13 @@ export class Tickets {
             unmatchedDeliveryAt: outbox.unmatchedDeliveryAt,
             unmatchedDeliverySource: outbox.unmatchedDeliverySource,
             unmatchedDeliveryEvent: outbox.unmatchedDeliveryEvent,
+            actionId: outbox.actionId,
+            actionVersion: outbox.actionVersion,
+            actionState: timedAction.state,
+            actionCurrent: timedAction.version,
           })
           .from(outbox)
+          .leftJoin(timedAction, eq(timedAction.id, outbox.actionId))
           .where(inArray(outbox.messageId, replyIds))
       : []
     const recipients = replyIds.length
@@ -517,6 +539,15 @@ export class Tickets {
             deliveryDetail: r.deliveryDetail,
           })),
         unmatchedDelivery: unmatchedOf(sent),
+        // A scheduled reply stopped before it went out (plan 4.2): Send again refuses it, so the view never offers it.
+        scheduledEnded:
+          sent.actionId !== null &&
+          !actionPassed(
+            sent.actionState === null || sent.actionCurrent === null
+              ? null
+              : { state: sent.actionState, version: sent.actionCurrent },
+            sent.actionVersion,
+          ),
       }
     }
     const views: MessageView[] = messages.map((m) => {
@@ -565,6 +596,7 @@ export class Tickets {
         fields: fieldNotices(m.fieldScans),
         attachments,
         links: clicked.get(m.id) ?? [],
+        scheduled: outboxes.some((o) => o.messageId === m.id && o.actionId !== null),
       }
     })
 
@@ -580,6 +612,8 @@ export class Tickets {
         createdAt: t.createdAt.toISOString(),
         lastActivityAt: t.lastActivityAt.toISOString(),
         categories: await workflow.categoriesOf(t.id),
+        snoozedUntil: snoozedUntil(t.snoozedUntil),
+        snoozeOverdue: t.snoozedUntil !== null && t.snoozedUntil.getTime() <= Date.now(),
       },
       participants,
       links: links.map((link) => ({ number: link.number, reason: link.reason as LinkReason })),

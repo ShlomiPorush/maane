@@ -410,7 +410,7 @@ export function createApp(ctx: AppContext) {
   const replies = new Replies(ctx.db, ctx.settings, ctx.jobs, ctx.filesDir, ctx.publicUrl)
   api.route("/", ticketRoutes(ctx.db, ctx.filesDir, replies))
   api.route("/", replyRoutes(ctx.db, ctx.settings, replies))
-  api.route("/", workflowRoutes(ctx.db))
+  api.route("/", workflowRoutes(ctx.db, ctx.jobs))
 
   app.route("/api/v1", api)
   app.route("/hooks", hookRoutes(ctx.db, ctx.settings))

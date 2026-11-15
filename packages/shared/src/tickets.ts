@@ -11,7 +11,7 @@ import type {
   TicketStatus,
 } from "./intake.ts"
 import type { TrackedLinkView } from "./links.ts"
-import type { ComposeView, DeliveryView, MessageDirection } from "./replies.ts"
+import type { ComposeView, DeliveryView, MessageDirection, ScheduledReplyView } from "./replies.ts"
 import type { CategoryRef } from "./workflow.ts"
 
 /**
@@ -68,6 +68,8 @@ export interface TicketSummary {
   messages: number
   createdAt: string
   lastActivityAt: string
+  /** Snoozed until this instant (plan 4.2), while that is still ahead; else null. */
+  snoozedUntil: string | null
 }
 
 export interface TicketList {
@@ -132,6 +134,8 @@ export interface MessageView {
   attachments: AttachmentView[]
   /** A reply: its links that were clicked and its history files that were downloaded (plan 3.4). */
   links: TrackedLinkView[]
+  /** A reply a scheduled reply made at its time (plan 4.2). */
+  scheduled: boolean
 }
 
 export interface TicketView {
@@ -147,6 +151,10 @@ export interface TicketView {
     lastActivityAt: string
     /** The ticket's categories, by name. */
     categories: CategoryRef[]
+    /** Snoozed until this instant (plan 4.2), while that is still ahead; else null. */
+    snoozedUntil: string | null
+    /** A snooze whose time passed and that has not ended yet (its job is late): the agent can still end it by hand. */
+    snoozeOverdue: boolean
   }
   participants: MailAddress[]
   /** Tickets this one is linked to, either way, that the user may see. */
@@ -158,6 +166,8 @@ export interface TicketView {
   categories: CategoryRef[]
   /** The organizations the user may move the ticket to (plan 4.1): none when they may not move it. */
   moveTargets: OrganizationRef[]
+  /** The ticket's scheduled replies (plan 4.2), newest first, in every state. */
+  scheduled: ScheduledReplyView[]
 }
 
 /** A row of the intake log: what processing did (live) or would have done (listening) with one message. */

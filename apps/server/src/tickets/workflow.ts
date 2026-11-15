@@ -4,11 +4,12 @@
 //
 // A move takes the ticket to another organization: an admin may move any ticket; an agent only between two
 // organizations they belong to. From then on its replies come from the new organization's addresses: the composer
-// offers them, and the From check of a reply (when written and when sent) reads the ticket's organization. Plans 4.2
-// and 4.3 add what a move does to scheduled replies and reminders.
+// offers them, and the From check of a reply (when written and when sent) reads the ticket's organization. A move
+// cancels the ticket's scheduled replies that have not gone to the send point, in its own transaction (plan 4.2).
 
 import type { CategoryRef, OrganizationRef, TicketStatus } from "@maane/shared"
 import { and, asc, eq, inArray, sql } from "drizzle-orm"
+import { cancelTicketActions } from "../actions/timed.ts"
 import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import { category, organization, ticket, ticketCategory } from "../db/schema.ts"
@@ -112,6 +113,8 @@ export class Workflow {
       if (!held || fromAddresses(await supportRules(tx), organizationId, held.supportAddress).from.length === 0)
         throw new Refusal("move_no_sending_address", 409)
       await tx.update(ticket).set({ organizationId }).where(eq(ticket.id, locked.id))
+      // Scheduled replies were written as the old organization (its From address, its signature): cancelled.
+      const cancelled = await cancelTicketActions(tx, locked.id, "move")
       await writeAudit(tx, user.actor, {
         action: "ticket.move",
         entityType: "ticket",
@@ -120,6 +123,7 @@ export class Workflow {
           ticket: locked.number,
           from: { id: locked.organizationId, name: names.find((row) => row.id === locked.organizationId)?.name },
           to: { id: target.id, name: target.name },
+          ...(cancelled ? { scheduledCancelled: cancelled } : {}),
         },
         ipAddress: user.ipAddress,
       })

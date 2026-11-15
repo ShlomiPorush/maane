@@ -1,6 +1,6 @@
-// The workflow of plan 4.1, mounted under /api/v1 behind its session, two-factor, CSRF, and Origin checks: a ticket's
-// status, categories, and organization (any user, within their scope, read on each request; a ticket outside it answers
-// 404), and the categories themselves at /admin/categories (admins only). A refusal answers {error: code, ...details}
+// The workflow of plans 4.1 and 4.2, mounted under /api/v1 behind its session, two-factor, CSRF, and Origin checks: a
+// ticket's status, categories, organization, and snooze (any user, within their scope, read on each request; a ticket
+// outside it answers 404), and the categories themselves at /admin/categories (admins only). A refusal answers {error: code, ...details}
 // with a stable code (apps/web/src/api/errors.ts explains each one).
 
 import { TICKET_STATUSES } from "@maane/shared"
@@ -8,8 +8,10 @@ import { type Context, Hono } from "hono"
 import { z } from "zod"
 import { Categories } from "../categories/service.ts"
 import type { Db } from "../db/client.ts"
+import type { JobQueue } from "../jobs/queue.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { visibleOrganizations } from "../organizations/scope.ts"
+import { Snoozes } from "../tickets/snooze.ts"
 import { Workflow, type WorkflowUser } from "../tickets/workflow.ts"
 import { type ApiEnv, clientIp } from "./request.ts"
 
@@ -20,6 +22,8 @@ const StatusBody = z.object({ status: z.enum(TICKET_STATUSES) })
 const CategoriesBody = z.object({ categories: z.array(z.string().regex(UUID)) })
 const MoveBody = z.object({ organizationId: z.string().regex(UUID) })
 const NameBody = z.object({ name: z.string() })
+/** A snooze's end, as an instant with its offset (the UI enters it in Israel time). */
+const SnoozeBody = z.object({ until: z.iso.datetime({ offset: true }) })
 
 type Handler = (c: Context<ApiEnv>) => Promise<Response>
 
@@ -49,9 +53,10 @@ function numberOf(c: Context<ApiEnv>): number {
   return number
 }
 
-export function workflowRoutes(db: Db): Hono<ApiEnv> {
+export function workflowRoutes(db: Db, jobs: JobQueue): Hono<ApiEnv> {
   const routes = new Hono<ApiEnv>()
   const workflow = new Workflow(db)
+  const snoozes = new Snoozes(db, jobs)
   const categories = new Categories(db)
   const scopeOf = (c: Context<ApiEnv>) => visibleOrganizations(db, c.get("user"))
   const userOf = (c: Context<ApiEnv>): WorkflowUser => ({
@@ -96,6 +101,24 @@ export function workflowRoutes(db: Db): Hono<ApiEnv> {
       const number = numberOf(c)
       const { organizationId } = await body(c, MoveBody)
       await workflow.move(await scopeOf(c), userOf(c), number, organizationId)
+      return c.json({ ok: true })
+    }),
+  )
+
+  routes.put(
+    "/tickets/:number/snooze",
+    refusals(async (c) => {
+      const number = numberOf(c)
+      const { until } = await body(c, SnoozeBody)
+      await snoozes.snooze(await scopeOf(c), userOf(c), number, new Date(until))
+      return c.json({ ok: true })
+    }),
+  )
+
+  routes.delete(
+    "/tickets/:number/snooze",
+    refusals(async (c) => {
+      await snoozes.wake(await scopeOf(c), userOf(c), numberOf(c))
       return c.json({ ok: true })
     }),
   )

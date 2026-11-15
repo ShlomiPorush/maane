@@ -6,8 +6,9 @@ import * as schema from "../db/schema.ts"
 import { errorFacts, log } from "../log.ts"
 
 // The job queues the server and the worker share. The worker runs every job; the server only queues the ones a user
-// asks for (a scanner, Graph, or SMTP connection test, a reply to send, an upload to scan) and reads their state,
-// through pg-boss's documented send and getJobById. The server never calls an outside service itself.
+// asks for (a scanner, Graph, or SMTP connection test, a reply to send, an upload to scan, a timed action or the end
+// of a snooze at its time) and reads their state, through pg-boss's documented send (with `startAfter` for a time) and
+// getJobById. The server never calls an outside service itself.
 
 /** The scanner self-test: on worker start, every hour, when the scanner address changes, and for a connection test. */
 export const SCANNER_SELF_TEST = "scanner-self-test"
@@ -30,6 +31,16 @@ export const UPLOAD_SCAN = "upload-scan"
 export const SMTP_TEST = "smtp-test"
 /** SMTP2GO's activity search for recipients without a final delivery status (plan 3.3), every ten minutes. */
 export const DELIVERY_POLL = "delivery-poll"
+/** A timed action at its time (plan 4.2): `{ actionId, version }`, queued with `startAfter` at the action's time. */
+export const TIMED_ACTION = "timed-action"
+/** The end of a snooze at its time (plan 4.2): `{ ticketId, version }`, queued with `startAfter` at that time. */
+export const SNOOZE_END = "snooze-end"
+/**
+ * Every five minutes (plan 4.2): queues again the job of each scheduled reply and each snooze whose time passed a while
+ * ago and that still waits (its job failed for good, or was lost). Both jobs are safe to run twice: each names its
+ * version, and a reply has at most one outbox row per action and version.
+ */
+export const TIMED_RECOVER = "timed-recover"
 
 /**
  * A browser notification about one ticket (plan 4.5): `PushJob`, IDs only. Intake queues it in the transaction that
@@ -54,6 +65,10 @@ export const QUEUE_OPTIONS: Record<string, QueueOptions> = {
   [UPLOAD_SCAN]: { retryLimit: 3, retryDelay: 15, retryBackoff: true, expireInSeconds: 15 * 60 },
   // Each push has its own deadline (PUSH_TIMEOUT_MS); the run ends long before this.
   [PUSH_NOTIFY]: { retryLimit: 0, expireInSeconds: 15 * 60 },
+  // A timed job only writes rows (the reply it makes is sent by its own send-reply job); its version keeps a retry or
+  // a late run from acting twice. pg-boss keeps a job until its startAfter plus the retention, so a far time is kept.
+  [TIMED_ACTION]: { retryLimit: 5, retryDelay: 30, retryBackoff: true, expireInSeconds: 5 * 60 },
+  [SNOOZE_END]: { retryLimit: 5, retryDelay: 30, retryBackoff: true, expireInSeconds: 5 * 60 },
 }
 
 /** pg-boss's states of a job, as the server reports them to the UI. */
@@ -66,7 +81,7 @@ export interface JobQueue {
    * Queues a job inside the caller's transaction (pg-boss's documented `db` option): the job exists exactly when the
    * transaction commits. Throws when the queue takes nothing, so the transaction rolls back.
    */
-  sendIn(db: QueueDb, name: string, data: object): Promise<string>
+  sendIn(db: QueueDb, name: string, data: object, options?: { startAfter?: Date }): Promise<string>
   /** A job's state and the output its handler returned, or null when no such job exists. */
   job(name: string, id: string): Promise<{ state: JobState; output: unknown } | null>
   stop(): Promise<void>
@@ -85,14 +100,16 @@ export async function openJobQueue(connectionString: string): Promise<JobQueue> 
   await boss.createQueue(SMTP_TEST)
   await boss.createQueue(SEND_REPLY, QUEUE_OPTIONS[SEND_REPLY])
   await boss.createQueue(UPLOAD_SCAN, QUEUE_OPTIONS[UPLOAD_SCAN])
+  await boss.createQueue(TIMED_ACTION, QUEUE_OPTIONS[TIMED_ACTION])
+  await boss.createQueue(SNOOZE_END, QUEUE_OPTIONS[SNOOZE_END])
   return {
     async send(name, data = {}) {
       const id = await boss.send(name, data)
       if (!id) throw new Error(`the queue did not accept a ${name} job`)
       return id
     },
-    async sendIn(db, name, data) {
-      const id = await boss.send(name, data, { db })
+    async sendIn(db, name, data, options = {}) {
+      const id = await boss.send(name, data, { db, ...(options.startAfter ? { startAfter: options.startAfter } : {}) })
       if (!id) throw new Error(`the queue did not accept a ${name} job`)
       return id
     },

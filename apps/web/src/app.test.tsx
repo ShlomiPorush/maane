@@ -1383,6 +1383,7 @@ describe("tickets", () => {
     messages: 1,
     createdAt: when,
     lastActivityAt: when,
+    snoozedUntil: null,
     ...over,
   })
   const list = (tickets: unknown[]) =>
@@ -1415,6 +1416,7 @@ describe("tickets", () => {
     listening = false,
     ticketOver: Record<string, unknown> = {},
     moveTargets: { id: string; name: string }[] = [{ id: ORG_B, name: "Beta" }],
+    scheduled: object[] = [],
   ) =>
     ok({
       ticket: {
@@ -1428,6 +1430,8 @@ describe("tickets", () => {
         createdAt: when,
         lastActivityAt: when,
         categories: [{ id: CATEGORY, name: "Billing" }],
+        snoozedUntil: null,
+        snoozeOverdue: false,
         ...ticketOver,
       },
       participants: [{ address: "dana@example.com", name: "Dana Customer" }],
@@ -1480,6 +1484,7 @@ describe("tickets", () => {
         { id: CATEGORY_2, name: "Shipping" },
       ],
       moveTargets,
+      scheduled,
     })
 
   it("lists tickets across organizations, and keeps the filters in the address", async () => {
@@ -1823,6 +1828,495 @@ describe("tickets", () => {
     expect(posted.parts).toHaveLength(1)
   })
 
+  it("schedules a reply for a date and time in Israel time with its status action; refuses an hour Israel skips (plan 4.2)", async () => {
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view(),
+      "/api/v1/tickets/7/messages": { status: 201, body: { scheduled: "00000000-0000-4000-8000-0000000000cc" } },
+    })
+    const later = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLButtonElement>('[data-testid="composer-later"]')
+      expect(found).not.toBeNull()
+      return found as HTMLButtonElement
+    })
+    expect(later.textContent).toBe(he("compose.sendLater"))
+    // Nothing to send yet: the composer says so before asking for a time.
+    await act(async () => later.click())
+    expect(text()).toContain(he("compose.empty"))
+    expect(document.querySelector('[data-testid="composer-when"]')).toBeNull()
+    await act(async () =>
+      document.querySelector<HTMLInputElement>('.ui-composer-ticket-files input[type="checkbox"]')?.click(),
+    )
+    await act(async () => later.click())
+    const form = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLFormElement>('[data-testid="composer-when"]')
+      expect(found).not.toBeNull()
+      return found as HTMLFormElement
+    })
+    expect(form.textContent).toContain(he("when.zone"))
+    const date = form.querySelector<HTMLInputElement>('input[type="date"]') as HTMLInputElement
+    const time = form.querySelector<HTMLInputElement>('input[data-field="time"]') as HTMLInputElement
+    const submit = () => document.querySelector<HTMLButtonElement>('[data-testid="composer-when-submit"]')?.click()
+    // 27 March 2099: Israel's clock skips from 02:00 to 03:00.
+    await act(async () => {
+      type(date, "2099-03-27")
+      type(time, "02:30")
+    })
+    await act(async () => submit())
+    expect(text()).toContain(he("when.missingHour"))
+    // "Send" leaves the status: the status action is chosen here and applies when the reply goes.
+    await act(async () => form.querySelector<HTMLInputElement>('input[data-pending="false"]')?.click())
+    await act(async () => {
+      type(date, "2099-01-10")
+      type(time, "09:30")
+    })
+    await act(async () => submit())
+    const posted = await vi.waitFor(() => {
+      const found = requests.find((r) => r.method === "POST" && r.url === "/api/v1/tickets/7/messages")
+      expect(found).toBeDefined()
+      return JSON.parse(found?.body ?? "null") as { kind: string; sendAt: string; setPending: boolean }
+    })
+    expect(posted).toMatchObject({ kind: "reply", sendAt: "2099-01-10T07:30:00.000Z", setPending: false })
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="composer-when"]')).toBeNull())
+  })
+
+  it("shows scheduled replies with their state; cancels one after asking, and changes one as a new version (plan 4.2)", async () => {
+    const SCHEDULED = "00000000-0000-4000-8000-0000000000dd"
+    const entry = (over: Record<string, unknown>) => ({
+      id: SCHEDULED,
+      version: 3,
+      state: "scheduled",
+      reason: null,
+      sendAt: "2099-01-10T07:30:00.000Z",
+      createdAt: when,
+      updatedAt: when,
+      author: { id: "u1", name: "Agent Name" },
+      editable: true,
+      from: "help@example.com",
+      to: [{ address: "dana@example.com", name: "Dana Customer" }],
+      cc: [],
+      text: `${SHALOM}\nSecond line`,
+      html: `<p>${SHALOM}</p>`,
+      setPending: true,
+      files: [],
+      messageId: null,
+      outboxState: null,
+      ...over,
+    })
+    const scheduled = [
+      entry({}),
+      entry({ id: "00000000-0000-4000-8000-0000000000ee", state: "cancelled", reason: "customer_reply" }),
+    ]
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [], false, {}, [{ id: ORG_B, name: "Beta" }], scheduled),
+      [`/api/v1/scheduled/${SCHEDULED}/cancel`]: ok({ ok: true }),
+      [`/api/v1/scheduled/${SCHEDULED}`]: ok({ ok: true }),
+    })
+    const card = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>(`[data-scheduled="${SCHEDULED}"]`)
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(card.textContent).toContain(he("scheduled.state.scheduled"))
+    // 07:30 UTC on 10 January is 09:30 in Israel.
+    expect(card.textContent).toContain("10/01/2099 09:30")
+    expect(card.querySelector('p[dir="auto"]')?.textContent).toBe(SHALOM)
+    expect(text()).toContain(he("scheduled.reason.customer_reply"))
+
+    await act(async () => card.querySelector<HTMLButtonElement>('[data-testid="scheduled-cancel"]')?.click())
+    const question = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[role=alertdialog]")
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    const confirm = Array.from(question.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === he("scheduled.cancel"),
+    )
+    await act(async () => confirm?.click())
+    await vi.waitFor(() =>
+      expect(requests.some((r) => r.method === "POST" && r.url === `/api/v1/scheduled/${SCHEDULED}/cancel`)).toBe(true),
+    )
+
+    await act(async () => button(he("scheduled.change"))?.click())
+    const composer = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>(`.ui-composer[data-editing="${SCHEDULED}"]`)
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(composer.textContent).toContain(he("compose.editingHint"))
+    // While it is being changed the composer only saves it (with its time) or stops.
+    expect(composer.querySelector('[data-testid="composer-send"]')).toBeNull()
+    await act(async () => composer.querySelector<HTMLButtonElement>('[data-testid="composer-later"]')?.click())
+    const form = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLFormElement>('[data-testid="composer-when"]')
+      expect(found).not.toBeNull()
+      return found as HTMLFormElement
+    })
+    expect(form.querySelector<HTMLInputElement>('input[type="date"]')?.value).toBe("2099-01-10")
+    expect(form.querySelector<HTMLInputElement>('input[data-field="time"]')?.value).toBe("09:30")
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-when-submit"]')?.click())
+    const put = await vi.waitFor(() => {
+      const found = requests.find((r) => r.method === "PUT" && r.url === `/api/v1/scheduled/${SCHEDULED}`)
+      expect(found).toBeDefined()
+      return JSON.parse(found?.body ?? "null") as Record<string, unknown>
+    })
+    expect(put).toMatchObject({ version: 3, sendAt: "2099-01-10T07:30:00.000Z", setPending: true })
+    expect(put).not.toHaveProperty("submissionId")
+  })
+
+  it("keeps a change on the version it loaded and on its reply: never a newer version, never a new reply (review T3, T4)", async () => {
+    const EDITED = "00000000-0000-4000-8000-0000000000d5"
+    const OTHER = "00000000-0000-4000-8000-0000000000d6"
+    const entry = (id: string, over: Record<string, unknown> = {}) => ({
+      id,
+      version: 3,
+      state: "scheduled",
+      reason: null,
+      sendAt: "2099-01-10T07:30:00.000Z",
+      createdAt: when,
+      updatedAt: when,
+      author: { id: "u1", name: "Agent Name" },
+      editable: id === EDITED,
+      from: "help@example.com",
+      to: [{ address: "dana@example.com", name: "Dana Customer" }],
+      cc: [],
+      text: "Hello",
+      html: "<p>Hello</p>",
+      setPending: false,
+      files: [],
+      messageId: null,
+      outboxState: null,
+      ...over,
+    })
+    let edited: Record<string, unknown> = entry(EDITED)
+    let answer: TransportResponse = { status: 409, body: { error: "scheduled_changed" } }
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": () =>
+        view("v1", [], false, {}, [{ id: ORG_B, name: "Beta" }], [edited, entry(OTHER, { editable: false })]),
+      [`/api/v1/scheduled/${OTHER}/cancel`]: () => {
+        // Meanwhile another tab saved a newer version of the reply being changed here.
+        edited = entry(EDITED, { version: 4, text: "Newer", html: "<p>Newer</p>" })
+        return ok({ ok: true })
+      },
+      [`/api/v1/scheduled/${EDITED}/cancel`]: () => {
+        edited = entry(EDITED, { state: "cancelled", reason: "agent" })
+        return ok({ ok: true })
+      },
+      [`/api/v1/scheduled/${EDITED}`]: () => answer,
+      "/api/v1/tickets/7/messages": { status: 201, body: { id: "00000000-0000-4000-8000-0000000000bb" } },
+    })
+    const card = (id: string) => document.querySelector<HTMLElement>(`[data-scheduled="${id}"]`)
+    await vi.waitFor(() => expect(card(EDITED)).not.toBeNull())
+    await act(async () => button(he("scheduled.change"))?.click())
+    await vi.waitFor(() => expect(document.querySelector(`.ui-composer[data-editing="${EDITED}"]`)).not.toBeNull())
+    const views = () => requests.filter((r) => r.method === "GET" && r.url.startsWith("/api/v1/tickets/7")).length
+    const cancel = async (id: string) => {
+      const before = views()
+      await act(async () => card(id)?.querySelector<HTMLButtonElement>('[data-testid="scheduled-cancel"]')?.click())
+      await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
+      const yes = Array.from(document.querySelectorAll<HTMLButtonElement>("[role=alertdialog] button")).find(
+        (b) => b.textContent?.trim() === he("scheduled.cancel"),
+      )
+      await act(async () => yes?.click())
+      await vi.waitFor(() => expect(views()).toBeGreaterThan(before))
+    }
+    const save = async () => {
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-later"]')?.click())
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="composer-when"]')).not.toBeNull())
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-when-submit"]')?.click())
+    }
+    const puts = () => requests.filter((r) => r.method === "PUT" && r.url === `/api/v1/scheduled/${EDITED}`)
+
+    // A newer version arrived in the view: saving still names the version the composer loaded, and the server refuses.
+    await cancel(OTHER)
+    await save()
+    await vi.waitFor(() => expect(puts()).toHaveLength(1))
+    const first = JSON.parse(puts()[0]?.body ?? "null") as { version: number; html: string }
+    expect(first.version).toBe(3)
+    expect(first.html).toContain("Hello")
+    await vi.waitFor(() => expect(text()).toContain(he("errors.code.scheduledChanged")))
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(`[role=dialog] button[aria-label="${he("common.close")}"]`)?.click(),
+    )
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="composer-when"]')).toBeNull())
+
+    // The reply was cancelled meanwhile: the change stays on it, the server's refusal shows, and nothing new is sent.
+    answer = { status: 409, body: { error: "scheduled_not_open" } }
+    await cancel(EDITED)
+    expect(document.querySelector(`.ui-composer[data-editing="${EDITED}"]`)).not.toBeNull()
+    await save()
+    await vi.waitFor(() => expect(puts()).toHaveLength(2))
+    expect(JSON.parse(puts()[1]?.body ?? "null")).toMatchObject({ version: 3 })
+    await vi.waitFor(() => expect(text()).toContain(he("errors.code.scheduledNotOpen")))
+    expect(requests.some((r) => r.method === "POST" && r.url === "/api/v1/tickets/7/messages")).toBe(false)
+  })
+
+  it("asks before a change to another scheduled reply drops unsaved edits of the one being changed (review T11)", async () => {
+    const FIRST = "00000000-0000-4000-8000-0000000000d7"
+    const SECOND = "00000000-0000-4000-8000-0000000000d8"
+    const entry = (id: string, address: string) => ({
+      id,
+      version: 1,
+      state: "scheduled",
+      reason: null,
+      sendAt: "2099-01-10T07:30:00.000Z",
+      createdAt: when,
+      updatedAt: when,
+      author: { id: "u1", name: "Agent Name" },
+      editable: true,
+      from: "help@example.com",
+      to: [{ address, name: null }],
+      cc: [],
+      text: "Hello",
+      html: "<p>Hello</p>",
+      setPending: false,
+      files: [],
+      messageId: null,
+      outboxState: null,
+    })
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view(
+        "v1",
+        [],
+        false,
+        {},
+        [{ id: ORG_B, name: "Beta" }],
+        [entry(FIRST, "dana@example.com"), entry(SECOND, "lee@example.com")],
+      ),
+    })
+    const change = async (id: string) => {
+      const card = await vi.waitFor(() => {
+        const found = document.querySelector<HTMLElement>(`[data-scheduled="${id}"]`)
+        expect(found).not.toBeNull()
+        return found as HTMLElement
+      })
+      const found = Array.from(card.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === he("scheduled.change"),
+      )
+      await act(async () => found?.click())
+    }
+    const editingId = () => document.querySelector(".ui-composer")?.getAttribute("data-editing")
+    const toField = () => document.querySelector<HTMLInputElement>('.ui-composer input[id$="-to"]') as HTMLInputElement
+    const answer = async (label: string) => {
+      const question = await vi.waitFor(() => {
+        const found = document.querySelector<HTMLElement>("[role=alertdialog]")
+        expect(found).not.toBeNull()
+        return found as HTMLElement
+      })
+      const found = Array.from(question.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+      await act(async () => found?.click())
+      await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).toBeNull())
+    }
+
+    // Nothing changed in the first: the second loads at once.
+    await change(FIRST)
+    await vi.waitFor(() => expect(editingId()).toBe(FIRST))
+    await change(SECOND)
+    await vi.waitFor(() => expect(editingId()).toBe(SECOND))
+    expect(document.querySelector("[role=alertdialog]")).toBeNull()
+    expect(toField().value).toBe("lee@example.com")
+
+    // An unsaved edit: the switch asks; keeping it stays on the reply being changed, with the edit.
+    await act(async () => type(toField(), "kim@example.com"))
+    await change(FIRST)
+    await answer(he("unsaved.keepEditing"))
+    await vi.waitFor(() => expect(editingId()).toBe(SECOND))
+    expect(toField().value).toBe("kim@example.com")
+
+    // Discarding it loads the other reply.
+    await change(FIRST)
+    await answer(he("unsaved.discard"))
+    await vi.waitFor(() => expect(editingId()).toBe(FIRST))
+    expect(toField().value).toBe("dana@example.com")
+  })
+
+  it("starts a new submission after a refusal, and keeps it while no answer came (review T8)", async () => {
+    const answers: TransportResponse[] = [
+      { status: 500, body: { error: "internal" } },
+      { status: 409, body: { error: "submission_reused" } },
+      { status: 201, body: { id: "00000000-0000-4000-8000-0000000000bb" } },
+    ]
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view(),
+      "/api/v1/tickets/7/messages": () => answers.shift() ?? ok({}),
+    })
+    const box = () => document.querySelector<HTMLInputElement>('.ui-composer-ticket-files input[type="checkbox"]')
+    await vi.waitFor(() => expect(box()).not.toBeNull())
+    await act(async () => box()?.click())
+    const posts = () =>
+      requests
+        .filter((r) => r.method === "POST" && r.url === "/api/v1/tickets/7/messages")
+        .map((r) => (JSON.parse(r.body ?? "null") as { submissionId: string }).submissionId)
+    const send = async (count: number) => {
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-send"]')?.click())
+      await vi.waitFor(() => expect(posts()).toHaveLength(count))
+    }
+    // The server failed without saying whether it wrote: the retry is the same submission.
+    await send(1)
+    await vi.waitFor(() => expect(text()).toContain(he("errors.server")))
+    await send(2)
+    expect(posts()[1]).toBe(posts()[0])
+    // A refusal wrote nothing: the next click is a new submission.
+    await vi.waitFor(() => expect(text()).toContain(he("errors.code.submissionReused")))
+    await send(3)
+    expect(posts()[2]).not.toBe(posts()[1])
+  })
+
+  it("offers Send again for a failed reply, but not for a scheduled reply that ended before it went out (review T7)", async () => {
+    const failed = (id: string, scheduledEnded: boolean) =>
+      reply({
+        id,
+        scheduled: true,
+        delivery: {
+          state: "failed",
+          problem: "listening",
+          unmatchedDelivery: null,
+          scheduledEnded,
+          recipients: [
+            { address: "dana@example.com", name: null, kind: "to", state: "pending", provider: null, marked: false },
+          ],
+        },
+      })
+    const ENDED = "00000000-0000-4000-8000-0000000000a1"
+    const PASSED = "00000000-0000-4000-8000-0000000000a2"
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [failed(ENDED, true), failed(PASSED, false)]),
+    })
+    const card = (id: string) => document.querySelector<HTMLElement>(`[data-message="${id}"]`)
+    await vi.waitFor(() => expect(card(PASSED)).not.toBeNull())
+    const resend = (id: string) =>
+      Array.from(card(id)?.querySelectorAll("button") ?? []).filter(
+        (b) => b.textContent?.trim() === he("delivery.resend"),
+      )
+    expect(card(ENDED)?.textContent).toContain(he("delivery.problem.listening"))
+    expect(resend(ENDED)).toHaveLength(0)
+    expect(resend(PASSED)).toHaveLength(1)
+  })
+
+  it("shows a scheduled reply still waiting minutes after its time as late, with the way out (plan 4.2)", async () => {
+    const LATE = "00000000-0000-4000-8000-0000000000d1"
+    const RECENT = "00000000-0000-4000-8000-0000000000d2"
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
+    const entry = (id: string, sendAt: string) => ({
+      id,
+      version: 1,
+      state: "scheduled",
+      reason: null,
+      sendAt,
+      createdAt: when,
+      updatedAt: when,
+      author: { id: "u1", name: "Agent Name" },
+      editable: true,
+      from: "help@example.com",
+      to: [{ address: "dana@example.com", name: "Dana Customer" }],
+      cc: [],
+      text: "Hello",
+      html: "<p>Hello</p>",
+      setPending: false,
+      files: [],
+      messageId: null,
+      outboxState: null,
+    })
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view(
+        "v1",
+        [],
+        false,
+        {},
+        [{ id: ORG_B, name: "Beta" }],
+        [entry(LATE, ago(45)), entry(RECENT, ago(10))],
+      ),
+    })
+    const card = (id: string) =>
+      vi.waitFor(() => {
+        const found = document.querySelector<HTMLElement>(`[data-scheduled="${id}"]`)
+        expect(found).not.toBeNull()
+        return found as HTMLElement
+      })
+    // 45 minutes past its time and still scheduled (its job and the worker's retries did not send it): the view says so
+    // and offers the way out.
+    const late = await card(LATE)
+    expect(late.getAttribute("data-late")).toBe("true")
+    expect(late.textContent).toContain(he("scheduled.state.late"))
+    expect(late.textContent).toContain(he("scheduled.wasAt"))
+    expect(late.querySelector('[data-testid="scheduled-late"]')?.textContent).toBe(he("scheduled.late"))
+    expect(late.querySelector('[data-testid="scheduled-cancel"]')).not.toBeNull()
+    // Ten minutes past its time is within the worker's retries: still scheduled, nothing said.
+    const recent = await card(RECENT)
+    expect(recent.hasAttribute("data-late")).toBe(false)
+    expect(recent.textContent).toContain(he("scheduled.state.scheduled"))
+    expect(recent.textContent).not.toContain(he("scheduled.state.late"))
+    expect(recent.querySelector('[data-testid="scheduled-late"]')).toBeNull()
+  })
+
+  it("snoozes a ticket until a time in Israel time, and ends the snooze by hand (plan 4.2)", async () => {
+    let snoozed: string | null = null
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": () => view("v1", [], false, { snoozedUntil: snoozed }),
+      "/api/v1/tickets/7/snooze": (request) => {
+        snoozed = request.method === "PUT" ? (JSON.parse(request.body ?? "{}") as { until: string }).until : null
+        return ok({ ok: true })
+      },
+    })
+    const control = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-testid="ticket-snooze"]')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(control.textContent).toContain(he("ticket.snooze.none"))
+    await act(async () => button(he("ticket.snooze.open"))?.click())
+    const form = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLFormElement>('[data-testid="snooze-when"]')
+      expect(found).not.toBeNull()
+      return found as HTMLFormElement
+    })
+    await act(async () => {
+      type(form.querySelector('input[type="date"]') as HTMLInputElement, "2099-07-01")
+      type(form.querySelector('input[data-field="time"]') as HTMLInputElement, "08:00")
+    })
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="snooze-when-submit"]')?.click())
+    await vi.waitFor(() => {
+      const put = requests.find((r) => r.method === "PUT" && r.url === "/api/v1/tickets/7/snooze")
+      // Summer time: 08:00 in Israel is 05:00 UTC.
+      expect(JSON.parse(put?.body ?? "null")).toEqual({ until: "2099-07-01T05:00:00.000Z" })
+    })
+    await vi.waitFor(() => expect(control.getAttribute("data-snoozed")).toBe(""))
+    expect(text()).toContain(he("ticket.snooze.tag", { time: "01/07/2099 08:00" }))
+    await act(async () => button(he("ticket.snooze.end"))?.click())
+    await vi.waitFor(() =>
+      expect(requests.some((r) => r.method === "DELETE" && r.url === "/api/v1/tickets/7/snooze")).toBe(true),
+    )
+  })
+
+  it("still offers to end a snooze whose time passed while its end is late (review T2)", async () => {
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [], false, { snoozedUntil: null, snoozeOverdue: true }),
+      "/api/v1/tickets/7/snooze": ok({ ok: true }),
+    })
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="ticket-snooze"]')).not.toBeNull())
+    await act(async () => button(he("ticket.snooze.end"))?.click())
+    await vi.waitFor(() =>
+      expect(requests.some((r) => r.method === "DELETE" && r.url === "/api/v1/tickets/7/snooze")).toBe(true),
+    )
+  })
+
   it("shows a ticket's messages in a sandboxed frame, what was blocked, and each file's status in words", async () => {
     await renderAt("/tickets/7", { "/api/setup/status": status(), "/api/v1/me": admin, "/api/v1/tickets/7": view() })
     const frame = await vi.waitFor(() => {
@@ -2004,6 +2498,65 @@ describe("tickets", () => {
     await vi.waitFor(() => expect(fields()[0]?.value).toBe("eight@example.com"))
     expect(fields()[1]?.value).toBe("")
     expect(document.querySelector(".ui-editor-text")?.textContent).toBe("")
+  })
+
+  it("never carries a scheduled reply being changed to another ticket (review T4)", async () => {
+    const SCHEDULED = "00000000-0000-4000-8000-0000000000d7"
+    const scheduled = {
+      id: SCHEDULED,
+      version: 1,
+      state: "scheduled",
+      reason: null,
+      sendAt: "2099-01-10T07:30:00.000Z",
+      createdAt: when,
+      updatedAt: when,
+      author: { id: "u1", name: "Agent Name" },
+      editable: true,
+      from: "help@example.com",
+      to: [{ address: "dana@example.com", name: "Dana Customer" }],
+      cc: [],
+      text: "Hello",
+      html: "<p>Hello</p>",
+      setPending: false,
+      files: [],
+      messageId: null,
+      outboxState: null,
+    }
+    const body = view().body as { ticket: { number: number } }
+    // Ticket 8 first, so it is in the cache and shows at once when the agent goes back to it: the page stays mounted.
+    await renderAt("/tickets/8", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [], false, {}, [{ id: ORG_B, name: "Beta" }], [scheduled]),
+      "/api/v1/tickets/8": ok({ ...body, ticket: { ...body.ticket, number: 8 } }),
+    })
+    await vi.waitFor(() => expect(document.querySelector(".ui-composer")).not.toBeNull())
+    await act(async () => {
+      void router?.navigate("/tickets/7")
+    })
+    await vi.waitFor(() => expect(button(he("scheduled.change"))).toBeDefined())
+    await act(async () => button(he("scheduled.change"))?.click())
+    await vi.waitFor(() => expect(document.querySelector(`.ui-composer[data-editing="${SCHEDULED}"]`)).not.toBeNull())
+    for (const number of [8, 7]) {
+      await act(async () => {
+        void router?.navigate(`/tickets/${number}`)
+      })
+      // Leaving the ticket with the reply loaded in the composer asks first (its text counts as unsaved).
+      if (number === 8) {
+        const question = await vi.waitFor(() => {
+          const found = document.querySelector<HTMLElement>("[role=alertdialog]")
+          expect(found).not.toBeNull()
+          return found as HTMLElement
+        })
+        const leave = Array.from(question.querySelectorAll("button")).find(
+          (b) => b.textContent?.trim() === he("unsaved.leave"),
+        )
+        await act(async () => leave?.click())
+      }
+      await vi.waitFor(() => expect(document.querySelector(".ui-composer")).not.toBeNull())
+      await vi.waitFor(() => expect(where()).toBe(`/tickets/${number}`))
+      expect(document.querySelector(".ui-composer[data-editing]")).toBeNull()
+    }
   })
 
   it("shows each recipient's state, and sends an unknown reply again only after asking", async () => {

@@ -7,10 +7,16 @@
 // repeated or lost request find the same message. Only the ticket's own files and the user's own uploads can be
 // attached, and the server reads their bytes itself. The From address must belong to the ticket's organization, and
 // the send point refuses a reply while intake listens (the worker checks both again when it sends).
+//
+// A scheduled reply (plan 4.2) is built here too, at once, dated at its time, and stored as its timed action's version
+// (`scheduled_reply`): the worker writes it at its time through write.ts, as submit writes a reply sent now. Its author
+// changes it (a new version, built again) and anyone who sees the ticket cancels it, until it starts sending.
 
 import { createHash, randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import {
+  type ActionReason,
+  type ActionState,
   ADDRESS_MAX,
   ATTACHABLE_UPLOAD_STATUSES,
   ATTACHMENTS_MAX,
@@ -18,15 +24,20 @@ import {
   type MailAddress,
   MESSAGE_MAX_BYTES,
   MESSAGES,
+  mayChangeStatus,
+  type OutboxState,
   outboxStateOf,
   parseExactAddress,
   RECIPIENTS_MAX,
   REPLY_HTML_MAX,
+  type ScheduledReplyView,
   STORED_STATUSES,
+  type TicketStatus,
   type UploadView,
 } from "@maane/shared"
 import { and, asc, desc, eq, exists, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import { z } from "zod"
+import { actionPassed, lockAction, OPEN_ACTION_STATES, setActionState } from "../actions/timed.ts"
 import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import {
@@ -36,15 +47,16 @@ import {
   organization,
   outbox,
   outboxRecipient,
+  scheduledReply,
   storedFile,
   ticket,
   ticketParticipant,
-  trackedLink,
+  timedAction,
   upload,
 } from "../db/schema.ts"
 import { refreshDeliveryFlag } from "../delivery/service.ts"
 import { storedFilePath } from "../files/paths.ts"
-import { type JobQueue, SEND_REPLY, transactionWithJobs, UPLOAD_SCAN } from "../jobs/queue.ts"
+import { type JobQueue, SEND_REPLY, TIMED_ACTION, transactionWithJobs, UPLOAD_SCAN } from "../jobs/queue.ts"
 import { linkBase, ReplyLinks } from "../links/service.ts"
 import { contentIdsIn, sanitizeMailHtml } from "../mail/html.ts"
 import { Refusal } from "../organizations/refusal.ts"
@@ -66,6 +78,7 @@ import {
   storedBody,
 } from "./mail.ts"
 import { belongsTo, fromAddresses, supportRules } from "./rules.ts"
+import { type BuiltReply, type ReadyMessage, type ReplyFile, writeMessage } from "./write.ts"
 
 /** The user a request acts for. */
 export type ReplyUser = { id: string; role: string; actor: Actor; ipAddress: string | null }
@@ -84,8 +97,23 @@ export const ReplyBody = z.object({
   parts: z.array(z.uuid()).max(ATTACHMENTS_MAX),
   /** A reply only: set the ticket to pending in the reply's transaction (plan 4.1); absent leaves the status. */
   setPending: z.boolean().optional(),
+  /** A reply only: send it at this instant instead of now (plan 4.2). */
+  sendAt: z.iso.datetime({ offset: true }).optional(),
 })
 export type ReplyBodyInput = z.infer<typeof ReplyBody>
+
+/** A change of a scheduled reply (plan 4.2): everything again, its time, and the version it changes. */
+export const ScheduledBody = ReplyBody.omit({ submissionId: true, kind: true, sendAt: true }).extend({
+  sendAt: z.iso.datetime({ offset: true }),
+  version: z.number().int().positive(),
+})
+export type ScheduledBodyInput = z.infer<typeof ScheduledBody>
+
+/** A ticket the user may see, with its organization's name and signature. */
+type FoundTicket = { ticket: typeof ticket.$inferSelect; organizationName: string; signature: string }
+
+/** A file a reply attaches, with where the agent picked it (a scheduled reply keeps that, so it can be changed). */
+type PickedFile = ReplyFile & { source: "upload" | "part"; id: string }
 
 /** The longest file name an upload keeps, in characters. */
 export const UPLOAD_NAME_MAX = 200
@@ -156,7 +184,7 @@ export class Replies {
   }
 
   /** The ticket by number in the scope, with its organization's name and signature; null outside it. */
-  async #ticket(scope: OrganizationScope, number: number) {
+  async #ticket(scope: OrganizationScope, number: number): Promise<FoundTicket | null> {
     const [row] = await this.db
       .select({ ticket, organizationName: organization.name, signature: organization.signature })
       .from(ticket)
@@ -193,21 +221,80 @@ export class Replies {
 
   /**
    * Writes a reply (with its outbox row, recipients, and send job) or an internal note, once per submission ID.
-   * Returns the message's ID; the same ID again for a repeated submission.
+   * Returns the message's ID; the same ID again for a repeated submission. A reply with `sendAt` is scheduled instead
+   * (plan 4.2), and the answer names the scheduled reply.
    */
   async submit(
     scope: OrganizationScope,
     user: ReplyUser,
     number: number,
     input: ReplyBodyInput,
-  ): Promise<{ id: string }> {
+  ): Promise<{ id: string } | { scheduled: string }> {
+    if (input.sendAt !== undefined) return this.#schedule(scope, user, number, input, new Date(input.sendAt))
     const existing = await this.#submitted(user.id, input.submissionId)
     if (existing) return existing
+    // One submission is one click: an ID a scheduled reply took is refused here, never written as a second message.
+    if (await this.#scheduledBy(user.id, input.submissionId)) throw new Refusal("submission_reused", 409)
     const found = await this.#ticket(scope, number)
     if (!found) throw new Refusal("not_found", 404)
     const t = found.ticket
     const isReply = input.kind === "reply"
+    const now = new Date()
+    const ready = await this.#prepare(found, user, input, now)
 
+    const written = await transactionWithJobs(this.db, async (tx, jobs) => {
+      // The ticket locked first: its status is decided from this row, a move since it was read out of the author's scope
+      // leaves nothing to write to (a note too), and any move since then refuses a reply's From.
+      const locked = await lockTicket(tx, t.id)
+      if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
+      if (isReply && locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
+      // Again under the ticket lock: a scheduled reply with this ID that committed while this request waited for it.
+      if (await this.#scheduledBy(user.id, input.submissionId, tx)) throw new Refusal("submission_reused", 409)
+      const id = await writeMessage(
+        tx,
+        { ticketId: t.id, authorUserId: user.id, submissionId: input.submissionId, at: now, ready },
+        (data) => this.jobs.sendIn(jobs, SEND_REPLY, data),
+      )
+      // The same submission committed meanwhile: nothing more is written, and its message is returned below.
+      if (!id) return null
+      // "Send and set pending" (plan 4.1): in the reply's own transaction, by the one status rule, never on acceptance.
+      // A plain send and an internal note leave the status as it is.
+      if (isReply && input.setPending) await changeStatus(tx, locked, "pending", user, "reply")
+      await tx.update(ticket).set({ lastActivityAt: now }).where(eq(ticket.id, t.id))
+      await writeAudit(tx, user.actor, {
+        action: isReply ? "message.reply" : "message.note",
+        entityType: "message",
+        entityId: id,
+        details: {
+          ticket: t.number,
+          ...(isReply
+            ? { from: ready.from, recipients: [...ready.to, ...ready.cc].map((entry) => entry.address) }
+            : {}),
+          files: ready.files.length,
+        },
+        ipAddress: user.ipAddress,
+      })
+      return { id }
+    })
+    if (written) return written
+    const again = await this.#submitted(user.id, input.submissionId)
+    if (!again) throw new Error("a submission that conflicted was not found")
+    return again
+  }
+
+  /**
+   * Everything a reply or a note needs before its transaction: the checks of the send point (a reply while intake
+   * listens, its From address, its recipients), the sanitized body with the signature, the files read and checked, and
+   * for a reply the email built once (dated `date`: now, or a scheduled reply's time) with its links.
+   */
+  async #prepare(
+    found: FoundTicket,
+    user: ReplyUser,
+    input: Pick<ReplyBodyInput, "kind" | "from" | "to" | "cc" | "html" | "uploads" | "parts">,
+    date: Date,
+  ): Promise<ReadyMessage & { files: PickedFile[]; agentHtml: string }> {
+    const t = found.ticket
+    const isReply = input.kind === "reply"
     let from: string | null = null
     let people: { to: MailAddress[]; cc: MailAddress[] } = { to: [], cc: [] }
     if (isReply) {
@@ -227,14 +314,7 @@ export class Replies {
     if (text === "" && files.length === 0) throw new Refusal("reply_empty", 400)
     const body = storedBody(html, text, isReply ? found.signature : "")
 
-    const now = new Date()
-    let built: {
-      mime: Buffer
-      messageId: string
-      subject: string
-      inReplyTo: string | null
-      references: string[]
-    } | null = null
+    let built: BuiltReply | null = null
     let links: ReplyLinks | null = null
     if (isReply && from) {
       const parent = await this.#parent(t.id)
@@ -254,7 +334,7 @@ export class Replies {
       const imageBudget =
         Math.floor((MESSAGE_MAX_BYTES * 3) / 4) - files.reduce((sum, file) => sum + file.size, 0) - 1_000_000
       // Links (plan 3.4): the agent's http and https links become tracked links while tracking is on; each file the
-      // history names gets a download link either way. Their rows are written with the reply below.
+      // history names gets a download link either way. Their rows are written with the reply.
       links = new ReplyLinks(
         linkBase(await this.settings.get("links.domain"), this.publicUrl),
         (await this.settings.get("links.tracking")) === "on",
@@ -268,7 +348,7 @@ export class Replies {
         messageId,
         inReplyTo: parent?.id ?? null,
         references,
-        date: now,
+        date,
         words: MESSAGES[locale].mail,
         lang: locale,
         referenceCode: t.referenceCode,
@@ -288,107 +368,250 @@ export class Replies {
       })
       built = { mime, messageId, subject, inReplyTo: parent?.id ?? null, references }
     }
-
-    const written = await transactionWithJobs(this.db, async (tx, jobs) => {
-      // The ticket locked first: its status is decided from this row, a move since it was read out of the author's scope
-      // leaves nothing to write to (a note too), and any move since then refuses a reply's From.
-      const locked = await lockTicket(tx, t.id)
-      if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
-      if (isReply && locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
-      const [row] = await tx
-        .insert(message)
-        .values({
-          direction: isReply ? "out" : "note",
-          ticketId: t.id,
-          receivedAt: now,
-          sentAt: isReply ? now : null,
-          state: "processed",
-          processedAt: now,
-          content: "parsed",
-          authorUserId: user.id,
-          submissionId: input.submissionId,
-          messageIdHeader: built?.messageId ?? null,
-          inReplyTo: built?.inReplyTo ? [built.inReplyTo] : [],
-          references: built?.references ?? [],
-          fromAddress: from,
-          toAddresses: people.to,
-          ccAddresses: people.cc,
-          subject: built?.subject ?? null,
-          textBody: body.text,
-          htmlBody: body.html,
-          createdAt: now,
-        })
-        .onConflictDoNothing()
-        .returning({ id: message.id })
-      // The same submission committed meanwhile: nothing more is written, and its message is returned below.
-      if (!row) return null
-      if (files.length)
-        await tx.insert(messagePart).values(
-          files.map((file, index) => ({
-            messageId: row.id,
-            index,
-            kind: "attachment",
-            fileName: file.fileName,
-            declaredType: file.contentType,
-            size: file.size,
-            sha256: file.sha256,
-            status: file.status,
-            storedSha256: file.sha256,
-          })),
-        )
-      if (built && from) {
-        await tx.insert(outbox).values({
-          messageId: row.id,
-          mime: built.mime,
-          messageIdHeader: built.messageId,
-          fromAddress: from,
-        })
-        await tx.insert(outboxRecipient).values([
-          ...people.to.map((entry, position) => ({ messageId: row.id, ...entry, kind: "to", position })),
-          ...people.cc.map((entry, position) => ({
-            messageId: row.id,
-            ...entry,
-            kind: "cc",
-            position: people.to.length + position,
-          })),
-        ])
-        if (links?.rows.length)
-          await tx
-            .insert(trackedLink)
-            .values(
-              links.rows.map((link) =>
-                link.kind === "url"
-                  ? { messageId: row.id, code: link.code, kind: link.kind, url: link.url }
-                  : { messageId: row.id, code: link.code, kind: link.kind, partId: link.partId },
-              ),
-            )
-        await this.jobs.sendIn(jobs, SEND_REPLY, { messageId: row.id })
-      }
-      // "Send and set pending" (plan 4.1): in the reply's own transaction, by the one status rule, never on acceptance.
-      // A plain send and an internal note leave the status as it is.
-      if (isReply && input.setPending) await changeStatus(tx, locked, "pending", user, "reply")
-      await tx.update(ticket).set({ lastActivityAt: now }).where(eq(ticket.id, t.id))
-      await writeAudit(tx, user.actor, {
-        action: isReply ? "message.reply" : "message.note",
-        entityType: "message",
-        entityId: row.id,
-        details: {
-          ticket: t.number,
-          ...(isReply ? { from, recipients: [...people.to, ...people.cc].map((entry) => entry.address) } : {}),
-          files: files.length,
-        },
-        ipAddress: user.ipAddress,
-      })
-      return { id: row.id }
-    })
-    if (written) return written
-    const again = await this.#submitted(user.id, input.submissionId)
-    if (!again) throw new Error("a submission that conflicted was not found")
-    return again
+    return {
+      kind: input.kind,
+      from,
+      to: people.to,
+      cc: people.cc,
+      html: body.html,
+      text: body.text,
+      files,
+      built,
+      links: links?.rows ?? [],
+      // The agent's text alone, cleaned as the body is (no NUL, sanitized), without the signature.
+      agentHtml: html,
+    }
   }
 
-  async #submitted(userId: string, submissionId: string): Promise<{ id: string } | null> {
+  /**
+   * Schedules a reply (plan 4.2): built now as it will go (dated at its time), stored as the action's first version, and
+   * a `timed-action` job queued for that time in the same transaction. Once per submission ID. "Send and set pending"
+   * applies when the reply goes to the send point, not now; it is refused now where this user may not set pending.
+   */
+  async #schedule(
+    scope: OrganizationScope,
+    user: ReplyUser,
+    number: number,
+    input: ReplyBodyInput,
+    sendAt: Date,
+  ): Promise<{ scheduled: string }> {
+    if (input.kind !== "reply") throw new Refusal("request_invalid", 400)
+    const existing = await this.#scheduledBy(user.id, input.submissionId)
+    if (existing) return { scheduled: existing }
+    // An ID a reply or a note sent now took is refused, as the other way round.
+    if (await this.#submitted(user.id, input.submissionId)) throw new Refusal("submission_reused", 409)
+    if (sendAt.getTime() <= Date.now()) throw new Refusal("time_past", 400)
+    const found = await this.#ticket(scope, number)
+    if (!found) throw new Refusal("not_found", 404)
+    const t = found.ticket
+    if (input.setPending && !mayChangeStatus(user.role, t.status as TicketStatus, "pending"))
+      throw new Refusal("status_admin_only", 403)
+    const ready = await this.#prepare(found, user, input, sendAt)
+    const id = await transactionWithJobs(this.db, async (tx, jobs) => {
+      const locked = await lockTicket(tx, t.id)
+      if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
+      if (locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
+      // Again under the ticket lock: a reply or a note with this ID that committed while this request waited for it.
+      if (await this.#submitted(user.id, input.submissionId, tx)) throw new Refusal("submission_reused", 409)
+      const [row] = await tx
+        .insert(timedAction)
+        .values({
+          kind: "reply",
+          ticketId: t.id,
+          authorUserId: user.id,
+          submissionId: input.submissionId,
+          dueAt: sendAt,
+        })
+        .onConflictDoNothing()
+        .returning({ id: timedAction.id, version: timedAction.version })
+      if (!row) return null
+      await tx.insert(scheduledReply).values({ actionId: row.id, ...this.#content(ready, input) })
+      await this.jobs.sendIn(jobs, TIMED_ACTION, { actionId: row.id, version: row.version }, { startAfter: sendAt })
+      await writeAudit(tx, user.actor, {
+        action: "message.schedule",
+        entityType: "timed_action",
+        entityId: row.id,
+        details: this.#scheduleDetails(t.number, ready, sendAt),
+        ipAddress: user.ipAddress,
+      })
+      return row.id
+    })
+    if (id) return { scheduled: id }
+    const again = await this.#scheduledBy(user.id, input.submissionId)
+    if (!again) throw new Error("a scheduled submission that conflicted was not found")
+    return { scheduled: again }
+  }
+
+  /** The columns of a scheduled reply's version, from what #prepare made. */
+  #content(ready: ReadyMessage & { files: PickedFile[]; agentHtml: string }, input: { setPending?: boolean }) {
+    if (!ready.built || !ready.from) throw new Error("a scheduled reply without its email")
+    return {
+      setPending: input.setPending === true,
+      // What the composer loads again for a change: the agent's text as #prepare cleaned it, never the raw request.
+      editorHtml: ready.agentHtml,
+      fromAddress: ready.from,
+      toAddresses: ready.to,
+      ccAddresses: ready.cc,
+      htmlBody: ready.html,
+      textBody: ready.text,
+      files: ready.files,
+      mime: ready.built.mime,
+      messageIdHeader: ready.built.messageId,
+      subject: ready.built.subject,
+      inReplyTo: ready.built.inReplyTo,
+      references: ready.built.references,
+      links: ready.links,
+    }
+  }
+
+  #scheduleDetails(number: number, ready: ReadyMessage, sendAt: Date) {
+    return {
+      ticket: number,
+      from: ready.from,
+      recipients: [...ready.to, ...ready.cc].map((entry) => entry.address),
+      files: ready.files.length,
+      sendAt: sendAt.toISOString(),
+    }
+  }
+
+  async #scheduledBy(userId: string, submissionId: string, db: Db = this.db): Promise<string | null> {
+    const [row] = await db
+      .select({ id: timedAction.id })
+      .from(timedAction)
+      .where(and(eq(timedAction.authorUserId, userId), eq(timedAction.submissionId, submissionId)))
+    return row?.id ?? null
+  }
+
+  /** A scheduled reply in the user's scope, with its ticket by number; a 404 refusal otherwise. */
+  async #action(scope: OrganizationScope, actionId: string) {
     const [row] = await this.db
+      .select({ number: ticket.number, organizationId: ticket.organizationId, authorUserId: timedAction.authorUserId })
+      .from(timedAction)
+      .innerJoin(ticket, eq(ticket.id, timedAction.ticketId))
+      .where(and(eq(timedAction.id, actionId), eq(timedAction.kind, "reply")))
+    if (!row || !inScope(scope, row.organizationId)) throw new Refusal("not_found", 404)
+    return row
+  }
+
+  /**
+   * Changes a scheduled reply (plan 4.2): a new version with everything again (text, recipients, files, time), built
+   * again, until it starts sending (`scheduled` or `handed`) and when the change names its current version. The older
+   * version's job, and its reply if it was written, then find a newer version and do nothing. Only its author changes
+   * it: its files are their own uploads.
+   */
+  async changeScheduled(
+    scope: OrganizationScope,
+    user: ReplyUser,
+    actionId: string,
+    input: ScheduledBodyInput,
+  ): Promise<void> {
+    const action = await this.#action(scope, actionId)
+    if (action.authorUserId !== user.id) throw new Refusal("scheduled_not_author", 403)
+    const sendAt = new Date(input.sendAt)
+    if (sendAt.getTime() <= Date.now()) throw new Refusal("time_past", 400)
+    const found = await this.#ticket(scope, action.number)
+    if (!found) throw new Refusal("not_found", 404)
+    const t = found.ticket
+    if (input.setPending && !mayChangeStatus(user.role, t.status as TicketStatus, "pending"))
+      throw new Refusal("status_admin_only", 403)
+    const ready = await this.#prepare(found, user, { ...input, kind: "reply" }, sendAt)
+    await transactionWithJobs(this.db, async (tx, jobs) => {
+      const locked = await lockTicket(tx, t.id)
+      if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
+      if (locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
+      const held = await lockAction(tx, actionId)
+      // Until it starts sending: also once its reply was written (`handed`). The send point then finds a newer version
+      // and ends that reply without sending, and the new version's job writes its own (one outbox row per version).
+      if (!held || !(OPEN_ACTION_STATES as readonly string[]).includes(held.state))
+        throw new Refusal("scheduled_not_open", 409)
+      if (held.version !== input.version) throw new Refusal("scheduled_changed", 409)
+      const version = held.version + 1
+      await tx
+        .update(timedAction)
+        .set({ version, state: "scheduled", reason: null, dueAt: sendAt, updatedAt: sql`now()` })
+        .where(eq(timedAction.id, actionId))
+      await tx.update(scheduledReply).set(this.#content(ready, input)).where(eq(scheduledReply.actionId, actionId))
+      await this.jobs.sendIn(jobs, TIMED_ACTION, { actionId, version }, { startAfter: sendAt })
+      await writeAudit(tx, user.actor, {
+        action: "message.schedule_change",
+        entityType: "timed_action",
+        entityId: actionId,
+        details: this.#scheduleDetails(t.number, ready, sendAt),
+        ipAddress: user.ipAddress,
+      })
+    })
+  }
+
+  /**
+   * Cancels a scheduled reply until it starts sending (`scheduled`, or `handed`: written, not yet at the send point);
+   * anyone who may see the ticket may.
+   */
+  async cancelScheduled(scope: OrganizationScope, user: ReplyUser, actionId: string): Promise<void> {
+    const action = await this.#action(scope, actionId)
+    await this.db.transaction(async (tx) => {
+      const [row] = await tx.select({ id: ticket.id }).from(ticket).where(eq(ticket.number, action.number))
+      const locked = row ? await lockTicket(tx, row.id) : null
+      if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
+      const held = await lockAction(tx, actionId)
+      // Until it starts sending: also once its reply was written and waits for the send point, which then refuses it.
+      if (!held || held.ticketId !== locked.id || !(OPEN_ACTION_STATES as readonly string[]).includes(held.state))
+        throw new Refusal("scheduled_not_open", 409)
+      await setActionState(tx, actionId, "cancelled", "agent")
+      await writeAudit(tx, user.actor, {
+        action: "message.schedule_cancel",
+        entityType: "timed_action",
+        entityId: actionId,
+        details: { ticket: locked.number },
+        ipAddress: user.ipAddress,
+      })
+    })
+  }
+
+  /** A ticket's scheduled replies for its view, newest first, each with the reply it made at its time, if any. */
+  async scheduled(userId: string, ticketId: string): Promise<ScheduledReplyView[]> {
+    const rows = await this.db
+      .select({ action: timedAction, content: scheduledReply, messageId: outbox.messageId, outboxState: outbox.state })
+      .from(timedAction)
+      .innerJoin(scheduledReply, eq(scheduledReply.actionId, timedAction.id))
+      .leftJoin(outbox, and(eq(outbox.actionId, timedAction.id), eq(outbox.actionVersion, timedAction.version)))
+      .where(and(eq(timedAction.ticketId, ticketId), eq(timedAction.kind, "reply")))
+      .orderBy(desc(timedAction.createdAt))
+    const names = new Map<string, string>()
+    for (const row of rows) {
+      const id = row.action.authorUserId
+      if (id && !names.has(id)) names.set(id, await this.#agentName(id))
+    }
+    return rows.map(({ action, content, messageId, outboxState }) => ({
+      id: action.id,
+      version: action.version,
+      state: action.state as ActionState,
+      reason: (action.reason as ActionReason | null) ?? null,
+      sendAt: action.dueAt.toISOString(),
+      createdAt: action.createdAt.toISOString(),
+      updatedAt: action.updatedAt.toISOString(),
+      author: action.authorUserId
+        ? { id: action.authorUserId, name: names.get(action.authorUserId) ?? action.authorUserId }
+        : null,
+      editable: (OPEN_ACTION_STATES as readonly string[]).includes(action.state) && action.authorUserId === userId,
+      from: content.fromAddress,
+      to: content.toAddresses as MailAddress[],
+      cc: content.ccAddresses as MailAddress[],
+      text: content.textBody,
+      html: content.editorHtml,
+      setPending: content.setPending,
+      files: (content.files as PickedFile[]).map((file) => ({
+        source: file.source,
+        id: file.id,
+        fileName: file.fileName,
+        size: file.size,
+      })),
+      messageId: messageId ?? null,
+      outboxState: (outboxState as OutboxState | null) ?? null,
+    }))
+  }
+
+  async #submitted(userId: string, submissionId: string, db: Db = this.db): Promise<{ id: string } | null> {
+    const [row] = await db
       .select({ id: message.id })
       .from(message)
       .where(and(eq(message.authorUserId, userId), eq(message.submissionId, submissionId)))
@@ -533,8 +756,8 @@ export class Replies {
   async #attachments(
     userId: string,
     ticketId: string,
-    input: ReplyBodyInput,
-  ): Promise<{ fileName: string; contentType: string; size: number; sha256: string; status: string }[]> {
+    input: Pick<ReplyBodyInput, "uploads" | "parts">,
+  ): Promise<PickedFile[]> {
     const uploadIds = [...new Set(input.uploads)]
     const partIds = [...new Set(input.parts)]
     if (uploadIds.length + partIds.length > ATTACHMENTS_MAX) throw new Refusal("attachment_invalid", 400)
@@ -583,7 +806,11 @@ export class Replies {
       : []
     if (uploads.length !== uploadIds.length || parts.length !== partIds.length)
       throw new Refusal("attachment_invalid", 400)
-    const byId = new Map([...uploads, ...parts].map((file) => [file.id, file]))
+    const picked = [
+      ...uploads.map((file) => ({ ...file, source: "upload" as const })),
+      ...parts.map((file) => ({ ...file, source: "part" as const })),
+    ]
+    const byId = new Map(picked.map((file) => [file.id, file]))
     return [...uploadIds, ...partIds].flatMap((id) => {
       const file = byId.get(id)
       return file ? [{ ...file, fileName: cleanFileName(file.fileName ?? "file") }] : []
@@ -612,6 +839,8 @@ export class Replies {
         organizationId: ticket.organizationId,
         number: ticket.number,
         state: outbox.state,
+        actionId: outbox.actionId,
+        actionVersion: outbox.actionVersion,
       })
       .from(message)
       .innerJoin(ticket, eq(ticket.id, message.ticketId))
@@ -637,6 +866,12 @@ export class Replies {
     await transactionWithJobs(this.db, async (tx, jobs) => {
       const row = await this.#reply(tx, scope, messageId)
       if (row.state !== "unknown" && row.state !== "failed") throw new Refusal("reply_not_retryable", 409)
+      // A scheduled reply's message goes again only once its action passed the send point's check (plan 4.2): one that
+      // a customer reply, a move, or a failed check ended before it went out is never sent by Send again.
+      if (row.actionId) {
+        const action = await lockAction(tx, row.actionId)
+        if (!actionPassed(action, row.actionVersion)) throw new Refusal("reply_not_retryable", 409)
+      }
       await tx
         .update(outboxRecipient)
         .set({ state: "pending", updatedAt: new Date() })

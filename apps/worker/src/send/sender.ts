@@ -6,6 +6,11 @@
 //    The send point checks again what the server checked when the agent wrote the reply: intake is live, the From
 //    address still belongs to the ticket's organization, and the author may still answer the ticket. Then the row
 //    becomes `sending` and the transaction commits, before the first byte leaves.
+//    A row a timed action made (plan 4.2) is checked once more here, in this transaction, the first time it is
+//    claimed: its action must still be `handed` at the row's version (not cancelled or replaced), and the customer
+//    must not have written since the action was made. A failed check ends the action without sending. When it passes,
+//    its status action ("Send and set pending") applies in this transaction, and only then. A later claim (Send again)
+//    goes on only for the row of the version that passed (`done` at the row's version).
 //    The claim gives the attempt an ID of its own (outbox.attempt). Every later step goes on only while the row is
 //    still `sending` under that ID, checked under the row's lock: right before each send, and with each result. An
 //    attempt another run made stale (marked unknown, sent again) stops there, without sending or writing.
@@ -16,15 +21,33 @@
 //    row's state then follows its recipients (OUTBOX_STATES).
 
 import { randomUUID } from "node:crypto"
+import { actionPassed, lockAction, setActionState } from "@maane/server/actions/timed"
 import { SYSTEM, writeAudit } from "@maane/server/audit"
 import type { Db } from "@maane/server/db/client"
-import { authUser, message, outbox, outboxRecipient, ticket, ticketParticipant } from "@maane/server/db/schema"
+import {
+  authUser,
+  message,
+  outbox,
+  outboxRecipient,
+  scheduledReply,
+  ticket,
+  ticketParticipant,
+} from "@maane/server/db/schema"
 import { queueIdOf, refreshDeliveryFlag } from "@maane/server/delivery/service"
 import { errorFacts, log } from "@maane/server/log"
-import { inScope, visibleOrganizations } from "@maane/server/organizations/scope"
-import { belongsTo, supportRules } from "@maane/server/replies/rules"
+import { sendProblem } from "@maane/server/replies/checks"
 import type { Settings } from "@maane/server/settings/service"
-import { type OutboxState, outboxStateOf, PROVIDERS, type SendProblem } from "@maane/shared"
+import { customerWroteSince } from "@maane/server/tickets/customer-reply"
+import { changeStatus, type LockedTicket } from "@maane/server/tickets/status"
+import {
+  type ActionReason,
+  mayChangeStatus,
+  type OutboxState,
+  outboxStateOf,
+  PROVIDERS,
+  type SendProblem,
+  type TicketStatus,
+} from "@maane/shared"
 import { and, eq, inArray, ne, sql } from "drizzle-orm"
 import type { Tx } from "../files/types.ts"
 import { lockIntakeMode } from "../intake/process.ts"
@@ -129,6 +152,8 @@ export class ReplySender {
           from: outbox.fromAddress,
           ticketId: ticket.id,
           authorUserId: message.authorUserId,
+          actionId: outbox.actionId,
+          actionVersion: outbox.actionVersion,
         })
         .from(outbox)
         .innerJoin(message, eq(message.id, outbox.messageId))
@@ -160,8 +185,21 @@ export class ReplySender {
         .where(eq(ticket.id, row.ticketId))
         .for("key share")
       if (!held) return null
-      const problem = await this.#refusal(tx, mode, { ...row, organizationId: held.organizationId })
+      // A timed action's row (plan 4.2): its action, locked after the ticket as every path takes them. Its first claim
+      // (the action `handed`) checks it once more; a later one (Send again after it passed) is an ordinary reply's.
+      const action = row.actionId ? await lockAction(tx, row.actionId) : null
+      const handoff = action?.state === "handed" && action.version === row.actionVersion
+      let problem: SendProblem | null = null
+      // Only the row of the version that passed goes again: an earlier version's row (changed after it was written)
+      // never does.
+      if (row.actionId && !handoff && !actionPassed(action, row.actionVersion))
+        problem = action?.reason === "customer_reply" ? "customer_reply" : "action_ended"
+      else if (handoff && row.actionId && (await customerWroteSince(tx, row.ticketId, row.actionId)))
+        problem = "customer_reply"
+      problem ??= await sendProblem(tx, mode, { ...row, organizationId: held.organizationId })
       if (problem) {
+        if (handoff && action && problem !== "action_ended")
+          await setActionState(tx, action.id, "ended", problem as ActionReason)
         await tx
           .update(outbox)
           .set({ state: "failed", problem, updatedAt: this.#now() })
@@ -183,6 +221,8 @@ export class ReplySender {
         await this.#settle(tx, messageId, true)
         return null
       }
+      // The action passed: it is at the send point now, and its reply goes on as any other.
+      if (handoff && action) await setActionState(tx, action.id, "done")
       const attempt = randomUUID()
       await tx
         .update(outbox)
@@ -200,27 +240,40 @@ export class ReplySender {
         .update(outboxRecipient)
         .set({ possibleSends: sql`${outboxRecipient.possibleSends} + 1` })
         .where(and(eq(outboxRecipient.messageId, messageId), eq(outboxRecipient.state, "pending")))
+      // A scheduled reply's status action ("Send and set pending"), now that it goes, and only then: the last write of
+      // the claim, so the ticket's stronger lock comes after the recipients' rows, as the webhook's order needs.
+      if (handoff && action?.authorUserId) await this.#statusAction(tx, row.ticketId, action.id, action.authorUserId)
       return { attempt, mime: row.mime, from: row.from, ticketId: row.ticketId, recipients }
     })
   }
 
-  /** Why the send point refuses this reply now, or null: listening, a From address or an author no longer allowed. */
-  async #refusal(
-    tx: Tx,
-    mode: string,
-    row: { from: string; organizationId: string; authorUserId: string | null },
-  ): Promise<SendProblem | null> {
-    if (mode !== "live") return "listening"
-    if (!belongsTo(row.from, await supportRules(tx), row.organizationId)) return "from_not_allowed"
-    const [author] = row.authorUserId
-      ? await tx
-          .select({ id: authUser.id, role: authUser.role, banned: authUser.banned })
-          .from(authUser)
-          .where(eq(authUser.id, row.authorUserId))
-      : []
-    if (!author || author.banned) return "author_not_allowed"
-    const scope = await visibleOrganizations(tx, { id: author.id, role: author.role ?? "agent" })
-    return inScope(scope, row.organizationId) ? null : "author_not_allowed"
+  /**
+   * Sets the ticket to pending for a scheduled reply that asked for it, by the one status writer, as its author. The
+   * ticket is locked FOR NO KEY UPDATE (it does not conflict with the KEY SHARE this claim and others hold, so two
+   * claims of one ticket wait for each other instead of deadlocking) and its status read again under that lock. A ticket
+   * the author may no longer set to pending (closed meanwhile, not an admin) keeps its status.
+   */
+  async #statusAction(tx: Tx, ticketId: string, actionId: string, authorUserId: string): Promise<void> {
+    const [content] = await tx
+      .select({ setPending: scheduledReply.setPending })
+      .from(scheduledReply)
+      .where(eq(scheduledReply.actionId, actionId))
+    if (!content?.setPending) return
+    const [held] = await tx
+      .select({ id: ticket.id, number: ticket.number, status: ticket.status, organizationId: ticket.organizationId })
+      .from(ticket)
+      .where(eq(ticket.id, ticketId))
+      .for("no key update")
+    const [author] = await tx
+      .select({ username: authUser.username, name: authUser.name, role: authUser.role })
+      .from(authUser)
+      .where(eq(authUser.id, authorUserId))
+    if (!held) return
+    const locked: LockedTicket = { ...held, status: held.status as TicketStatus }
+    const role = author?.role ?? "agent"
+    if (!mayChangeStatus(role, locked.status, "pending")) return
+    const actor = { userId: authorUserId, label: author?.username ?? author?.name ?? "?" }
+    await changeStatus(tx, locked, "pending", { role, actor, ipAddress: null }, "reply")
   }
 
   /**

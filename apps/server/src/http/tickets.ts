@@ -136,7 +136,7 @@ export function ticketRoutes(db: Db, filesDir: string, replies: Replies): Hono<A
       view.ticket.organization.name,
       organizationSignature,
     )
-    return c.json({ ...view, compose })
+    return c.json({ ...view, compose, scheduled: await replies.scheduled(c.get("user").id, ticketId) })
   })
 
   routes.get("/messages/:id/body", async (c) => {

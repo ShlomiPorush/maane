@@ -88,3 +88,50 @@ export function agoParts(value: DateInput, now: Date = new Date()): Ago | null {
   if (hours < 48) return { unit: "h", count: hours }
   return { unit: "d", count: Math.round(seconds / 86_400) }
 }
+
+// --- Entering a time in Maane's zone (plan 4.2: send later, snooze) ---
+
+const HOUR_MS = 3_600_000
+
+/** A date and a time as the date and time inputs hold them: "2026-11-15" and "09:30", in Maane's zone. */
+export type ZonedInput = { date: string; time: string }
+
+/** The date and time inputs' values for an instant, in Maane's zone, whatever the browser's zone. */
+export function zonedInput(value: Date): ZonedInput {
+  const p = zonedParts(value)
+  return { date: `${pad(p.year, 4)}-${pad(p.month)}-${pad(p.day)}`, time: writeClock(p) }
+}
+
+/** How far Maane's zone is ahead of UTC at an instant, in milliseconds (daylight saving included). */
+function offsetAt(ms: number): number {
+  const p = zonedParts(new Date(ms))
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(ms / 1000) * 1000
+}
+
+/**
+ * The instant a date and a time name in Maane's zone (Asia/Jerusalem), whatever the browser's zone. Null when the
+ * input is not a real date and time, or when that time does not exist in Israel (the hour the clock skips when daylight
+ * saving starts). In the hour that repeats when it ends, the first of the two (still daylight saving time).
+ */
+export function zonedInstant(input: ZonedInput): Date | null {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(input.date)
+  const t = /^(\d{2}):(\d{2})$/.exec(input.time)
+  if (!d || !t) return null
+  const wall = Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2]))
+  // The zone's offset a day before and a day after covers both sides of any change; a candidate counts only when its
+  // wall clock in the zone is the one asked for.
+  const candidates = [...new Set([offsetAt(wall - 24 * HOUR_MS), offsetAt(wall + 24 * HOUR_MS)])]
+    .map((offset) => wall - offset)
+    .filter((ms) => {
+      const back = zonedInput(new Date(ms))
+      return back.date === input.date && back.time === input.time
+    })
+    .sort((a, b) => a - b)
+  const first = candidates[0]
+  return first === undefined ? null : new Date(first)
+}
+
+/** A sensible first choice for a time ahead: the next whole hour at least an hour from now, in Maane's zone. */
+export function nextWholeHour(now: Date = new Date()): ZonedInput {
+  return zonedInput(new Date(Math.ceil((now.getTime() + HOUR_MS) / HOUR_MS) * HOUR_MS))
+}

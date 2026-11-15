@@ -1,11 +1,12 @@
 // What an agent changes on a ticket from its page (plan 4.1): the status (a select that saves at once; `closed` is set
 // and left only by an admin, so an agent sees it locked with the reason), the categories (a dialog of checkboxes), and
-// the organization (a dialog that moves the ticket to another organization the user may move it to). The server
-// decides every change again; these only offer what it allows.
+// the organization (a dialog that moves the ticket to another organization the user may move it to); and (plan 4.2)
+// its snooze: until a date and time in Israel time, changed or ended by hand. The server decides every change again;
+// these only offer what it allows.
 
 import { mayChangeStatus, TICKET_STATUSES, type TicketStatus, type TicketView } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
-import { ArrowRightLeft, Pencil } from "lucide-react"
+import { AlarmClock, ArrowRightLeft, Pencil } from "lucide-react"
 import { type FormEvent, useId, useState } from "react"
 import { api, qk } from "../../api/endpoints.ts"
 import { errorText } from "../../api/errors.ts"
@@ -14,9 +15,11 @@ import { useMe } from "../../shell/session.ts"
 import { useDiscardGuard } from "../../ui/confirm.tsx"
 import { Dialog } from "../../ui/Dialog.tsx"
 import { useMounted } from "../../ui/mounted.ts"
+import { Time } from "../../ui/Time.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag } from "../../ui/tags.tsx"
 import { FormError } from "../auth/parts.tsx"
+import { WhenDialog } from "./When.tsx"
 
 /** Reads the ticket and the lists again after a change. */
 function useRefresh(number: number) {
@@ -175,6 +178,73 @@ function CategoriesDialog({ view, onClose }: { view: TicketView; onClose: () => 
         {error ? <FormError>{error}</FormError> : null}
       </form>
     </Dialog>
+  )
+}
+
+/** The snooze: until when (Israel time), and Snooze, Change, End snooze. */
+export function SnoozeControl({ view }: { view: TicketView }) {
+  const { t } = useI18n()
+  const refresh = useRefresh(view.ticket.number)
+  const [choosing, setChoosing] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const until = view.ticket.snoozedUntil
+
+  const wake = async () => {
+    setBusy(true)
+    try {
+      await api.wake(view.ticket.number)
+      showToast(t("ticket.snooze.ended"), "success")
+    } catch (error) {
+      showToast(t("ticket.snooze.failed", { reason: errorText(t, error) }), "error")
+    } finally {
+      await refresh()
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      className="ui-workflow-field ui-workflow-inline"
+      data-testid="ticket-snooze"
+      data-snoozed={until ? "" : undefined}
+    >
+      {until ? (
+        <span className="ui-snooze-until">
+          <Tag tone="info">{t("ticket.snooze.snoozed")}</Tag>
+          <span className="ui-muted">{t("ticket.snooze.until")}</span>
+          <Time value={until} mode="full" />
+        </span>
+      ) : (
+        <span className="ui-muted">{t("ticket.snooze.none")}</span>
+      )}
+      <button type="button" className="ui-btn ui-btn-sm" disabled={busy} onClick={() => setChoosing(true)}>
+        <AlarmClock aria-hidden="true" />
+        {until ? t("ticket.snooze.change") : t("ticket.snooze.open")}
+      </button>
+      {/* Also for a snooze whose time passed and whose end is late: the agent need not wait for it. */}
+      {until || view.ticket.snoozeOverdue ? (
+        <button type="button" className="ui-btn ui-btn-sm" disabled={busy} onClick={() => void wake()}>
+          {t("ticket.snooze.end")}
+        </button>
+      ) : null}
+      {choosing ? (
+        <WhenDialog
+          title={t("ticket.snooze.title", { number: view.ticket.number })}
+          submitLabel={t("ticket.snooze.submit")}
+          busyLabel={t("ticket.saving")}
+          initial={until ?? undefined}
+          onSubmit={async (at) => {
+            await api.snooze(view.ticket.number, at.toISOString())
+            showToast(t("ticket.snooze.done"), "success")
+            await refresh()
+          }}
+          onClose={() => setChoosing(false)}
+          testId="snooze-when"
+        >
+          <p className="ui-hint">{t("ticket.snooze.hint")}</p>
+        </WhenDialog>
+      ) : null}
+    </div>
   )
 }
 

@@ -104,7 +104,8 @@ export function Delivery({
         <Banner
           tone="fail"
           title={delivery.problem ? t(`delivery.problem.${delivery.problem}`) : t("delivery.refusedAll")}
-          action={actions}
+          // A scheduled reply ended before it went out never goes again (plan 4.2): the server refuses Send again.
+          action={delivery.scheduledEnded ? undefined : actions}
         />
       ) : null}
       {delivery.unmatchedDelivery ? (

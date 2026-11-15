@@ -349,6 +349,13 @@ export const ticket = pgTable(
     reviewFlags: text("review_flags").array().notNull().default(sql`'{}'::text[]`),
     createdAt: createdAt(),
     lastActivityAt: at("last_activity_at").notNull().defaultNow(),
+    /**
+     * Snoozed until this instant (plan 4.2): the ticket leaves the default list until then. Its `snooze-end` job names
+     * `snooze_version`, which every new snooze and every end of one moves on, so an older job finds a newer version
+     * and does nothing.
+     */
+    snoozedUntil: at("snoozed_until"),
+    snoozeVersion: integer("snooze_version").notNull().default(0),
   },
   (t) => [
     index("ticket_organization_idx").on(t.organizationId),
@@ -810,12 +817,20 @@ export const outbox = pgTable(
      * recording): `{ status, at, recipient, messageId }`, validated tokens and times only.
      */
     unmatchedDeliveryEvent: jsonb("unmatched_delivery_event"),
+    /**
+     * The timed action that made this row at its time (plan 4.2), and its version then: at most one row per action
+     * and version, so a rerun after a crash finds this row and makes no second message.
+     */
+    actionId: uuid("action_id").references(() => timedAction.id, { onDelete: "restrict" }),
+    actionVersion: integer("action_version"),
     createdAt: createdAt(),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [
     index("outbox_state_idx").on(t.state),
     check("outbox_state", sql`${t.state} in ('pending', 'sending', 'accepted', 'failed', 'unknown')`),
+    uniqueIndex("outbox_action_version_unique").on(t.actionId, t.actionVersion),
+    check("outbox_action", sql`(${t.actionId} is null) = (${t.actionVersion} is null)`),
   ],
 )
 
@@ -1039,3 +1054,73 @@ export const pushSubscription = pgTable(
     check("push_subscription_locale_check", sql`${t.locale} in ('he', 'en')`),
   ],
 )
+
+// --- Timed actions (plan 4.2) ---
+
+/**
+ * A timed action: something Maane does on a ticket at a chosen time, by one rule (plan 4.2, requirements 2.3). One row
+ * per action with a version that every change moves on; its job names the version it was queued for, so the job of a
+ * replaced or cancelled version finds a newer one, or a state other than `scheduled`, and does nothing. At its time the
+ * job checks the action is still valid and makes at most one outbox row for the version (the unique index on outbox),
+ * and the send point checks it once more in the transaction that hands that row to `sending`. Kind-specific content
+ * lives in its own table (`scheduled_reply` for a reply). Every path that locks an action locks its ticket first.
+ */
+export const timedAction = pgTable(
+  "timed_action",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** `reply`: a scheduled reply. */
+    kind: text("kind").notNull(),
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => ticket.id, { onDelete: "restrict" }),
+    /** The agent who made it. */
+    authorUserId: text("author_user_id").references(() => authUser.id, { onDelete: "restrict" }),
+    /** The composer's submission ID: one action per click, as for a reply sent at once. */
+    submissionId: uuid("submission_id"),
+    version: integer("version").notNull().default(1),
+    /** `@maane/shared` ACTION_STATES. */
+    state: text("state").notNull().default("scheduled"),
+    /** `@maane/shared` ACTION_REASONS, for a cancelled or ended action. */
+    reason: text("reason"),
+    dueAt: at("due_at").notNull(),
+    /** By the database's clock: "the customer wrote since the action was made" compares intake's records with it. */
+    createdAt: createdAt(),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("timed_action_ticket_idx").on(t.ticketId),
+    uniqueIndex("timed_action_submission_unique").on(t.authorUserId, t.submissionId),
+    check("timed_action_kind", sql`${t.kind} in ('reply')`),
+    check("timed_action_state", sql`${t.state} in ('scheduled', 'handed', 'done', 'cancelled', 'ended')`),
+  ],
+)
+
+/**
+ * A scheduled reply's current version, built by the server when it was written or changed (the worker never builds
+ * mail: the history's images need sharp): the MIME (dated at its time), the body as the ticket view keeps it, its
+ * recipients, files, and links. At its time the worker writes the reply from these, as the server writes one sent at
+ * once. `editor_html` and `files` keep what the agent chose, so the composer can change it.
+ */
+export const scheduledReply = pgTable("scheduled_reply", {
+  actionId: uuid("action_id")
+    .primaryKey()
+    .references(() => timedAction.id, { onDelete: "restrict" }),
+  setPending: boolean("set_pending").notNull(),
+  editorHtml: text("editor_html").notNull(),
+  fromAddress: text("from_address").notNull(),
+  /** `MailAddress[]`, parsed and in lower case. */
+  toAddresses: jsonb("to_addresses").notNull(),
+  ccAddresses: jsonb("cc_addresses").notNull(),
+  htmlBody: text("html_body").notNull(),
+  textBody: text("text_body").notNull(),
+  /** `{ source, id, fileName, contentType, size, sha256, status }[]`: the agent's uploads and the ticket's own files. */
+  files: jsonb("files").notNull(),
+  mime: bytea("mime").notNull(),
+  messageIdHeader: text("message_id_header").notNull(),
+  subject: text("subject").notNull(),
+  inReplyTo: text("in_reply_to"),
+  references: text("references").array().notNull(),
+  /** The links its HTML carries (`NewLink[]` of plan 3.4), written with the reply. */
+  links: jsonb("links").notNull(),
+})
