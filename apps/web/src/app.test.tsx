@@ -92,7 +92,7 @@ const signedOut: TransportResponse = { status: 401, body: { error: "unauthorized
 const totpRequired: TransportResponse = { status: 403, body: { error: "totp_required" } }
 const admin = ok({ id: "u1", username: "first.admin", role: "admin" })
 const agent = ok({ id: "u2", username: "agent.one", role: "agent" })
-const noTickets = ok({ tickets: [], next: null, organizations: [] })
+const noTickets = ok({ tickets: [], next: null, organizations: [], categories: [] })
 
 async function renderAt(path: string, answers: Answers): Promise<void> {
   requests = []
@@ -1359,6 +1359,8 @@ describe("tickets", () => {
   const ORG_A = "0d7c6f0e-6a55-4b8e-9c55-5f0b6a3e2a11"
   const ORG_B = "1e8d7a1f-7b66-4c9f-8d66-6a1c7b4f3b22"
   const MESSAGE = "4b0f3c2d-1a2b-4c3d-8e4f-5a6b7c8d9e01"
+  const CATEGORY = "2f9e8b2a-8c77-4da0-9e77-7b2d8c5a4c33"
+  const CATEGORY_2 = "3a0f9c3b-9d88-4eb1-8f88-8c3e9d6b5d44"
   // Hebrew from code points: apps/web holds no Hebrew.
   const SHALOM = String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)
   const when = "2026-11-12T08:00:00.000Z"
@@ -1384,6 +1386,7 @@ describe("tickets", () => {
         { id: ORG_A, name: "Alpha" },
         { id: ORG_B, name: "Beta" },
       ],
+      categories: [{ id: CATEGORY, name: "Billing" }],
     })
   const file = (over: Record<string, unknown>) => ({
     id: "f0",
@@ -1399,7 +1402,13 @@ describe("tickets", () => {
     download: true,
     ...over,
   })
-  const view = (version = "v1", replies: object[] = [], listening = false) =>
+  const view = (
+    version = "v1",
+    replies: object[] = [],
+    listening = false,
+    ticketOver: Record<string, unknown> = {},
+    moveTargets: { id: string; name: string }[] = [{ id: ORG_B, name: "Beta" }],
+  ) =>
     ok({
       ticket: {
         number: 7,
@@ -1411,6 +1420,8 @@ describe("tickets", () => {
         supportAddress: "help@example.com",
         createdAt: when,
         lastActivityAt: when,
+        categories: [{ id: CATEGORY, name: "Billing" }],
+        ...ticketOver,
       },
       participants: [{ address: "dana@example.com", name: "Dana Customer" }],
       links: [{ number: 3, reason: "sender_not_participant" }],
@@ -1457,6 +1468,11 @@ describe("tickets", () => {
         senderName: "Agent Name (Alpha)",
         listening,
       },
+      categories: [
+        { id: CATEGORY, name: "Billing" },
+        { id: CATEGORY_2, name: "Shipping" },
+      ],
+      moveTargets,
     })
 
   it("lists tickets across organizations, and keeps the filters in the address", async () => {
@@ -1489,7 +1505,7 @@ describe("tickets", () => {
     expect(requests.some((r) => r.url === "/api/v1/tickets?flagged=1")).toBe(true)
 
     // The rows and the filters stay while the next answer is on its way (TB-5).
-    const select = document.querySelector<HTMLSelectElement>(".ui-filters select") as HTMLSelectElement
+    const select = document.querySelector<HTMLSelectElement>('[data-testid="organization-filter"]') as HTMLSelectElement
     expect(select).not.toBeNull()
     await act(async () => {
       select.value = ORG_B
@@ -1508,6 +1524,182 @@ describe("tickets", () => {
     await vi.waitFor(() => expect(text()).toContain(he("tickets.emptyFiltered")))
     await act(async () => button(he("tickets.clearFilters"))?.click())
     await vi.waitFor(() => expect(where()).toBe("/"))
+  })
+
+  it("shows open work by default and filters by status and category, kept in the address (plan 4.1)", async () => {
+    await renderAt("/", {
+      "/api/setup/status": status(),
+      "/api/v1/me": agent,
+      "/api/v1/tickets": list([summary(9)]),
+    })
+    const statusFilter = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLSelectElement>('[data-testid="status-filter"]')
+      expect(found).not.toBeNull()
+      return found as HTMLSelectElement
+    })
+    // No status in the address is open work, and the request names none: the server's default is the same.
+    expect(statusFilter.value).toBe("open_work")
+    expect(statusFilter.selectedOptions[0]?.textContent).toBe(he("tickets.statusFilter.open_work"))
+    expect(requests.some((r) => r.url === "/api/v1/tickets")).toBe(true)
+    await act(async () => {
+      statusFilter.value = "all"
+      statusFilter.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    await vi.waitFor(() => expect(where()).toBe("/?status=all"))
+    expect(requests.some((r) => r.url === "/api/v1/tickets?status=all")).toBe(true)
+    // The empty list of a chosen status is a filtered one, which can be cleared back to open work.
+    const category = document.querySelector<HTMLSelectElement>('[data-testid="category-filter"]') as HTMLSelectElement
+    expect(Array.from(category.options).map((option) => option.textContent)).toEqual([
+      he("tickets.allCategories"),
+      "Billing",
+    ])
+    await act(async () => {
+      category.value = CATEGORY
+      category.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    await vi.waitFor(() => expect(where()).toBe(`/?status=all&category=${CATEGORY}`))
+    expect(requests.some((r) => r.url === `/api/v1/tickets?status=all&category=${CATEGORY}`)).toBe(true)
+    await act(async () => {
+      statusFilter.value = "open_work"
+      statusFilter.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    await vi.waitFor(() => expect(where()).toBe(`/?category=${CATEGORY}`))
+  })
+
+  it("sets the status, the categories, and the organization from the ticket view (plan 4.1)", async () => {
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view(),
+      "/api/v1/tickets/7/status": ok({ ok: true }),
+      "/api/v1/tickets/7/categories": ok({ ok: true }),
+      "/api/v1/tickets/7/organization": ok({ ok: true }),
+    })
+    const select = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLSelectElement>('[data-testid="ticket-status"]')
+      expect(found).not.toBeNull()
+      return found as HTMLSelectElement
+    })
+    expect(select.value).toBe("open")
+    // An admin may close: every status is offered as itself.
+    expect(Array.from(select.options).map((option) => [option.value, option.disabled])).toEqual([
+      ["new", false],
+      ["open", false],
+      ["pending", false],
+      ["on_hold", false],
+      ["solved", false],
+      ["closed", false],
+    ])
+    await act(async () => {
+      select.value = "pending"
+      select.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    await vi.waitFor(() => {
+      const put = requests.find((r) => r.method === "PUT" && r.url === "/api/v1/tickets/7/status")
+      expect(JSON.parse(put?.body ?? "null")).toEqual({ status: "pending" })
+    })
+    expect(document.querySelector('[data-testid="ticket-categories"]')?.textContent).toBe("Billing")
+
+    await act(async () => button(he("ticket.categories.edit"))?.click())
+    const dialog = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[role=dialog]")
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    const boxes = Array.from(dialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+    expect(boxes.map((box) => box.checked)).toEqual([true, false])
+    await act(async () => boxes[1]?.click())
+    await act(async () => button(he("ticket.categories.save"))?.click())
+    await vi.waitFor(() => {
+      const put = requests.find((r) => r.method === "PUT" && r.url === "/api/v1/tickets/7/categories")
+      expect(JSON.parse(put?.body ?? "null")).toEqual({ categories: [CATEGORY, CATEGORY_2] })
+    })
+    await vi.waitFor(() => expect(document.querySelector("[role=dialog]")).toBeNull())
+
+    await act(async () => button(he("ticket.move.open"))?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=dialog]")).not.toBeNull())
+    expect(text()).toContain(he("ticket.move.hint", { name: "Alpha" }))
+    await act(async () => button(he("ticket.move.submit"))?.click())
+    await vi.waitFor(() => {
+      const put = requests.find((r) => r.method === "PUT" && r.url === "/api/v1/tickets/7/organization")
+      expect(JSON.parse(put?.body ?? "null")).toEqual({ organizationId: ORG_B })
+    })
+  })
+
+  it("locks closed for an agent: offered as admins only, and a closed ticket's status and pending reply locked", async () => {
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": agent,
+      "/api/v1/tickets/7": view("v1", [], false, {}, []),
+    })
+    const select = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLSelectElement>('[data-testid="ticket-status"]')
+      expect(found).not.toBeNull()
+      return found as HTMLSelectElement
+    })
+    const closed = Array.from(select.options).find((option) => option.value === "closed")
+    expect(closed?.disabled).toBe(true)
+    expect(closed?.textContent).toBe(he("ticket.statusAdminOnly", { status: he("ticket.status.closed") }))
+    expect(select.disabled).toBe(false)
+    // No organization to move to: no Move button.
+    expect(button(he("ticket.move.open"))).toBeUndefined()
+    expect(document.querySelector('[data-testid="composer-send-only"]')).not.toBeNull()
+    if (mounted) {
+      const { root, host } = mounted
+      await act(async () => root.unmount())
+      host.remove()
+      mounted = null
+    }
+
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": agent,
+      "/api/v1/tickets/7": view("v1", [], false, { status: "closed" }, []),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("ticket.statusClosedHint")))
+    expect(document.querySelector<HTMLSelectElement>('[data-testid="ticket-status"]')?.disabled).toBe(true)
+    // On a closed ticket an agent only sends; the status stays closed.
+    expect(document.querySelector('[data-testid="composer-send-only"]')).toBeNull()
+    expect(document.querySelector('[data-testid="composer-send"]')?.textContent).toBe(he("compose.sendReply"))
+  })
+
+  it("sends a reply as Send and set pending by default; Send and a note leave the status (plan 4.1)", async () => {
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view(),
+      "/api/v1/tickets/7/messages": { status: 201, body: { id: "00000000-0000-4000-8000-0000000000bb" } },
+    })
+    const primary = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLButtonElement>('[data-testid="composer-send"]')
+      expect(found).not.toBeNull()
+      return found as HTMLButtonElement
+    })
+    expect(primary.textContent).toBe(he("compose.sendPending"))
+    expect(document.querySelector('[data-testid="composer-send-only"]')?.textContent).toBe(he("compose.sendOnly"))
+    // A file of the ticket makes the reply something to send without typing (the editor is TipTap's).
+    const attach = () =>
+      act(async () =>
+        document.querySelector<HTMLInputElement>('.ui-composer-ticket-files input[type="checkbox"]')?.click(),
+      )
+    const sent = () =>
+      requests
+        .filter((r) => r.method === "POST" && r.url === "/api/v1/tickets/7/messages")
+        .map((r) => JSON.parse(r.body ?? "null") as { kind: string; setPending: boolean })
+    await attach()
+    await act(async () => primary.click())
+    await vi.waitFor(() => expect(sent()).toHaveLength(1))
+    expect(sent()[0]).toMatchObject({ kind: "reply", setPending: true })
+    await vi.waitFor(() => expect(text()).toContain(he("compose.replyQueuedPending")))
+    await attach()
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-send-only"]')?.click())
+    await vi.waitFor(() => expect(sent()).toHaveLength(2))
+    expect(sent()[1]).toMatchObject({ kind: "reply", setPending: false })
+    await act(async () => document.querySelector<HTMLButtonElement>('.ui-composer button[data-kind="note"]')?.click())
+    await attach()
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-send"]')?.click())
+    await vi.waitFor(() => expect(sent()).toHaveLength(3))
+    expect(sent()[2]).toMatchObject({ kind: "note", setPending: false })
   })
 
   it("shows a ticket's messages in a sandboxed frame, what was blocked, and each file's status in words", async () => {
@@ -1976,6 +2168,61 @@ describe("tickets", () => {
     await renderAt("/tickets/abc", { "/api/setup/status": status(), "/api/v1/me": agent })
     await vi.waitFor(() => expect(text()).toContain(he("ticket.notFound")))
     expect(requests.some((r) => r.url.includes("/tickets/abc"))).toBe(false)
+  })
+})
+
+describe("categories", () => {
+  const button = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+  const listed = ok({
+    categories: [
+      {
+        id: "2f9e8b2a-8c77-4da0-9e77-7b2d8c5a4c33",
+        name: "Billing",
+        tickets: 2,
+        createdAt: "2026-11-12T08:00:00.000Z",
+      },
+      {
+        id: "3a0f9c3b-9d88-4eb1-8f88-8c3e9d6b5d44",
+        name: "Shipping",
+        tickets: 0,
+        createdAt: "2026-11-12T08:00:00.000Z",
+      },
+    ],
+  })
+
+  it("lists every category with its tickets, adds one, and is locked for an agent (plan 4.1)", async () => {
+    await renderAt("/categories", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/categories": (request) =>
+        request.method === "POST" ? { status: 201, body: { category: { id: "x", name: "Returns" } } } : listed,
+    })
+    await vi.waitFor(() => expect(document.querySelector('[data-category="Billing"]')).not.toBeNull())
+    expect(document.querySelector('[data-category="Billing"]')?.textContent).toContain(
+      translate("he", "categories.ticketCount.two", { count: "2" }),
+    )
+    await act(async () => button(he("categories.create"))?.click())
+    const input = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLInputElement>("[role=dialog] input")
+      expect(found).not.toBeNull()
+      return found as HTMLInputElement
+    })
+    await act(async () => type(input, "  Returns "))
+    await act(async () => document.querySelector<HTMLButtonElement>("[role=dialog] button[type=submit]")?.click())
+    await vi.waitFor(() => {
+      const post = requests.find((r) => r.method === "POST" && r.url === "/api/v1/admin/categories")
+      expect(JSON.parse(post?.body ?? "null")).toEqual({ name: "Returns" })
+    })
+    if (mounted) {
+      const { root, host } = mounted
+      await act(async () => root.unmount())
+      host.remove()
+      mounted = null
+    }
+    await renderAt("/categories", { "/api/setup/status": status(), "/api/v1/me": agent })
+    await vi.waitFor(() => expect(text()).toContain(he("adminOnly.title")))
+    expect(requests.some((r) => r.url === "/api/v1/admin/categories")).toBe(false)
   })
 })
 

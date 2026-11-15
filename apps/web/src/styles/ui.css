@@ -2289,6 +2289,32 @@ textarea.ui-input.ui-textarea {
   flex-wrap: wrap;
   gap: 4px 14px;
 }
+
+/* The workflow of a ticket (plan 4.1): its status, categories, and organization, each with its control. */
+.ui-workflow-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.ui-workflow-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.ui-status-select {
+  width: auto;
+  min-width: 180px;
+  max-width: 100%;
+}
+.ui-check-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
 .ui-section-title {
   margin: 6px 0 -4px;
   font-size: var(--ui-fs-h2);

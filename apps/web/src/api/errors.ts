@@ -4,6 +4,7 @@
 // English message is never shown. A code the table does not know falls back by its HTTP status.
 
 import {
+  CATEGORY_NAME_MAX,
   MESSAGE_MAX_MB,
   ORGANIZATION_NAME_MAX,
   PASSWORD_MAX,
@@ -56,6 +57,11 @@ export const ERROR_TEXT: Record<string, string> = {
   reply_not_unknown: "errors.code.replyNotUnknown",
   signature_invalid: "errors.code.signatureInvalid",
   name_invalid: "errors.code.nameInvalid",
+  status_admin_only: "errors.code.statusAdminOnly",
+  move_not_allowed: "errors.code.moveNotAllowed",
+  category_not_found: "errors.code.categoryNotFound",
+  category_name_invalid: "errors.code.categoryNameInvalid",
+  category_name_taken: "errors.code.categoryNameTaken",
   internal: "errors.server",
   // Maane's refusals on Better Auth's routes (apps/server/src/auth/auth.ts)
   UNAUTHORIZED: "errors.code.unauthorized",
@@ -118,6 +124,7 @@ export const ADDRESS_EXAMPLES = {
 export const ERROR_VARS = {
   ...ADDRESS_EXAMPLES,
   nameMax: ORGANIZATION_NAME_MAX,
+  categoryNameMax: CATEGORY_NAME_MAX,
   messageMaxMb: MESSAGE_MAX_MB,
   passwordMin: PASSWORD_MIN,
   passwordMax: PASSWORD_MAX,

@@ -5,7 +5,9 @@ import { he, signIn } from "./helpers.ts"
 // (apps/worker/src/testing/stack-worker.ts, started by scripts/verify.sh for these tests): a Hebrew paragraph and an
 // English one, each taking its own direction in the editor, and a file uploaded and scanned by the real ClamAV. The
 // reply is sent through SMTP2GO's stand-in and accepted; verify.sh then checks what the stand-in received. Then an
-// internal note. Intake goes live for the reply (live needs a default address: organizations.spec.ts made one) and
+// internal note. The composer's default action sets the ticket to pending (plan 4.1); the test sets it back to open
+// through the status control, so the ticket stays in the list's default view for the tests after it. Intake goes live
+// for the reply (live needs a default address: organizations.spec.ts made one) and
 // back to listening at the end, as the stack stage leaves it. Every Content Security Policy violation fails the test.
 test.describe.configure({ mode: "serial" })
 
@@ -76,9 +78,13 @@ test.describe("desktop", () => {
         timeout: 60_000,
       })
 
+      await expect(composer.getByTestId("composer-send")).toHaveText(he("compose.sendPending"))
       await composer.getByTestId("composer-send").click()
-      await expect(page.getByText(he("compose.replyQueued"))).toBeVisible()
+      await expect(page.getByText(he("compose.replyQueuedPending"))).toBeVisible()
       await expect(editor.locator("p")).toHaveCount(1)
+      // Send and set pending: the status changed with the reply, before the worker sent it.
+      const status = page.getByTestId("ticket-status")
+      await expect(status).toHaveValue("pending")
 
       // The worker sends it; the page shows each recipient's state once it reads the ticket again.
       const reply = page.locator('.ui-message[data-direction="out"]').last()
@@ -100,6 +106,12 @@ test.describe("desktop", () => {
       await composer.getByTestId("composer-send").click()
       await expect(page.getByText(he("compose.noteAdded"))).toBeVisible()
       await expect(page.locator('.ui-message[data-direction="note"]').last()).toContainText(he("ticket.direction.note"))
+      // A note leaves the status; the status control sets it back to open.
+      await expect(status).toHaveValue("pending")
+      await status.selectOption("open")
+      await expect(status).toHaveValue("open")
+      await page.reload()
+      await expect(page.getByTestId("ticket-status")).toHaveValue("open")
       expect(violations).toEqual([])
     } finally {
       await setMode(page, "listening")

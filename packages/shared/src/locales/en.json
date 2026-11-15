@@ -33,7 +33,8 @@
     "audit": "Audit log",
     "organizations": "Organizations",
     "intake": "Intake log",
-    "more": "More"
+    "more": "More",
+    "categories": "Categories"
   },
   "shell": {
     "tagline": "Email helpdesk",
@@ -160,7 +161,12 @@
       "replyNotRetryable": "This reply is already on its way again.",
       "replyNotUnknown": "This reply's state changed. Reload the page.",
       "signatureInvalid": "The signature is too long.",
-      "nameInvalid": "Give a name of 1 to 80 characters without control characters."
+      "nameInvalid": "Give a name of 1 to 80 characters without control characters.",
+      "statusAdminOnly": "Only an admin can close a ticket or change a closed one.",
+      "moveNotAllowed": "You can move a ticket only to an organization you belong to.",
+      "categoryNotFound": "This category no longer exists. Reload the page and try again.",
+      "categoryNameInvalid": "Give the category a name of 1 to {categoryNameMax} characters.",
+      "categoryNameTaken": "Another category has this name. Choose another one."
     }
   },
   "auth": {
@@ -247,8 +253,8 @@
     "listTitle": "Tickets",
     "loading": "Loading the tickets",
     "failed": "Could not load the tickets",
-    "empty": "No tickets yet",
-    "emptyHint": "Tickets appear here once Maane reads the shared mailbox.",
+    "empty": "No open work",
+    "emptyHint": "New, open, and on-hold tickets show here. Choose another status to see the rest.",
     "emptyFiltered": "No tickets match these filters",
     "emptyFilteredHint": "Clear the filters to see every ticket.",
     "clearFilters": "Clear filters",
@@ -267,7 +273,20 @@
     "more": "Show older tickets",
     "loadingMore": "Loading older tickets",
     "moreFailed": "Could not load older tickets.",
-    "end": "That is every ticket."
+    "end": "That is every ticket.",
+    "status": "Status",
+    "statusFilter": {
+      "open_work": "Open work",
+      "all": "Every status",
+      "new": "New",
+      "open": "Open",
+      "pending": "Pending",
+      "on_hold": "On hold",
+      "solved": "Solved",
+      "closed": "Closed"
+    },
+    "category": "Category",
+    "allCategories": "All categories"
   },
   "ticket": {
     "loading": "Loading the ticket",
@@ -277,7 +296,11 @@
     "back": "Back to tickets",
     "status": {
       "new": "New",
-      "open": "Open"
+      "open": "Open",
+      "pending": "Pending",
+      "on_hold": "On hold",
+      "solved": "Solved",
+      "closed": "Closed"
     },
     "details": "Details",
     "organization": "Organization",
@@ -331,6 +354,35 @@
       "in": "Customer",
       "out": "Reply",
       "note": "Internal note"
+    },
+    "statusLabel": "Status",
+    "statusAdminOnly": "{status} (admins only)",
+    "statusClosedHint": "Only an admin can change a closed ticket.",
+    "statusDone": "The status is now {status}.",
+    "statusFailed": "Could not change the status. {reason}",
+    "saving": "Saving",
+    "categories": {
+      "label": "Categories",
+      "none": "None",
+      "noneYet": "An admin adds categories on the Categories page.",
+      "edit": "Edit",
+      "title": "Categories of this ticket",
+      "save": "Save",
+      "done": "The categories are saved."
+    },
+    "move": {
+      "open": "Move",
+      "title": "Move ticket #{number}",
+      "to": "To organization",
+      "hint": "It leaves {name}. From now on its replies come from the new organization's addresses.",
+      "submit": "Move ticket",
+      "moving": "Moving",
+      "done": "The ticket is moved to {name}."
+    },
+    "link": {
+      "sender_not_participant": "Sender not a participant",
+      "ambiguous_original": "Original of several tickets",
+      "follow_up": "Follow-up of a closed ticket"
     }
   },
   "scan": {
@@ -422,7 +474,8 @@
       "precedence": "Precedence header: bulk, list, or junk",
       "list": "Mailing list headers",
       "autoreply_header": "Automatic reply header",
-      "sent_by_maane": "A reply Maane sent, back in the mailbox"
+      "sent_by_maane": "A reply Maane sent, back in the mailbox",
+      "follow_up": "A reply to a closed ticket: a follow-up ticket is opened beside it"
     },
     "unknownSender": "Unknown sender",
     "noSubject": "(no subject)",
@@ -851,7 +904,11 @@
       "ticket": "Ticket",
       "from": "From",
       "recipients": "Recipients",
-      "problem": "Problem"
+      "problem": "Problem",
+      "status": "Status",
+      "category": "Category",
+      "categoriesAdded": "Categories added",
+      "categoriesRemoved": "Categories removed"
     },
     "stage": {
       "password": "password",
@@ -906,8 +963,19 @@
         "resend": "Reply sent again",
         "mark_sent": "Reply marked as sent",
         "send_refused": "Reply not sent"
+      },
+      "ticket": {
+        "status": "Ticket status changed",
+        "categories": "Ticket categories changed",
+        "move": "Ticket moved to another organization"
+      },
+      "category": {
+        "create": "Category added",
+        "rename": "Category renamed",
+        "delete": "Category deleted"
       }
-    }
+    },
+    "change": "{from}, now {to}"
   },
   "organizations": {
     "title": "Organizations",
@@ -1090,7 +1158,10 @@
     "empty": "Write a message or attach a file first.",
     "toRequired": "Add at least one recipient in To.",
     "replyQueued": "The reply is on its way. Its state shows under it.",
-    "noteAdded": "The internal note is added."
+    "noteAdded": "The internal note is added.",
+    "sendPending": "Send and set pending",
+    "sendOnly": "Send",
+    "replyQueuedPending": "The reply is on its way, and the ticket waits for the customer."
   },
   "delivery": {
     "title": "Sending",
@@ -1172,6 +1243,39 @@
       "tablet": "Tablet",
       "bot": "Program",
       "other": "Other device"
+    }
+  },
+  "categories": {
+    "title": "Categories",
+    "description": "One list for every ticket. Agents set categories on a ticket, and the ticket list filters by them.",
+    "listTitle": "All categories",
+    "loading": "Loading the categories",
+    "failed": "Could not load the categories",
+    "empty": "No categories yet",
+    "emptyHint": "Add one, and agents can set it on tickets.",
+    "create": "Add category",
+    "createTitle": "Add a category",
+    "createDone": "{name} is added.",
+    "rename": "Rename",
+    "renameTitle": "Rename {name}",
+    "renameDone": "The category is now {name}.",
+    "delete": "Delete",
+    "deleteTitle": "Delete {name}?",
+    "deleteMessage": {
+      "one": "1 ticket carries it and loses it. This cannot be undone.",
+      "two": "2 tickets carry it and lose it. This cannot be undone.",
+      "other": "{count} tickets carry it and lose it. This cannot be undone."
+    },
+    "deleteDone": "{name} is deleted.",
+    "actionFailed": "Could not change {name}. {reason}",
+    "actions": "Actions for {name}",
+    "name": "Name",
+    "nameRule": "1 to {max} characters.",
+    "saving": "Saving",
+    "ticketCount": {
+      "one": "1 ticket",
+      "two": "2 tickets",
+      "other": "{count} tickets"
     }
   }
 }

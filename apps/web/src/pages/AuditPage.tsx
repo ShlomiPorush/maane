@@ -3,6 +3,7 @@
 // seconds and keeps every page it shows. Each action has its words in the locale files; one the UI does not know yet
 // shows its code. A user an action names is shown by username when the user list knows them.
 
+import { TICKET_STATUSES } from "@maane/shared"
 import { useQuery } from "@tanstack/react-query"
 import { type AuditEntry, api, type AuditPage as Page, qk } from "../api/endpoints.ts"
 import { formatNumber } from "../format/number.ts"
@@ -57,6 +58,12 @@ export const AUDIT_ACTIONS = [
   "message.resend",
   "message.mark_sent",
   "message.send_refused",
+  "ticket.status",
+  "ticket.categories",
+  "ticket.move",
+  "category.create",
+  "category.rename",
+  "category.delete",
 ] as const
 
 const KNOWN = new Set<string>(AUDIT_ACTIONS)
@@ -208,6 +215,37 @@ export function describe(
       facts.push({ label: t("audit.fact.signature"), value: details.signature, ltr: true })
     if (typeof details.type === "string")
       facts.push({ label: t("audit.fact.blockedType"), value: details.type, ltr: true })
+  }
+  if (entry.action.startsWith("ticket.")) {
+    if (typeof details.ticket === "number")
+      facts.push({ label: t("audit.fact.ticket"), value: `#${details.ticket}`, ltr: true })
+    const status = (value: unknown) =>
+      typeof value === "string" && (TICKET_STATUSES as readonly string[]).includes(value)
+        ? t(`ticket.status.${value}`)
+        : null
+    const before = status(details.from)
+    const after = status(details.to)
+    if (entry.action === "ticket.status" && before && after)
+      facts.push({ label: t("audit.fact.status"), value: t("audit.change", { from: before, to: after }) })
+    const name = (value: unknown) =>
+      typeof value === "object" && value !== null && typeof (value as { name?: unknown }).name === "string"
+        ? (value as { name: string }).name
+        : null
+    const source = name(details.from)
+    const target = name(details.to)
+    if (entry.action === "ticket.move" && source && target)
+      facts.push({ label: t("audit.fact.organization"), value: t("audit.change", { from: source, to: target }) })
+    const names = (value: unknown) =>
+      Array.isArray(value) && value.length > 0 ? value.filter((item) => typeof item === "string").join(", ") : null
+    const added = names(details.added)
+    const removed = names(details.removed)
+    if (added) facts.push({ label: t("audit.fact.categoriesAdded"), value: added })
+    if (removed) facts.push({ label: t("audit.fact.categoriesRemoved"), value: removed })
+  }
+  if (entry.action.startsWith("category.")) {
+    if (typeof details.name === "string") facts.push({ label: t("audit.fact.category"), value: details.name })
+    if (entry.action === "category.rename" && typeof details.previous === "string")
+      facts.push({ label: t("audit.fact.previousName"), value: details.previous })
   }
   if (entry.action === "user.rename" && typeof details.name === "string")
     facts.push({ label: t("audit.fact.displayName"), value: details.name })
