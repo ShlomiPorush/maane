@@ -291,7 +291,7 @@ function linesOf(text: string): { key: number; line: string }[] {
 
 /** The automatic reminder: its text as the customer reads it, and after how many days it goes; or that there is none. */
 function Reminder({ template, days, onEdit }: { template: string; days: number; onEdit: () => void }) {
-  const { t } = useI18n()
+  const { t, tc } = useI18n()
   return (
     <section className="ui-panel" aria-labelledby="organization-reminder" data-testid="organization-reminder">
       <div className="ui-panel-head">
@@ -303,7 +303,7 @@ function Reminder({ template, days, onEdit }: { template: string; days: number; 
       </div>
       {template ? (
         <>
-          <p className="ui-reminder-after">{t("organization.reminder.after", { days: formatNumber(days) })}</p>
+          <p className="ui-reminder-after">{tc("organization.reminder.after", days)}</p>
           {/* Each line with its own direction, as the email gives it: a Hebrew line and an English line both read right. */}
           <div className="ui-signature" data-testid="organization-reminder-text">
             {linesOf(template).map(({ key, line }) => (

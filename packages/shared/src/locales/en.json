@@ -1181,7 +1181,11 @@
       "editTitle": "Automatic reminder",
       "empty": "No reminder",
       "emptyHint": "Tickets of this organization that wait for the customer get no reminder.",
-      "after": "Sent once when a ticket waits for the customer {days} days.",
+      "after": {
+        "one": "Sent once when a ticket waits for the customer 1 day.",
+        "two": "Sent once when a ticket waits for the customer 2 days.",
+        "other": "Sent once when a ticket waits for the customer {count} days."
+      },
       "template": "Reminder text",
       "templateHint": "Plain text, sent as the organization when a ticket set to pending gets no answer. Leave it empty for no reminders. Up to {max} characters.",
       "days": "Days to wait",

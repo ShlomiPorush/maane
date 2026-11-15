@@ -457,6 +457,28 @@ describe("the end of a waiting period stops its reminder", () => {
     expect((await periodsOf(t.id)).at(-1)?.endedAt).toBeNull()
   })
 
+  it("a scheduled reply with a plain Send ends it when it goes to sending, not when it is scheduled", async () => {
+    const { agent, t } = await waiting()
+    const due = await onlyReminder(t.id)
+    const scheduled = await agent.call(
+      "POST",
+      `/api/v1/tickets/${t.number}/messages`,
+      reply({ sendAt: new Date(Date.now() + HOUR).toISOString() }),
+    )
+    const id = scheduled.json.scheduled as string
+    expect(await actions().run(id, 1)).toBe("handed")
+    expect((await onlyReminder(t.id)).state).toBe("scheduled")
+    const [made] = await outboxOfAction(id)
+    expect(await sender().send(made?.messageId ?? "")).toBe("accepted")
+    // In the claim that handed it to sending: the period ends, and no new one starts (a plain Send).
+    expect((await db().select().from(timedAction).where(eq(timedAction.id, due.id)))[0]).toMatchObject({
+      state: "cancelled",
+      reason: "agent_reply",
+    })
+    expect((await periodsOf(t.id)).map((row) => row.endReason)).toEqual(["agent_reply"])
+    expect(await statusOf(t.id)).toBe("pending")
+  })
+
   it("a new reply that sets pending again ends the old period and starts a new one with its own reminder", async () => {
     const { agent, t } = await waiting()
     const first = await onlyReminder(t.id)
@@ -468,6 +490,27 @@ describe("the end of a waiting period stops its reminder", () => {
     expect(oldest?.action).toMatchObject({ id: first.id, state: "cancelled", reason: "agent_reply" })
     expect(newest?.action.state).toBe("scheduled")
     expect(newest?.periodId).toBe(periods[1]?.id)
+  })
+})
+
+describe("a sent reminder in a later reply", () => {
+  it("is quoted under the organization's name, as the customer saw it", async () => {
+    const { agent, t } = await waiting()
+    const due = await onlyReminder(t.id)
+    expect(await actions().run(due.id, 1)).toBe("handed")
+    const [made] = await outboxOfAction(due.id)
+    expect(await sender().send(made?.messageId ?? "")).toBe("accepted")
+    const later = await answer(agent, t.number)
+    expect(await sender().send(later)).toBe("accepted")
+    const [row] = await db().select().from(message).where(eq(message.id, later))
+    const raw = smtp2go.received.map((entry) => entry.raw).find((r) => r.includes(row?.messageIdHeader ?? "-"))
+    const parsed = await simpleParser(raw ?? Buffer.alloc(0))
+    // The newest quoted message is the reminder: its attribution line ("On {date}, {name} wrote:" in the default
+    // language) and its quoted block name the organization; the agent's earlier reply names its agent with it.
+    expect(parsed.text).toMatch(/,\s+Example Support\s/)
+    expect(parsed.text).toMatch(/^> Example Support \|/m)
+    expect(parsed.text).toMatch(/^> agent\.both \(Example Support\) \|/m)
+    expect(parsed.text).not.toContain(`> ${SUPPORT} |`)
   })
 })
 
