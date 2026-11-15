@@ -102,23 +102,23 @@ export function DeviceNotifications() {
           label={t("notifications.row")}
           hint={!state.on && state.permission === "denied" ? t("notifications.blocked") : undefined}
         >
-          <span className="ui-set-value">
+          <span className="ui-scanner-line">
             <Tag tone={state.on ? "ok" : "neutral"}>{state.on ? t("notifications.on") : t("notifications.off")}</Tag>
+            {state.on ? (
+              <button type="button" className="ui-btn" disabled={busy} onClick={() => void turnOff()}>
+                {busy ? t("notifications.busy") : t("notifications.turnOff")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="ui-btn ui-btn-primary"
+                disabled={busy || state.permission === "denied"}
+                onClick={() => void turnOn(state.publicKey)}
+              >
+                {busy ? t("notifications.busy") : t("notifications.turnOn")}
+              </button>
+            )}
           </span>
-          {state.on ? (
-            <button type="button" className="ui-btn" disabled={busy} onClick={() => void turnOff()}>
-              {busy ? t("notifications.busy") : t("notifications.turnOff")}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="ui-btn ui-btn-primary"
-              disabled={busy || state.permission === "denied"}
-              onClick={() => void turnOn(state.publicKey)}
-            >
-              {busy ? t("notifications.busy") : t("notifications.turnOn")}
-            </button>
-          )}
         </Row>
       ) : null}
     </Group>

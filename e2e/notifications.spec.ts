@@ -19,6 +19,8 @@ test("serves the manifest and the service worker, and offers notifications on th
   expect(worker.headers()["content-type"]).toContain("javascript")
   expect(await worker.text()).toContain("notificationclick")
 
+  // Headless Chromium starts with notifications denied, where a browser would ask: allow them, as a user would.
+  await page.context().grantPermissions(["notifications"])
   await signIn(page)
   await page.goto("/account")
   const group = page.locator("#account-notifications")
