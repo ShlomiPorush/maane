@@ -2239,6 +2239,25 @@ textarea.ui-input.ui-textarea {
   cursor: pointer;
 }
 
+/* The ticket list's search (plan 4.4): a label over the box and its button; the box takes the room the row has. */
+.ui-search {
+  display: grid;
+  gap: 5px;
+  max-width: 640px;
+}
+.ui-search-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.ui-search-row .ui-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ui-search-row .ui-btn {
+  flex: none;
+}
+
 /* A ticket row: its number in mono before the subject, which keeps its own direction. */
 .ui-ticket-num {
   color: var(--ui-muted);

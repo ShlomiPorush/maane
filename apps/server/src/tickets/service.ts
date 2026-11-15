@@ -37,8 +37,8 @@ import {
   type TicketView,
   type UnmatchedDelivery,
 } from "@maane/shared"
-import { and, asc, type Column, desc, eq, inArray, or, type SQL, sql } from "drizzle-orm"
-import { alias } from "drizzle-orm/pg-core"
+import { and, asc, type Column, desc, eq, ilike, inArray, isNotNull, or, type SQL, sql } from "drizzle-orm"
+import { alias, QueryBuilder } from "drizzle-orm/pg-core"
 import { Categories } from "../categories/service.ts"
 import type { Db } from "../db/client.ts"
 import {
@@ -199,8 +199,50 @@ function bodyLines(text: string | null, html: string | null): number {
   return Math.min(400, lines + images * 3)
 }
 
+/** A term as a LIKE pattern that finds it anywhere, its backslash, percent, and underscore taken literally. */
+export function containsPattern(term: string): string {
+  return `%${term.replace(/[\\%_]/g, (char) => `\\${char}`)}%`
+}
+
+/** A term that names a ticket number: digits, or "#" and digits. */
+const NUMBER_TERM = /^#?([1-9][0-9]{0,15})$/
+
+/**
+ * The tickets a search term finds (plan 4.4), as a condition on the list's ticket row: its subject, its participants'
+ * addresses and names (the customer and the Cc), the text of any of its messages (internal notes too), or its number.
+ * A substring match, ILIKE '%term%' with the term's wildcards escaped, which pg_trgm's GIN indexes serve from three
+ * characters; a shorter term matches the same rows, by a scan. One uncorrelated IN over a union, so each source uses
+ * its own index. The tickets it finds are only ever tested against the list's own rows, which carry the scope.
+ */
+export function searchCondition(term: string): SQL {
+  const pattern = containsPattern(term)
+  const digits = NUMBER_TERM.exec(term)?.[1]
+  const number = digits !== undefined && Number.isSafeInteger(Number(digits)) ? Number(digits) : null
+  const matched = alias(ticket, "matched")
+  const query = new QueryBuilder()
+  const found = query
+    .select({ id: matched.id })
+    .from(matched)
+    .where(or(ilike(matched.subject, pattern), number === null ? undefined : eq(matched.number, number)))
+    .union(
+      query
+        .select({ id: ticketParticipant.ticketId })
+        .from(ticketParticipant)
+        .where(or(ilike(ticketParticipant.address, pattern), ilike(ticketParticipant.name, pattern))),
+    )
+    .union(
+      query
+        .select({ id: sql<string>`${message.ticketId}`.as("id") })
+        .from(message)
+        .where(and(isNotNull(message.ticketId), ilike(message.textBody, pattern))),
+    )
+  return inArray(ticket.id, found)
+}
+
 export interface ListFilters {
   organization?: string
+  /** A search term (plan 4.4), trimmed and well formed; it narrows the list like any other filter. */
+  search?: string
   /** Open work (new, open, on hold) by default (plan 4.1), every status, or one. */
   status: StatusFilter
   /** Only the tickets that carry this category. */
@@ -226,7 +268,7 @@ export class Tickets {
     private readonly filesDir: string,
   ) {}
 
-  /** The ticket list: newest activity first, by a cursor after the last row shown. */
+  /** The ticket list: newest activity first, by a cursor after the last row shown; a search narrows it (plan 4.4). */
   async list(scope: OrganizationScope, filters: ListFilters): Promise<TicketList> {
     const cursor = filters.cursor ? decodeCursor(filters.cursor, "number") : null
     if (filters.cursor && !cursor) throw new CursorError()
@@ -240,6 +282,7 @@ export class Tickets {
         ? sql`exists (select 1 from ${ticketCategory} where ${ticketCategory.ticketId} = ${ticket.id} and ${ticketCategory.categoryId} = ${filters.category})`
         : undefined,
       filters.flagged ? flagged : undefined,
+      filters.search ? searchCondition(filters.search) : undefined,
       cursor
         ? sql`(${ticket.lastActivityAt}, ${ticket.number}) < (${cursor.at}::timestamptz, ${cursor.key})`
         : undefined,

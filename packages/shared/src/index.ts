@@ -175,6 +175,7 @@ export {
   PREVIEW_TYPES,
   type PreviewKind,
   previewKind,
+  SEARCH_MAX_LENGTH,
   TEXT_PREVIEW_MAX_BYTES,
   TICKETS_PAGE_SIZE,
   type TicketList,

@@ -1,12 +1,13 @@
-import { createHash, randomBytes, randomInt } from "node:crypto"
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { PART_STATUSES, REFERENCE_ALPHABET, STORED_STATUSES, userEmail } from "@maane/shared"
+import { PART_STATUSES, REFERENCE_ALPHABET, SEARCH_MAX_LENGTH, STORED_STATUSES, userEmail } from "@maane/shared"
 import { parse as parseDisposition } from "content-disposition"
 import { eq } from "drizzle-orm"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
+  authUser,
   category,
   intakeConversation,
   intakeRecord,
@@ -17,6 +18,7 @@ import {
   storedFile,
   ticket,
   ticketCategory,
+  ticketParticipant,
 } from "../db/schema.ts"
 import { storedFilePath } from "../files/paths.ts"
 import { sanitizeMailHtml } from "../mail/html.ts"
@@ -24,7 +26,7 @@ import { createTestApp } from "../testing/app.ts"
 import { nextIp, TestBrowser, testPassword } from "../testing/browser.ts"
 import { createTestDatabase } from "../testing/db.ts"
 import { pdf, png } from "../testing/files.ts"
-import { Tickets } from "./service.ts"
+import { searchCondition, Tickets } from "./service.ts"
 
 // The ticket routes of plan 2.4 against a migrated database and a file store in a temporary directory. Tickets,
 // messages, parts, and files are written here as intake writes them; the routes only read.
@@ -633,6 +635,187 @@ describe("the ticket view and list", () => {
     } while (cursor)
     expect(pages.flat()).toEqual([onHold.number, two.number, three.number, one.number, four.number])
     expect(pages[0]).toHaveLength(2)
+  })
+})
+
+describe("search (plan 4.4)", () => {
+  // Hebrew from code points: a stem of three letters, a longer word that holds it in its middle, and filler.
+  const STEM = String.fromCodePoint(0x5d7, 0x5e9, 0x5d1)
+  const WORD = String.fromCodePoint(0x5d1, 0x5d7, 0x5e9, 0x5d1, 0x5d5, 0x5e0, 0x5d9, 0x5d5, 0x5ea)
+  const LAMED = String.fromCodePoint(0x5dc)
+
+  /** An internal note, as the composer writes it: by an agent, with a submission ID. */
+  const note = async (ticketId: string, textBody: string) => {
+    const [author] = await db().select({ id: authUser.id }).from(authUser).limit(1)
+    return newMessage(ticketId, {
+      direction: "note",
+      textBody,
+      sourceId: null,
+      graphId: null,
+      folder: null,
+      graph: null,
+      authorUserId: author?.id ?? "",
+      submissionId: randomUUID(),
+    })
+  }
+  const participant = (ticketId: string, address: string, name: string | null) =>
+    db().insert(ticketParticipant).values({ ticketId, address, name })
+  const found = async (who: TestBrowser, term: string, more = "&status=all") => {
+    const answer = await who.call("GET", `/api/v1/tickets?q=${encodeURIComponent(term)}${more}`)
+    expect(answer.status, term).toBe(200)
+    return answer.json.tickets.map((t: { number: number }) => t.number)
+  }
+
+  it("finds a short Hebrew stem inside a longer word deep in a long message, newest first and paged", async () => {
+    const admin = await firstAdmin()
+    const a = await newOrganization("Alpha")
+    const at = (minutes: number) => new Date(Date.UTC(2026, 10, 15, 9, minutes))
+    const deep = await newTicket(a, { lastActivityAt: at(1) })
+    const other = await newTicket(a, { lastActivityAt: at(2) })
+    const newer = await newTicket(a, { lastActivityAt: at(3) })
+    const filler = `${SHALOM} `.repeat(6000)
+    await newMessage(deep.id, { textBody: `${filler}\n${filler}\n${SHALOM} ${WORD} ${SHALOM}\n${filler}` })
+    await newMessage(other.id, { textBody: filler })
+    await newMessage(newer.id, { textBody: `${WORD}` })
+    expect(filler.length).toBeGreaterThanOrEqual(30_000)
+    expect(await found(admin, STEM)).toEqual([newer.number, deep.number])
+    expect(await found(admin, ` ${STEM}  `)).toEqual([newer.number, deep.number])
+    // One and two characters are below the trigram index and still match by substring.
+    expect(await found(admin, LAMED)).toEqual([other.number, deep.number])
+    expect(await found(admin, STEM.slice(0, 2))).toEqual([newer.number, deep.number])
+    expect(await found(admin, `${STEM}x`)).toEqual([])
+
+    // Paged like the list: the cursor keeps the search.
+    const tickets = new Tickets(db(), filesDir)
+    const first = await tickets.list({ all: true }, { status: "all", search: STEM, limit: 1 })
+    expect(first.tickets.map((t) => t.number)).toEqual([newer.number])
+    const second = await tickets.list(
+      { all: true },
+      { status: "all", search: STEM, limit: 1, cursor: first.next ?? "" },
+    )
+    expect(second.tickets.map((t) => t.number)).toEqual([deep.number])
+    const third = await tickets.list(
+      { all: true },
+      { status: "all", search: STEM, limit: 1, cursor: second.next ?? "" },
+    )
+    expect(third.tickets).toEqual([])
+  })
+
+  it("finds a ticket by its subject, its customer's address and name, a note's text, and its number", async () => {
+    const admin = await firstAdmin()
+    const a = await newOrganization("Alpha")
+    const printer = await newTicket(a, { subject: "Printer jam on floor three" })
+    const plain = await newTicket(a, { subject: "Something else" })
+    await participant(printer.id, "dana.levi@example.com", "Dana Levi")
+    await participant(plain.id, "ron@example.com", null)
+    await note(plain.id, "Called the courier")
+    expect(await found(admin, "inter JAM")).toEqual([printer.number])
+    expect(await found(admin, "LEVI@EXAMPLE")).toEqual([printer.number])
+    expect(await found(admin, "dana lev")).toEqual([printer.number])
+    expect(await found(admin, "ron@")).toEqual([plain.number])
+    expect(await found(admin, "courier")).toEqual([plain.number])
+    expect(await found(admin, String(plain.number))).toEqual([plain.number])
+    expect(await found(admin, `#${printer.number}`)).toEqual([printer.number])
+    expect(await found(admin, "#999999")).toEqual([])
+    expect(await found(admin, "nothing like it")).toEqual([])
+  })
+
+  it("matches %, _, and a backslash literally", async () => {
+    const admin = await firstAdmin()
+    const a = await newOrganization("Alpha")
+    const percent = await newTicket(a, { subject: "100% refund" })
+    await newTicket(a, { subject: "1000 refunds" })
+    const underscore = await newTicket(a, { subject: "file a_b.txt" })
+    await newTicket(a, { subject: "file axb.txt" })
+    const backslash = await newTicket(a, { subject: "path C:\\temp" })
+    await newTicket(a, { subject: "path C:temp" })
+    expect(await found(admin, "0% r")).toEqual([percent.number])
+    expect(await found(admin, "%")).toEqual([percent.number])
+    expect(await found(admin, "a_b")).toEqual([underscore.number])
+    expect(await found(admin, "_")).toEqual([underscore.number])
+    expect(await found(admin, "C:\\")).toEqual([backslash.number])
+    expect(await found(admin, "\\")).toEqual([backslash.number])
+  })
+
+  it("never shows an agent another organization's ticket, by any field, and keeps the scope of every filter", async () => {
+    const admin = await firstAdmin()
+    const agent = await newAgent(admin, "agent.search")
+    const a = await newOrganization("Alpha")
+    const b = await newOrganization("Beta")
+    expect((await admin.call("POST", `/api/v1/admin/organizations/${a}/members`, { userId: agent.id })).status).toBe(
+      201,
+    )
+    const mine = await newTicket(a, { subject: `Order ${WORD}` })
+    const theirs = await newTicket(b, { subject: `Order ${WORD}` })
+    await participant(mine.id, "same@example.com", "Same Name")
+    await participant(theirs.id, "same@example.com", "Same Name")
+    await newMessage(theirs.id, { textBody: `secret ${STEM} text` })
+    await note(theirs.id, "hidden note")
+    for (const term of [STEM, "Order", "same@example.com", "Same Name"]) {
+      expect(await found(agent.b, term), term).toEqual([mine.number])
+      expect(await found(admin, term), term).toEqual([theirs.number, mine.number])
+    }
+    for (const term of ["secret", "hidden note", `#${theirs.number}`, String(theirs.number)]) {
+      expect(await found(agent.b, term), term).toEqual([])
+      expect(await found(admin, term), term).toEqual([theirs.number])
+    }
+    // The organization filter does not widen the scope, and the answer names only the agent's organizations.
+    expect(await found(agent.b, STEM, `&status=all&organization=${b}`)).toEqual([])
+    const answer = await agent.b.call("GET", `/api/v1/tickets?q=${encodeURIComponent(STEM)}`)
+    expect(answer.json.organizations).toEqual([{ id: a, name: "Alpha" }])
+    // Removed from Alpha: the next search finds nothing.
+    expect((await admin.call("DELETE", `/api/v1/admin/organizations/${a}/members/${agent.id}`)).status).toBe(200)
+    expect(await found(agent.b, STEM)).toEqual([])
+  })
+
+  it("combines with the status and category filters, and bounds the term", async () => {
+    const admin = await firstAdmin()
+    const a = await newOrganization("Alpha")
+    const at = (minutes: number) => new Date(Date.UTC(2026, 10, 15, 9, minutes))
+    const open = await newTicket(a, { subject: `Invoice ${WORD}`, status: "open", lastActivityAt: at(1) })
+    const solved = await newTicket(a, { subject: `Invoice ${WORD}`, status: "solved", lastActivityAt: at(2) })
+    await newTicket(a, { subject: "Unrelated", status: "open", lastActivityAt: at(3) })
+    const [billing] = await db().insert(category).values({ name: "Billing" }).returning({ id: category.id })
+    await db()
+      .insert(ticketCategory)
+      .values({ ticketId: solved.id, categoryId: billing?.id ?? "" })
+    // Without a status the search keeps the default view, open work.
+    expect(await found(admin, STEM, "")).toEqual([open.number])
+    expect(await found(admin, STEM)).toEqual([solved.number, open.number])
+    expect(await found(admin, STEM, "&status=solved")).toEqual([solved.number])
+    expect(await found(admin, STEM, "&status=pending")).toEqual([])
+    expect(await found(admin, STEM, `&status=all&category=${billing?.id}`)).toEqual([solved.number])
+    // An empty or blank term is no search.
+    expect((await found(admin, "   ")).length).toBe(3)
+    expect((await admin.call("GET", `/api/v1/tickets?q=${"x".repeat(SEARCH_MAX_LENGTH)}`)).status).toBe(200)
+    expect((await admin.call("GET", `/api/v1/tickets?q=${"x".repeat(SEARCH_MAX_LENGTH + 1)}`)).status).toBe(400)
+    // A NUL, which PostgreSQL refuses in a parameter, is searched as U+FFFD, not an error.
+    expect(await found(admin, `a${String.fromCharCode(0)}b`)).toEqual([])
+  })
+
+  it("lets PostgreSQL use the trigram index for the message text, Hebrew included", async () => {
+    const a = await newOrganization("Alpha")
+    const t = await newTicket(a)
+    await newMessage(t.id, { textBody: `${SHALOM} ${WORD}` })
+    const client = await database.pool.connect()
+    try {
+      // Hebrew letters are word characters in this database's locale, so a Hebrew term gives trigrams to look up.
+      const trigrams = await client.query("select show_trgm($1) as t", [STEM])
+      expect(trigrams.rows[0].t.length).toBeGreaterThan(0)
+      // The list's own search query; the tables are tiny, so sequential scans are switched off to ask whether the
+      // index is usable at all.
+      const query = db().select({ id: ticket.id }).from(ticket).where(searchCondition(STEM)).toSQL()
+      await client.query("begin")
+      await client.query("set local enable_seqscan = off")
+      const plan = await client.query(`explain (costs off) ${query.sql}`, query.params)
+      await client.query("rollback")
+      const text = plan.rows.map((row) => row["QUERY PLAN"]).join("\n")
+      expect(text).toContain("message_text_trgm_idx")
+      expect(text).toContain("ticket_subject_trgm_idx")
+      expect(text).toContain("ticket_participant_address_trgm_idx")
+    } finally {
+      client.release()
+    }
   })
 })
 

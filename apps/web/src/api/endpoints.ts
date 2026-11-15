@@ -104,6 +104,7 @@ export const qk = {
       filters.flagged ? 1 : 0,
       filters.status ?? "",
       filters.category ?? "",
+      filters.q ?? "",
     ] as const,
   categories: ["categories"] as const,
   ticket: (number: number) => ["ticket", number] as const,
@@ -111,7 +112,14 @@ export const qk = {
 }
 
 /** The ticket list's filters, as the page keeps them in its address. Without a status the list shows open work. */
-export type TicketFilters = { organization?: string; flagged?: boolean; status?: StatusFilter; category?: string }
+export type TicketFilters = {
+  organization?: string
+  flagged?: boolean
+  status?: StatusFilter
+  category?: string
+  /** A search term (plan 4.4). */
+  q?: string
+}
 /** The intake log's filters. */
 export type IntakeFilters = { mode?: "listening" | "live"; flagged?: boolean }
 
@@ -169,6 +177,7 @@ export const api = {
         // Open work is the server's default too: the request, like the address, names only another view.
         status: filters.status === DEFAULT_STATUS_FILTER ? undefined : filters.status,
         category: filters.category,
+        q: filters.q,
         after,
       })}`,
     ),

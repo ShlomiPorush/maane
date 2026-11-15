@@ -2,6 +2,7 @@
 // and role lands (signed out, two-factor off, agent, admin), the setup screen's states, sign-in with its second
 // step, and a session that ends while a page is open. Texts are read from the locale files.
 
+import { SEARCH_MAX_LENGTH } from "@maane/shared"
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -1530,6 +1531,52 @@ describe("tickets", () => {
     await vi.waitFor(() => expect(text()).toContain(he("tickets.emptyFiltered")))
     await act(async () => button(he("tickets.clearFilters"))?.click())
     await vi.waitFor(() => expect(where()).toBe("/"))
+  })
+
+  it("searches on Enter or its button, keeps the term in the address, and says when nothing matches (plan 4.4)", async () => {
+    await renderAt("/", {
+      "/api/setup/status": status(),
+      "/api/v1/me": agent,
+      "/api/v1/tickets": (request) => (request.url.includes("q=") ? list([]) : list([summary(9)])),
+    })
+    const box = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLInputElement>('[data-testid="ticket-search"]')
+      expect(found).not.toBeNull()
+      return found as HTMLInputElement
+    })
+    expect(box.type).toBe("search")
+    expect(box.dir).toBe("auto")
+    expect(box.maxLength).toBe(SEARCH_MAX_LENGTH)
+    expect(box.closest("search")).not.toBeNull()
+    // Typing alone asks nothing (SR-9); the button runs the search, trimmed.
+    await act(async () => type(box, ` ${SHALOM} `))
+    expect(requests.some((r) => r.url.includes("q="))).toBe(false)
+    await act(async () => button(he("tickets.searchSubmit"))?.click())
+    const encoded = new URLSearchParams({ q: SHALOM }).toString()
+    await vi.waitFor(() => expect(where()).toBe(`/?${encoded}`))
+    expect(requests.some((r) => r.url === `/api/v1/tickets?${encoded}`)).toBe(true)
+    // Nothing found: the term, and that the status filter limits the search.
+    await vi.waitFor(() => expect(text()).toContain(he("tickets.searchEmptyStatusHint")))
+    expect(text()).toContain(SHALOM)
+    // Emptying the box ends the search at once.
+    await act(async () => type(box, ""))
+    await vi.waitFor(() => expect(where()).toBe("/"))
+    await vi.waitFor(() => expect(document.querySelector('a[data-number="9"]')).not.toBeNull())
+  })
+
+  it("starts the search box from the address, with the other filters", async () => {
+    await renderAt("/?status=all&q=%2312", {
+      "/api/setup/status": status(),
+      "/api/v1/me": agent,
+      "/api/v1/tickets": list([summary(12)]),
+    })
+    const box = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLInputElement>('[data-testid="ticket-search"]')
+      expect(found?.value).toBe("#12")
+      return found as HTMLInputElement
+    })
+    expect(box).not.toBeNull()
+    expect(requests.some((r) => r.url === "/api/v1/tickets?status=all&q=%2312")).toBe(true)
   })
 
   it("shows open work by default and filters by status and category, kept in the address (plan 4.1)", async () => {

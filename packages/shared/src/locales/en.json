@@ -290,7 +290,13 @@
       "closed": "Closed"
     },
     "category": "Category",
-    "allCategories": "All categories"
+    "allCategories": "All categories",
+    "search": "Search",
+    "searchPlaceholder": "Subject, customer, message text, or #number",
+    "searchSubmit": "Search",
+    "searchEmpty": "No tickets match \"{query}\"",
+    "searchEmptyHint": "Try part of a word, an address, or a ticket number.",
+    "searchEmptyStatusHint": "The search looks only at the tickets the filters show. Choose Every status to search every ticket."
   },
   "ticket": {
     "loading": "Loading the ticket",

@@ -290,7 +290,13 @@
       "closed": "סגורה"
     },
     "category": "קטגוריה",
-    "allCategories": "כל הקטגוריות"
+    "allCategories": "כל הקטגוריות",
+    "search": "חיפוש",
+    "searchPlaceholder": "נושא, לקוח, תוכן הודעה או #מספר",
+    "searchSubmit": "חיפוש",
+    "searchEmpty": "אין פניות שמתאימות לחיפוש \"{query}\"",
+    "searchEmptyHint": "אפשר לנסות חלק ממילה, כתובת או מספר פנייה.",
+    "searchEmptyStatusHint": "החיפוש בודק רק את הפניות שהסינון מציג. כדי לחפש בכל הפניות אפשר לבחור \"כל הסטטוסים\"."
   },
   "ticket": {
     "loading": "טוען את הפנייה",

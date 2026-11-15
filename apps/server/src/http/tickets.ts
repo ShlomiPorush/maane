@@ -11,6 +11,7 @@ import {
   INTAKE_FILTER_MODES,
   INTAKE_PAGE_SIZE,
   previewKind,
+  SEARCH_MAX_LENGTH,
   STATUS_FILTERS,
   type StatusFilter,
   TICKETS_PAGE_SIZE,
@@ -22,6 +23,7 @@ import { errorFacts, log } from "../log.ts"
 import { htmlDocument, textDocument } from "../mail/body.ts"
 import { visibleOrganizations } from "../organizations/scope.ts"
 import type { Replies } from "../replies/service.ts"
+import { wellFormedText } from "../text.ts"
 import { CursorError, type FileAccess, Tickets } from "../tickets/service.ts"
 import type { ApiEnv } from "./request.ts"
 
@@ -94,6 +96,10 @@ export function ticketRoutes(db: Db, filesDir: string, replies: Replies): Hono<A
     const status = c.req.query("status")
     const category = c.req.query("category")
     const flagged = c.req.query("flagged")
+    // A search (plan 4.4): trimmed, empty is none, bounded; U+0000 and unpaired surrogates, which PostgreSQL refuses in
+    // a parameter, become U+FFFD as intake stored them.
+    const search = wellFormedText(c.req.query("q") ?? "").value.trim()
+    if (search.length > SEARCH_MAX_LENGTH) return invalid(c)
     if (organization !== undefined && !UUID.test(organization)) return invalid(c)
     // Without a status the list shows open work (plan 4.1); `all` shows every status.
     if (status !== undefined && !(STATUS_FILTERS as readonly string[]).includes(status)) return invalid(c)
@@ -103,6 +109,7 @@ export function ticketRoutes(db: Db, filesDir: string, replies: Replies): Hono<A
       return c.json(
         await tickets.list(await scopeOf(c), {
           organization,
+          search: search || undefined,
           status: (status as StatusFilter | undefined) ?? DEFAULT_STATUS_FILTER,
           category,
           flagged: flagged === "1",
