@@ -1855,7 +1855,7 @@ describe("tickets", () => {
     })
     expect(form.textContent).toContain(he("when.zone"))
     const date = form.querySelector<HTMLInputElement>('input[type="date"]') as HTMLInputElement
-    const time = form.querySelector<HTMLInputElement>('input[type="time"]') as HTMLInputElement
+    const time = form.querySelector<HTMLInputElement>('input[data-field="time"]') as HTMLInputElement
     const submit = () => document.querySelector<HTMLButtonElement>('[data-testid="composer-when-submit"]')?.click()
     // 26 March 2027: Israel's clock skips from 02:00 to 03:00.
     await act(async () => {
@@ -1955,7 +1955,7 @@ describe("tickets", () => {
       return found as HTMLFormElement
     })
     expect(form.querySelector<HTMLInputElement>('input[type="date"]')?.value).toBe("2027-01-10")
-    expect(form.querySelector<HTMLInputElement>('input[type="time"]')?.value).toBe("09:30")
+    expect(form.querySelector<HTMLInputElement>('input[data-field="time"]')?.value).toBe("09:30")
     await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-when-submit"]')?.click())
     const put = await vi.waitFor(() => {
       const found = requests.find((r) => r.method === "PUT" && r.url === `/api/v1/scheduled/${SCHEDULED}`)
@@ -1991,7 +1991,7 @@ describe("tickets", () => {
     })
     await act(async () => {
       type(form.querySelector('input[type="date"]') as HTMLInputElement, "2027-07-01")
-      type(form.querySelector('input[type="time"]') as HTMLInputElement, "08:00")
+      type(form.querySelector('input[data-field="time"]') as HTMLInputElement, "08:00")
     })
     await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="snooze-when-submit"]')?.click())
     await vi.waitFor(() => {

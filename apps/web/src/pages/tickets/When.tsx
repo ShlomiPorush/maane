@@ -1,7 +1,9 @@
 // Choosing a time ahead in Israel time (plan 4.2): "send later" in the composer and snooze. The date and the time are
 // entered and shown in Maane's zone (Asia/Jerusalem) whatever the browser's zone (format/datetime.ts converts them,
-// daylight saving included). A time the clock skips when summer time starts is refused with the reason, and so is a
-// time that is not ahead; the server refuses one that is not ahead by its own clock too.
+// daylight saving included). The date is the browser's date field (its order is the browser's, v3 FW-9); the time is
+// typed on the 24-hour clock, since a native time field shows AM and PM in some browsers' languages. A time the clock
+// skips when summer time starts is refused with the reason, and so is a time that is not ahead; the server refuses one
+// that is not ahead by its own clock too.
 
 import { type FormEvent, type ReactNode, useId, useState } from "react"
 import { errorText } from "../../api/errors.ts"
@@ -12,7 +14,9 @@ import { Dialog } from "../../ui/Dialog.tsx"
 import { useMounted } from "../../ui/mounted.ts"
 import { FormError } from "../auth/parts.tsx"
 
-const VALID = { date: /^\d{4}-\d{2}-\d{2}$/, time: /^\d{2}:\d{2}$/ }
+const DATE = /^\d{4}-\d{2}-\d{2}$/
+/** The time as typed on the 24-hour clock (v3 FW-9): "9:30" or "09:30". */
+const TIME = /^(\d{1,2}):(\d{2})$/
 
 export function WhenDialog(props: {
   title: string
@@ -41,11 +45,12 @@ export function WhenDialog(props: {
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setError(null)
-    if (!VALID.date.test(value.date) || !VALID.time.test(value.time)) {
+    const typed = TIME.exec(value.time.trim())
+    if (!DATE.test(value.date) || !typed) {
       setError(t("when.required"))
       return
     }
-    const at = zonedInstant(value)
+    const at = zonedInstant({ date: value.date, time: `${(typed[1] ?? "").padStart(2, "0")}:${typed[2]}` })
     if (!at) {
       setError(t("when.missingHour"))
       return
@@ -112,10 +117,16 @@ export function WhenDialog(props: {
             <label className="ui-label" htmlFor={`${formId}-time`}>
               {t("when.time")}
             </label>
+            {/* Text on the 24-hour clock: a native time field shows AM and PM in some browsers' languages. */}
             <input
               id={`${formId}-time`}
-              type="time"
-              step={60}
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={5}
+              placeholder="HH:MM"
+              data-field="time"
               className="ui-input ui-mono"
               dir="ltr"
               required
