@@ -7,6 +7,7 @@ import { parse as parseDisposition } from "content-disposition"
 import { eq } from "drizzle-orm"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
+  category,
   intakeConversation,
   intakeRecord,
   intakeSource,
@@ -15,6 +16,7 @@ import {
   organization,
   storedFile,
   ticket,
+  ticketCategory,
 } from "../db/schema.ts"
 import { storedFilePath } from "../files/paths.ts"
 import { sanitizeMailHtml } from "../mail/html.ts"
@@ -191,7 +193,12 @@ describe("scope", () => {
     expect(await numbers(agent.b)).toEqual([ticketA.number])
     expect((await agent.b.call("GET", "/api/v1/tickets")).json.organizations).toEqual([{ id: a, name: "Alpha" }])
     // An agent of no organization sees an empty list, not an error.
-    expect((await lonely.b.call("GET", "/api/v1/tickets")).json).toEqual({ tickets: [], next: null, organizations: [] })
+    expect((await lonely.b.call("GET", "/api/v1/tickets")).json).toEqual({
+      tickets: [],
+      next: null,
+      organizations: [],
+      categories: [],
+    })
     // Filtering by an organization outside the scope shows nothing of it.
     expect((await agent.b.call("GET", `/api/v1/tickets?organization=${b}`)).json.tickets).toEqual([])
 
@@ -247,7 +254,7 @@ describe("scope", () => {
     }
     expect((await admin.call("GET", "/api/v1/tickets?after=nope")).json).toEqual({ error: "request_invalid" })
     expect((await admin.call("GET", "/api/v1/tickets?organization=nope")).status).toBe(400)
-    expect((await admin.call("GET", "/api/v1/tickets?status=closed")).status).toBe(400)
+    expect((await admin.call("GET", "/api/v1/tickets?status=archived")).status).toBe(400)
   })
 })
 
@@ -375,7 +382,7 @@ describe("caching", () => {
       ["a file outside the scope", await agent.b.get(`/api/v1/files/${file}`), 404],
       ["a refused preview", await admin.get(`/api/v1/files/${markup}/preview`), 403],
       ["the intake log for an agent", await agent.b.get("/api/v1/intake"), 403],
-      ["a bad filter", await admin.get("/api/v1/tickets?status=closed"), 400],
+      ["a bad filter", await admin.get("/api/v1/tickets?status=archived"), 400],
       ["signed out", await browser().get("/api/v1/tickets"), 401],
     ]
     for (const [what, answer, status] of answers) {
@@ -569,7 +576,7 @@ describe("the ticket view and list", () => {
     expect((await admin.call("GET", "/api/v1/tickets")).json.tickets[0].reviewFlags).toEqual(["blocked_content"])
   })
 
-  it("lists newest activity first, filters by organization, status, and review, and pages by a cursor", async () => {
+  it("lists open work newest first by default, filters by organization, status, category, and review, and pages by a cursor", async () => {
     const admin = await firstAdmin()
     const a = await newOrganization("Alpha")
     const b = await newOrganization("Beta")
@@ -578,13 +585,40 @@ describe("the ticket view and list", () => {
     const two = await newTicket(a, { lastActivityAt: at(3), status: "open" })
     const three = await newTicket(b, { lastActivityAt: at(2), reviewFlags: ["possibly_automated"] })
     const four = await newTicket(b, { lastActivityAt: at(0) })
+    const pending = await newTicket(a, { lastActivityAt: at(4), status: "pending" })
+    const onHold = await newTicket(a, { lastActivityAt: at(5), status: "on_hold" })
+    const solved = await newTicket(a, { lastActivityAt: at(6), status: "solved" })
+    const closed = await newTicket(a, { lastActivityAt: at(7), status: "closed" })
     await newMessage(four.id, { reviewFlags: ["invalid_characters"], fromName: null, fromAddress: "zed@example.com" })
+    const [billing] = await db().insert(category).values({ name: "Billing" }).returning({ id: category.id })
+    await db()
+      .insert(ticketCategory)
+      .values([one, pending].map((t) => ({ ticketId: t.id, categoryId: billing?.id ?? "" })))
     const numbers = async (query: string) =>
       (await admin.call("GET", `/api/v1/tickets${query}`)).json.tickets.map((t: { number: number }) => t.number)
-    expect(await numbers("")).toEqual([two.number, three.number, one.number, four.number])
+    // The default view is open work: new, open, and on hold (plan 4.1).
+    expect(await numbers("")).toEqual([onHold.number, two.number, three.number, one.number, four.number])
+    expect(await numbers("?status=open_work")).toEqual(await numbers(""))
+    expect(await numbers("?status=all")).toEqual([
+      closed.number,
+      solved.number,
+      onHold.number,
+      pending.number,
+      two.number,
+      three.number,
+      one.number,
+      four.number,
+    ])
     expect(await numbers(`?organization=${b}`)).toEqual([three.number, four.number])
     expect(await numbers("?status=open")).toEqual([two.number])
+    expect(await numbers("?status=pending")).toEqual([pending.number])
+    expect(await numbers("?status=solved")).toEqual([solved.number])
+    expect(await numbers("?status=closed")).toEqual([closed.number])
     expect(await numbers("?flagged=1")).toEqual([three.number, four.number])
+    expect(await numbers(`?category=${billing?.id}`)).toEqual([one.number])
+    expect(await numbers(`?category=${billing?.id}&status=all`)).toEqual([pending.number, one.number])
+    expect((await admin.call("GET", "/api/v1/tickets?category=nope")).status).toBe(400)
+    expect((await admin.call("GET", "/api/v1/tickets")).json.categories).toEqual([{ id: billing?.id, name: "Billing" }])
     const listed = (await admin.call("GET", "/api/v1/tickets")).json.tickets.at(-1)
     expect(listed).toMatchObject({ customer: { address: "zed@example.com", name: null }, messages: 1 })
 
@@ -593,11 +627,11 @@ describe("the ticket view and list", () => {
     const pages: number[][] = []
     let cursor: string | undefined
     do {
-      const page = await tickets.list(scope, { cursor, limit: 2 })
+      const page = await tickets.list(scope, { status: "open_work", cursor, limit: 2 })
       pages.push(page.tickets.map((t) => t.number))
       cursor = page.next ?? undefined
     } while (cursor)
-    expect(pages.flat()).toEqual([two.number, three.number, one.number, four.number])
+    expect(pages.flat()).toEqual([onHold.number, two.number, three.number, one.number, four.number])
     expect(pages[0]).toHaveLength(2)
   })
 })

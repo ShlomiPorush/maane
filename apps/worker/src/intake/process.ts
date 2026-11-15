@@ -8,7 +8,10 @@
 //
 // For each message: a copy of an earlier one is recorded and changes nothing; automated mail opens, joins, and reopens
 // nothing; otherwise the support address (To, then Cc, then the default) and the threading layers decide between
-// joining a thread, a new thread, and a new thread linked to the ones it matched. One decision path serves both modes
+// joining a thread, a new thread, and a new thread linked to the ones it matched (plan 4.1: a participant's reply to a
+// closed ticket opens a follow-up linked to it; the closed ticket is not changed). Joining a ticket in live mode is a
+// customer reply, which takes effect in apps/server/src/tickets/customer-reply.ts; the ticket's row is locked after the
+// message's (lock order: mode row, message, ticket). One decision path serves both modes
 // over two stores (review G4): live mode keeps tickets; listening mode keeps shadow conversations (no number, no
 // reference code, no status) with the same participants, links, and pending references, and it matches existing
 // tickets too, without changing them, so a listening record says exactly what live mode would have done.
@@ -33,9 +36,12 @@ import {
 } from "@maane/server/db/schema"
 import { errorFacts, log } from "@maane/server/log"
 import { databaseError } from "@maane/server/organizations/refusal"
+import { customerReplied, isCustomerReply } from "@maane/server/tickets/customer-reply"
+import { lockTicket } from "@maane/server/tickets/status"
 import {
   type IntakeMode,
   type IntakeOutcome,
+  type LinkReason,
   type MatchLayer,
   type MessageFlag,
   matchSupportAddress,
@@ -123,14 +129,17 @@ interface ThreadStore {
   /** The first of these numbers, in their order, that names a thread. */
   byNumbers(tx: Tx, numbers: number[]): Promise<string | null>
   isParticipant(tx: Tx, thread: string, address: string): Promise<boolean>
+  /**
+   * Whether the thread is a closed ticket (plan 4.1): a customer reply to it opens a follow-up instead of joining it.
+   * Live mode reads the ticket locked FOR UPDATE, so a status change waits for this message's transaction.
+   */
+  isClosed(tx: Tx, thread: string): Promise<boolean>
   open(
     tx: Tx,
     values: { organizationId: string; supportAddress: string; subject: string | null; flags: TicketFlag[] },
   ): Promise<string>
   addParticipant(tx: Tx, thread: string, address: string, name: string | null): Promise<void>
-  link(tx: Tx, thread: string, linked: string, reason: TicketFlag): Promise<void>
-  /** A customer message joined: the ticket becomes open. */
-  joined(tx: Tx, thread: string): Promise<void>
+  link(tx: Tx, thread: string, linked: string, reason: LinkReason): Promise<void>
   keepPending(tx: Tx, thread: string, ids: string[]): Promise<void>
   resolvePending(tx: Tx, thread: string, id: string, by: string): Promise<void>
   /** The message's column for a thread it belongs to. */
@@ -393,23 +402,24 @@ export class IntakeProcessor {
 
     const sender = msg.fromAddress
     let links: Thread[] = []
-    let linkReason: TicketFlag | null = null
+    let linkReason: LinkReason | null = null
     if (match.kind === "thread") {
       const store = storeOf(match.thread.kind)
       const thread = match.thread.id
-      if (sender !== null && (await store.isParticipant(tx, thread, sender))) {
-        await store.joined(tx, thread)
+      const participant = sender !== null && (await store.isParticipant(tx, thread, sender))
+      if (participant && !(await store.isClosed(tx, thread))) {
         await this.#keepPending(tx, store, msg, thread)
         // Only the thread the message joined stops waiting for it (review G3).
         if (msg.messageIdHeader) await store.resolvePending(tx, thread, msg.messageIdHeader, msg.id)
-        return finish(
-          { ...patch, ...store.messageColumn(thread) },
-          { ...base, ...store.recordThread(thread), outcome: "joined" },
-        )
+        const record: RecordFields = { ...base, ...store.recordThread(thread), outcome: "joined" }
+        // The one place a customer reply takes effect (apps/server/src/tickets/customer-reply.ts).
+        if (isCustomerReply({ mode, ...record })) await customerReplied(tx, thread, this.#now())
+        return finish({ ...patch, ...store.messageColumn(thread) }, record)
       }
-      // Every layer is only a hint: a sender who is not a participant opens a new thread, linked to the old one.
+      // Every layer is only a hint: a sender who is not a participant opens a new thread, linked to the old one. A
+      // participant's reply to a closed ticket opens a follow-up linked to it, and the closed ticket stays as it is.
       links = [match.thread]
-      linkReason = "sender_not_participant"
+      linkReason = participant ? "follow_up" : "sender_not_participant"
     } else if (match.kind === "ambiguous") {
       // A late original that more than one thread waits for: its own thread, linked to each, never one at random.
       links = match.holders
@@ -423,7 +433,8 @@ export class IntakeProcessor {
     }
     const threadFlags: TicketFlag[] = []
     if (classification.possiblyAutomated) threadFlags.push("possibly_automated")
-    if (linkReason) threadFlags.push(linkReason)
+    // A follow-up needs no review; the other links do.
+    if (linkReason && linkReason !== "follow_up") threadFlags.push(linkReason)
     const opened = await opens.open(tx, {
       organizationId: address.organizationId,
       supportAddress: address.supportAddress,
@@ -593,6 +604,11 @@ export class IntakeProcessor {
         }
         throw new Error("no free reference code after 8 draws")
       },
+      async isClosed(tx, thread) {
+        if (!readOnly) return (await lockTicket(tx, thread))?.status === "closed"
+        const [row] = await tx.select({ status: ticket.status }).from(ticket).where(eq(ticket.id, thread))
+        return row?.status === "closed"
+      },
       async addParticipant(tx, thread, address, name) {
         if (!readOnly)
           await tx.insert(ticketParticipant).values({ ticketId: thread, address, name }).onConflictDoNothing()
@@ -600,10 +616,6 @@ export class IntakeProcessor {
       async link(tx, thread, linked, reason) {
         if (!readOnly)
           await tx.insert(ticketLink).values({ ticketId: thread, linkedTicketId: linked, reason }).onConflictDoNothing()
-      },
-      async joined(tx, thread) {
-        if (!readOnly)
-          await tx.update(ticket).set({ status: "open", lastActivityAt: now() }).where(eq(ticket.id, thread))
       },
       async keepPending(tx, thread, ids) {
         if (!ids.length) return
@@ -707,7 +719,7 @@ export class IntakeProcessor {
           .values({ conversationId: thread, linkedConversationId: linked, reason })
           .onConflictDoNothing()
       },
-      joined: async () => undefined,
+      isClosed: async () => false,
       async keepPending(tx, thread, ids) {
         if (ids.length)
           await tx

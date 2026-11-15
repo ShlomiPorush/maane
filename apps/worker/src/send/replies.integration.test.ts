@@ -258,7 +258,8 @@ describe("a reply, end to end", () => {
       },
     })
     expect(out?.attachments.map((a) => a.fileName)).toEqual(["notes.txt"])
-    expect(after.ticket.status).toBe("open")
+    // A reply without "set pending" leaves the status as it is (plan 4.1).
+    expect(after.ticket.status).toBe("new")
     const [recipient] = await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id))
     expect(recipient?.response).toContain(`OK id=${sent.queueId}`)
   })

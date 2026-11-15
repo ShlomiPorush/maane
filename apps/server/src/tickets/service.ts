@@ -15,6 +15,7 @@ import {
   type FieldNotice,
   type IntakeEntry,
   type IntakeLog,
+  type LinkReason,
   type MailAddress,
   type MessageDirection,
   type MessageView,
@@ -26,6 +27,8 @@ import {
   type RecipientState,
   type SendProblem,
   STORED_STATUSES,
+  type StatusFilter,
+  statusesOf,
   TEXT_FIELDS,
   type TextField,
   type TicketList,
@@ -36,6 +39,7 @@ import {
 } from "@maane/shared"
 import { and, asc, type Column, desc, eq, inArray, or, type SQL, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
+import { Categories } from "../categories/service.ts"
 import type { Db } from "../db/client.ts"
 import {
   authUser,
@@ -48,6 +52,7 @@ import {
   outboxRecipient,
   storedFile,
   ticket,
+  ticketCategory,
   ticketLink,
   ticketParticipant,
 } from "../db/schema.ts"
@@ -56,6 +61,7 @@ import { linkViews } from "../links/service.ts"
 import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
 import { renderMailHtml } from "../mail/html.ts"
 import type { OrganizationScope } from "../organizations/scope.ts"
+import { Workflow } from "./workflow.ts"
 
 /** The image types an inline part may be embedded as, by the type read from its content. */
 const INLINE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
@@ -195,7 +201,10 @@ function bodyLines(text: string | null, html: string | null): number {
 
 export interface ListFilters {
   organization?: string
-  status?: TicketStatus
+  /** Open work (new, open, on hold) by default (plan 4.1), every status, or one. */
+  status: StatusFilter
+  /** Only the tickets that carry this category. */
+  category?: string
   flagged?: boolean
   cursor?: string
   limit: number
@@ -222,10 +231,14 @@ export class Tickets {
     const cursor = filters.cursor ? decodeCursor(filters.cursor, "number") : null
     if (filters.cursor && !cursor) throw new CursorError()
     const flagged = sql`(cardinality(${ticket.reviewFlags}) > 0 or exists (select 1 from ${message} where ${message.ticketId} = ${ticket.id} and cardinality(${message.reviewFlags}) > 0))`
+    const statuses = statusesOf(filters.status)
     const conditions = [
       inScope(scope, ticket.organizationId),
       filters.organization ? eq(ticket.organizationId, filters.organization) : undefined,
-      filters.status ? eq(ticket.status, filters.status) : undefined,
+      statuses ? inArray(ticket.status, [...statuses]) : undefined,
+      filters.category
+        ? sql`exists (select 1 from ${ticketCategory} where ${ticketCategory.ticketId} = ${ticket.id} and ${ticketCategory.categoryId} = ${filters.category})`
+        : undefined,
       filters.flagged ? flagged : undefined,
       cursor
         ? sql`(${ticket.lastActivityAt}, ${ticket.number}) < (${cursor.at}::timestamptz, ${cursor.key})`
@@ -300,6 +313,7 @@ export class Tickets {
       tickets,
       next: rows.length === filters.limit && last ? encodeCursor(last.cursorAt, last.number) : null,
       organizations: await this.organizations(scope),
+      categories: await new Categories(this.db).refs(),
     }
   }
 
@@ -327,6 +341,7 @@ export class Tickets {
       .where(and(eq(ticket.number, number), inScope(scope, ticket.organizationId)))
     if (!row) return null
     const t = row.ticket
+    const workflow = new Workflow(this.db)
 
     const messages = await this.db
       .select()
@@ -501,9 +516,12 @@ export class Tickets {
         supportAddress: t.supportAddress,
         createdAt: t.createdAt.toISOString(),
         lastActivityAt: t.lastActivityAt.toISOString(),
+        categories: await workflow.categoriesOf(t.id),
       },
       participants,
-      links,
+      links: links.map((link) => ({ number: link.number, reason: link.reason as LinkReason })),
+      categories: await new Categories(this.db).refs(),
+      moveTargets: await workflow.moveTargets(scope, t.organizationId),
       messages: views,
       ticketId: t.id,
       organizationSignature: row.signature,

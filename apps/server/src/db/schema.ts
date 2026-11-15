@@ -328,7 +328,8 @@ export const ticketNumber = pgSequence("ticket_number_seq", { startWith: 1 })
 
 /**
  * A ticket. Its support address and organization are the concrete ones of the message that opened it and never change
- * by a later message. The reference code is random (CSPRNG) over `@maane/shared` REFERENCE_ALPHABET.
+ * by a later message; only a move (plan 4.1) changes the organization, and the support address stays as it came. The
+ * reference code is random (CSPRNG) over `@maane/shared` REFERENCE_ALPHABET.
  */
 export const ticket = pgTable(
   "ticket",
@@ -351,7 +352,7 @@ export const ticket = pgTable(
   },
   (t) => [
     index("ticket_organization_idx").on(t.organizationId),
-    check("ticket_status", sql`${t.status} in ('new', 'open')`),
+    check("ticket_status", sql`${t.status} in ('new', 'open', 'pending', 'on_hold', 'solved', 'closed')`),
     check(
       "ticket_reference_code",
       sql`${t.referenceCode} ~ '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}-[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}$'`,
@@ -384,7 +385,7 @@ export const ticketLink = pgTable(
     linkedTicketId: uuid("linked_ticket_id")
       .notNull()
       .references(() => ticket.id, { onDelete: "restrict" }),
-    /** `sender_not_participant` or `ambiguous_original` (`@maane/shared` TICKET_FLAGS). */
+    /** `@maane/shared` LINK_REASONS: `sender_not_participant`, `ambiguous_original`, or `follow_up` (plan 4.1). */
     reason: text("reason").notNull(),
     createdAt: createdAt(),
   },
@@ -392,6 +393,38 @@ export const ticketLink = pgTable(
     primaryKey({ columns: [t.ticketId, t.linkedTicketId] }),
     index("ticket_link_linked_idx").on(t.linkedTicketId),
   ],
+)
+
+// --- Categories (plan 4.1) ---
+
+/** One shared list of categories, managed by admins. Deleting one removes it from every ticket (on delete cascade). */
+export const category = pgTable(
+  "category",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Trimmed, 1 to 80 characters, unique without regard to case. */
+    name: text("name").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("category_name_unique").on(sql`lower(${t.name})`),
+    check("category_name_form", sql`${t.name} = btrim(${t.name}) and char_length(${t.name}) between 1 and 80`),
+  ],
+)
+
+/** A ticket's categories: any number of them. */
+export const ticketCategory = pgTable(
+  "ticket_category",
+  {
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => ticket.id, { onDelete: "restrict" }),
+    categoryId: uuid("category_id")
+      .notNull()
+      .references(() => category.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.ticketId, t.categoryId] }), index("ticket_category_category_idx").on(t.categoryId)],
 )
 
 /**

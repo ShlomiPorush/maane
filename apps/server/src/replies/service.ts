@@ -51,6 +51,7 @@ import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
 import type { Settings } from "../settings/service.ts"
 import { wellFormedText } from "../text.ts"
+import { changeStatus, lockTicket } from "../tickets/status.ts"
 import { EMBEDDABLE_TYPES, imagesToRead, prepareImage } from "./images.ts"
 import type { Entry, EntryImage } from "./layout.ts"
 import {
@@ -81,6 +82,8 @@ export const ReplyBody = z.object({
   html: z.string().max(REPLY_HTML_MAX),
   uploads: z.array(z.uuid()).max(ATTACHMENTS_MAX),
   parts: z.array(z.uuid()).max(ATTACHMENTS_MAX),
+  /** A reply only: set the ticket to pending in the reply's transaction (plan 4.1); absent leaves the status. */
+  setPending: z.boolean().optional(),
 })
 export type ReplyBodyInput = z.infer<typeof ReplyBody>
 
@@ -293,6 +296,10 @@ export class Replies {
     }
 
     const written = await transactionWithJobs(this.db, async (tx, jobs) => {
+      // The ticket locked first: its status is decided from this row, and a move since it was read refuses the From.
+      const locked = await lockTicket(tx, t.id)
+      if (!locked) throw new Refusal("not_found", 404)
+      if (isReply && locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
       const [row] = await tx
         .insert(message)
         .values({
@@ -362,10 +369,10 @@ export class Replies {
             )
         await this.jobs.sendIn(jobs, SEND_REPLY, { messageId: row.id })
       }
-      await tx
-        .update(ticket)
-        .set(isReply ? { status: "open", lastActivityAt: now } : { lastActivityAt: now })
-        .where(eq(ticket.id, t.id))
+      // "Send and set pending" (plan 4.1): in the reply's own transaction, by the one status rule, never on acceptance.
+      // A plain send and an internal note leave the status as it is.
+      if (isReply && input.setPending) await changeStatus(tx, locked, "pending", user, "reply")
+      await tx.update(ticket).set({ lastActivityAt: now }).where(eq(ticket.id, t.id))
       await writeAudit(tx, user.actor, {
         action: isReply ? "message.reply" : "message.note",
         entityType: "message",
