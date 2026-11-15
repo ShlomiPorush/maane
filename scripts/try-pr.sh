@@ -143,6 +143,7 @@ try_pr() {
   build_toolchain
 
   ensure_stack_env "$DATA_DIR"
+  ensure_vapid_keys "$DATA_DIR" "$IMAGE"
   ensure_stack_dirs "$DATA_DIR"
   write_compose
   # The setup screen closes 5 minutes after the server starts, and ClamAV's first signature download can take longer:

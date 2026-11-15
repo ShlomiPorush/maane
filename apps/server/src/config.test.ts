@@ -1,10 +1,26 @@
-import { randomBytes } from "node:crypto"
+import { createECDH, randomBytes } from "node:crypto"
 import { SETTINGS } from "@maane/shared"
 import { describe, expect, it } from "vitest"
 import { ConfigError, isGeneratedHex, isPlaceholder, loadConfig } from "./config.ts"
 
 const key = () => randomBytes(32).toString("hex")
 const password = () => randomBytes(16).toString("hex")
+/**
+ * A VAPID pair in the form web-push's generateVAPIDKeys makes, new for each call: a P-256 key pair as base64url, the
+ * private key padded to 32 bytes as web-push pads it (Node drops its leading zero bytes about once in 256 keys).
+ */
+const vapid = () => {
+  const curve = createECDH("prime256v1")
+  curve.generateKeys()
+  return {
+    publicKey: curve.getPublicKey().toString("base64url"),
+    privateKey: Buffer.from(curve.getPrivateKey("hex").padStart(64, "0"), "hex").toString("base64url"),
+  }
+}
+const vapidEnv = (pair = vapid()) => ({
+  MAANE_VAPID_PUBLIC_KEY: pair.publicKey,
+  MAANE_VAPID_PRIVATE_KEY: pair.privateKey,
+})
 
 function env(overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
   return {
@@ -12,6 +28,7 @@ function env(overrides: Record<string, string | undefined> = {}): NodeJS.Process
     MAANE_PUBLIC_URL: "https://maane.example.com",
     MAANE_AUTH_SECRETS: `1:${key()}`,
     MAANE_SETTINGS_KEYS: `1:${key()}`,
+    ...vapidEnv(),
     ...overrides,
   }
 }
@@ -74,6 +91,26 @@ describe("loadConfig", () => {
         expect(message).not.toContain(value)
       }
     }
+  })
+
+  it("reads the VAPID pair and refuses it missing, as a placeholder, or put together from two pairs", () => {
+    const pair = vapid()
+    expect(loadConfig(env(vapidEnv(pair))).vapid).toEqual(pair)
+    const both = "MAANE_VAPID_PUBLIC_KEY and MAANE_VAPID_PRIVATE_KEY"
+    for (const name of ["MAANE_VAPID_PUBLIC_KEY", "MAANE_VAPID_PRIVATE_KEY"]) {
+      expect(problems(env({ [name]: undefined }))).toContain(`${name} is required`)
+      expect(problems(env({ [name]: " " }))).toContain(`${name} is required`)
+      for (const value of [...INSTRUCTIONS, "<vapid-public-key>", "x".repeat(87), "A".repeat(43), key()]) {
+        const message = problems(env({ [name]: value }))
+        expect(message, `${name}=${value}`).toContain(both)
+        expect(message).not.toContain(value)
+      }
+    }
+    const other = vapid()
+    const mixed = problems(env({ MAANE_VAPID_PUBLIC_KEY: pair.publicKey, MAANE_VAPID_PRIVATE_KEY: other.privateKey }))
+    expect(mixed).toContain(`${both} are not one key pair`)
+    expect(mixed).not.toContain(pair.publicKey)
+    expect(mixed).not.toContain(other.privateKey)
   })
 
   it("refuses shared keys", () => {

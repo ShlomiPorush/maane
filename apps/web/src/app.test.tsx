@@ -11,6 +11,7 @@ import { noteAuthStatus } from "./api/auth.ts"
 import { setTransport, type TransportRequest, type TransportResponse } from "./api/client.ts"
 import { ERROR_VARS } from "./api/errors.ts"
 import { I18nProvider, translate, translateCount } from "./i18n/i18n.tsx"
+import { browserDevice, type DeviceSubscription, setPushDevice } from "./notifications/device.ts"
 import { ROUTES } from "./routes.tsx"
 
 /** pdf.js, as the PDF preview loads it (pages/tickets/pdf.ts): component tests never run it. */
@@ -28,6 +29,7 @@ const auth = vi.hoisted(() => ({
   revokeOtherSessions: vi.fn(),
   disable: vi.fn(),
   enable: vi.fn(),
+  signOut: vi.fn(),
 }))
 
 /** Better Auth's client session as useSession reads it, changed by a test the way another tab or a refresh does. */
@@ -60,7 +62,7 @@ vi.mock("./api/auth.ts", async (importOriginal) => {
       }),
       listSessions: auth.listSessions,
       revokeOtherSessions: auth.revokeOtherSessions,
-      signOut: () => Promise.resolve({ data: {}, error: null }),
+      signOut: auth.signOut,
       signIn: { username: auth.signInUsername },
       signUp: { email: auth.signUpEmail },
       twoFactor: {
@@ -79,7 +81,10 @@ vi.mock("./api/auth.ts", async (importOriginal) => {
 
 const he = (key: string, vars?: Record<string, string | number>) => translate("he", key, vars)
 
-type Answers = Record<string, TransportResponse | ((request: TransportRequest) => TransportResponse)>
+type Answers = Record<
+  string,
+  TransportResponse | ((request: TransportRequest) => TransportResponse | Promise<TransportResponse>)
+>
 
 let requests: TransportRequest[] = []
 let mounted: { root: Root; host: HTMLElement } | null = null
@@ -137,6 +142,7 @@ beforeEach(() => {
   pdf.loadPdfJs.mockReset()
   pdf.openPdf.mockReset()
   auth.listSessions.mockResolvedValue({ data: [], error: null })
+  auth.signOut.mockResolvedValue({ data: {}, error: null })
   session.set({ session: { id: "current" }, user: { id: "u1", role: "admin" } })
 })
 
@@ -2347,5 +2353,249 @@ describe("the intake log", () => {
     await renderAt("/intake", { "/api/setup/status": status(), "/api/v1/me": agent })
     await vi.waitFor(() => expect(text()).toContain(he("adminOnly.title")))
     expect(requests.some((r) => r.url.startsWith("/api/v1/intake"))).toBe(false)
+  })
+})
+
+describe("browser notifications on this device", () => {
+  const ENDPOINT = "https://updates.push.services.mozilla.com/wpush/v2/device-one"
+  const PUBLIC_KEY = "BPublicKeyOfMaane"
+  const button = (label: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === label) ?? null
+
+  /** A browser with push: what it did, in order, next to the requests the transport answered. */
+  function fakeDevice(subscribed: boolean, fails: { current?: boolean; unsubscribe?: boolean } = {}) {
+    const events: string[] = []
+    const subscription = (): DeviceSubscription => ({
+      endpoint: ENDPOINT,
+      keys: { p256dh: "p256dh-of-the-browser", auth: "auth-of-the-browser" },
+      unsubscribe: async () => {
+        if (fails.unsubscribe) throw new Error("the push service did not answer")
+        events.push("unsubscribe")
+        current = null
+      },
+    })
+    let current: DeviceSubscription | null = subscribed ? subscription() : null
+    setPushDevice({
+      supported: () => true,
+      permission: () => "granted",
+      current: async () => {
+        if (fails.current) throw new Error("the service worker is not reachable")
+        return current
+      },
+      subscribe: async (key) => {
+        events.push(`subscribe ${key}`)
+        current = subscription()
+        return current
+      },
+    })
+    return events
+  }
+
+  afterEach(() => setPushDevice(browserDevice))
+
+  it("says so when this browser cannot get notifications", async () => {
+    await renderAt("/account", { "/api/setup/status": status(), "/api/v1/me": admin })
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.unsupported")))
+    expect(requests.some((r) => r.url.startsWith("/api/v1/notifications"))).toBe(false)
+  })
+
+  it("turns them on for this device with the UI's language, and off again", async () => {
+    const events = fakeDevice(false)
+    let on = false
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": () => ok({ publicKey: PUBLIC_KEY, on }),
+      "/api/v1/notifications/subscription": (request) => {
+        events.push(`${request.method} ${request.body}`)
+        on = request.method === "PUT"
+        return ok({ on })
+      },
+    }
+    await renderAt("/account", answers)
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.off")))
+    await act(async () => button(he("notifications.turnOn"))?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.on")))
+    expect(events).toEqual([
+      `subscribe ${PUBLIC_KEY}`,
+      `PUT ${JSON.stringify({ endpoint: ENDPOINT, keys: { p256dh: "p256dh-of-the-browser", auth: "auth-of-the-browser" }, locale: "he" })}`,
+    ])
+    await act(async () => button(he("notifications.turnOff"))?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.off")))
+    expect(events.slice(2)).toEqual([`DELETE ${JSON.stringify({ endpoint: ENDPOINT })}`, "unsubscribe"])
+  })
+
+  /** Lets the requests and the browser calls already started finish. */
+  const settle = () => act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
+
+  it("ends a subscription this browser holds for someone else once a user is signed in, on any page", async () => {
+    const events = fakeDevice(true)
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": ok({ publicKey: PUBLIC_KEY, on: false }),
+    }
+    await renderAt("/", answers)
+    await vi.waitFor(() => expect(events).toEqual(["unsubscribe"]))
+    const asked = requests.find((r) => r.url === "/api/v1/notifications/state")
+    expect(asked?.body).toBe(JSON.stringify({ endpoint: ENDPOINT }))
+  })
+
+  it.each([
+    ["this user's own subscription", ok({ publicKey: PUBLIC_KEY, on: true })],
+    ["any subscription when the check fails", { status: 500, body: { error: "internal" } }],
+  ])("keeps %s", async (_, state) => {
+    const events = fakeDevice(true)
+    await renderAt("/", { "/api/setup/status": status(), "/api/v1/me": admin, "/api/v1/notifications/state": state })
+    await vi.waitFor(() => expect(requests.some((r) => r.url === "/api/v1/notifications/state")).toBe(true))
+    await settle()
+    expect(events).toEqual([])
+  })
+
+  it("asks again after a failed check until the server answers, and then ends someone else's subscription", async () => {
+    const events = fakeDevice(true)
+    let asked = 0
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": () => {
+        asked += 1
+        return asked === 1 ? { status: 500, body: { error: "internal" } } : ok({ publicKey: PUBLIC_KEY, on: false })
+      },
+    }
+    await renderAt("/", answers)
+    await vi.waitFor(() => expect(asked).toBe(1))
+    await settle()
+    expect(events).toEqual([])
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    await vi.waitFor(() => expect(events).toEqual(["unsubscribe"]))
+    expect(asked).toBe(2)
+    // Answered: the checks stop.
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    await settle()
+    expect(asked).toBe(2)
+  })
+
+  it("leaves a subscription being turned on alone while a check that failed asks again", async () => {
+    const events = fakeDevice(true)
+    let failing = true
+    let on = false
+    let release = () => {}
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": () =>
+        failing ? { status: 500, body: { error: "internal" } } : ok({ publicKey: PUBLIC_KEY, on }),
+      // Saving the new subscription takes a while: the check below runs in between.
+      "/api/v1/notifications/subscription": (request) => {
+        events.push(request.method)
+        return new Promise((resolve) => {
+          release = () => {
+            on = true
+            resolve(ok({ on: true }))
+          }
+        })
+      },
+    }
+    await renderAt("/", answers)
+    await vi.waitFor(() => expect(requests.some((r) => r.url === "/api/v1/notifications/state")).toBe(true))
+    await settle()
+    failing = false
+    await act(async () => router?.navigate("/account"))
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.off")))
+    await act(async () => button(he("notifications.turnOn"))?.click())
+    await vi.waitFor(() => expect(events).toContain("PUT"))
+    expect(events).toEqual(["unsubscribe", `subscribe ${PUBLIC_KEY}`, "PUT"])
+    // The server does not count the new subscription yet; the check must not end it.
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    await settle()
+    expect(events).toEqual(["unsubscribe", `subscribe ${PUBLIC_KEY}`, "PUT"])
+    await act(async () => release())
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.on")))
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    await settle()
+    expect(events).toEqual(["unsubscribe", `subscribe ${PUBLIC_KEY}`, "PUT"])
+  })
+
+  it("replaces a subscription this browser holds for someone else instead of taking it over", async () => {
+    const events = fakeDevice(true)
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": ok({ publicKey: PUBLIC_KEY, on: false }),
+      "/api/v1/notifications/subscription": (request) => {
+        events.push(request.method)
+        return ok({ on: true })
+      },
+    }
+    await renderAt("/account", answers)
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.off")))
+    // The check on signing in ends it first; turning on then makes a new one.
+    await vi.waitFor(() => expect(events).toEqual(["unsubscribe"]))
+    await act(async () => button(he("notifications.turnOn"))?.click())
+    await vi.waitFor(() => expect(events).toContain("PUT"))
+    expect(events).toEqual(["unsubscribe", `subscribe ${PUBLIC_KEY}`, "PUT"])
+  })
+
+  it("signing out first removes this device's subscription, then ends it in the browser, then signs out", async () => {
+    const events = fakeDevice(true)
+    auth.signOut.mockImplementation(async () => {
+      events.push("signOut")
+      return { data: {}, error: null }
+    })
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      // Once signed out, the session is gone, as Better Auth's signOut leaves it.
+      "/api/v1/me": () => (events.includes("signOut") ? signedOut : totpRequired),
+      "/api/v1/notifications/subscription": (request) => {
+        events.push(`${request.method} ${request.body}`)
+        return ok({ on: false })
+      },
+    }
+    await renderAt("/enroll", answers)
+    await vi.waitFor(() => expect(button(he("account.signOut"))).not.toBeNull())
+    await act(async () => button(he("account.signOut"))?.click())
+    await vi.waitFor(() => expect(where()).toBe("/login"))
+    expect(events).toEqual([`DELETE ${JSON.stringify({ endpoint: ENDPOINT })}`, "unsubscribe", "signOut"])
+  })
+
+  it.each([
+    ["fails", { status: 500, body: { error: "internal" } } as TransportResponse],
+    ["refuses a session /api/v1 no longer takes", totpRequired],
+  ])("signs out when the server's delete %s but the browser ends the subscription", async (_, deleted) => {
+    const events = fakeDevice(true)
+    auth.signOut.mockImplementation(async () => {
+      events.push("signOut")
+      return { data: {}, error: null }
+    })
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      // Once signed out, the session is gone, as Better Auth's signOut leaves it.
+      "/api/v1/me": () => (events.includes("signOut") ? signedOut : totpRequired),
+      "/api/v1/notifications/subscription": deleted,
+    }
+    await renderAt("/enroll", answers)
+    await vi.waitFor(() => expect(button(he("account.signOut"))).not.toBeNull())
+    await act(async () => button(he("account.signOut"))?.click())
+    await vi.waitFor(() => expect(where()).toBe("/login"))
+    expect(events).toEqual(["unsubscribe", "signOut"])
+  })
+
+  it.each([
+    ["end", { unsubscribe: true }],
+    ["read", { current: true }],
+  ])("keeps the session when the browser could not %s its subscription, and says so", async (_, fails) => {
+    fakeDevice(true, fails)
+    const answers: Answers = {
+      "/api/setup/status": status(),
+      "/api/v1/me": totpRequired,
+      "/api/v1/notifications/subscription": totpRequired,
+    }
+    await renderAt("/enroll", answers)
+    await vi.waitFor(() => expect(button(he("account.signOut"))).not.toBeNull())
+    await act(async () => button(he("account.signOut"))?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.notForgotten")))
+    expect(auth.signOut).not.toHaveBeenCalled()
+    expect(where()).toBe("/enroll")
   })
 })

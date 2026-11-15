@@ -83,6 +83,9 @@ export type AddressCheck = {
 const ORGANIZATIONS = "/admin/organizations"
 const at = (id: string) => `${ORGANIZATIONS}/${encodeURIComponent(id)}`
 
+/** The notifications of this device: Maane's public key, and whether the device's subscription is the user's. */
+export type NotificationState = { publicKey: string; on: boolean }
+
 export const qk = {
   setupStatus: ["setup-status"] as const,
   me: ["me"] as const,
@@ -91,6 +94,7 @@ export const qk = {
   audit: ["audit"] as const,
   users: ["users"] as const,
   sessions: ["sessions"] as const,
+  notifications: ["notifications"] as const,
   organizations: ["organizations"] as const,
   organization: (id: string) => ["organizations", id] as const,
   tickets: (filters: TicketFilters) =>
@@ -199,4 +203,11 @@ export const api = {
     request<{ ok: true }>("PUT", `/admin/users/${encodeURIComponent(userId)}/name`, { name }),
   checkAddress: (address: string) =>
     request<AddressCheck>("GET", `${ORGANIZATIONS}/address-check${query({ address })}`),
+  /** The key this device subscribes with, and whether its subscription (the endpoint, or none) is the user's own. */
+  notificationState: (endpoint: string | null) =>
+    request<NotificationState>("POST", "/notifications/state", { endpoint }),
+  subscribeDevice: (subscription: { endpoint: string; keys: { p256dh: string; auth: string } }, locale: Locale) =>
+    request<{ on: true }>("PUT", "/notifications/subscription", { ...subscription, locale }),
+  unsubscribeDevice: (endpoint: string) =>
+    request<{ on: false }>("DELETE", "/notifications/subscription", { endpoint }),
 }

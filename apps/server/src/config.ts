@@ -1,6 +1,10 @@
+import { createECDH } from "node:crypto"
 import { SETTINGS, type SettingKey } from "@maane/shared"
 
 export type VersionedKey = { version: number; value: string }
+
+/** The VAPID key pair of browser notifications, base64url, as web-push's generateVAPIDKeys makes it. */
+export type VapidKeys = { publicKey: string; privateKey: string }
 
 export type ServerConfig = {
   port: number
@@ -12,6 +16,11 @@ export type ServerConfig = {
   authSecrets: VersionedKey[]
   /** MAANE_SETTINGS_KEYS ("2:new,1:old"): encrypts the secrets stored in settings. Never an auth secret. */
   settingsKeys: VersionedKey[]
+  /**
+   * MAANE_VAPID_PUBLIC_KEY and MAANE_VAPID_PRIVATE_KEY (plan 4.5): the public key a browser subscribes with and the
+   * private key the worker signs each push with. Replacing them disconnects every subscription.
+   */
+  vapid: VapidKeys
   /** MAANE_TRUSTED_PROXIES: the proxy addresses or CIDR ranges in front of Maane (Traefik), comma-separated. */
   trustedProxies: string[]
   /** MAANE_PUBLIC_URL: the URL people open; a browser's Origin must match it. */
@@ -120,6 +129,29 @@ function parseKeys(name: string, text: string, problems: string[]): VersionedKey
   return keys
 }
 
+const BASE64URL = /^[A-Za-z0-9_-]+$/
+const VAPID_NAMES = "MAANE_VAPID_PUBLIC_KEY and MAANE_VAPID_PRIVATE_KEY"
+
+/**
+ * The VAPID pair as web-push's generateVAPIDKeys writes it: a P-256 private key of 32 bytes and its uncompressed public
+ * point of 65 bytes, both base64url. The public key must be the one the private key makes, so no example text and no
+ * pair put together from two halves passes. A problem names the variables, never a value.
+ */
+export function vapidProblem(publicKey: string, privateKey: string): string | null {
+  const shape = `${VAPID_NAMES} must be the key pair web-push's generateVAPIDKeys makes`
+  if (!BASE64URL.test(publicKey) || !BASE64URL.test(privateKey)) return shape
+  const pub = Buffer.from(publicKey, "base64url")
+  const priv = Buffer.from(privateKey, "base64url")
+  if (pub.length !== 65 || priv.length !== 32 || pub[0] !== 4) return shape
+  try {
+    const curve = createECDH("prime256v1")
+    curve.setPrivateKey(priv)
+    return curve.getPublicKey().equals(pub) ? null : `${VAPID_NAMES} are not one key pair`
+  } catch {
+    return shape
+  }
+}
+
 /**
  * Reads the server and worker configuration from the environment and refuses an unsafe one. Only what a process
  * needs before it can read its own settings lives here alone: the database, the keys, the public URL, and the
@@ -146,6 +178,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const settingsKeysText = required("MAANE_SETTINGS_KEYS")
   const authSecrets = authSecretsText ? parseKeys("MAANE_AUTH_SECRETS", authSecretsText, problems) : []
   const settingsKeys = settingsKeysText ? parseKeys("MAANE_SETTINGS_KEYS", settingsKeysText, problems) : []
+  const vapidPublic = required("MAANE_VAPID_PUBLIC_KEY")
+  const vapidPrivate = required("MAANE_VAPID_PRIVATE_KEY")
+  const vapid = vapidPublic && vapidPrivate ? vapidProblem(vapidPublic, vapidPrivate) : null
+  if (vapid) problems.push(vapid)
   const authValues = new Set(authSecrets.map((k) => k.value))
   if (settingsKeys.some((k) => authValues.has(k.value))) {
     problems.push("MAANE_SETTINGS_KEYS must differ from every auth secret")
@@ -197,6 +233,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     databaseUrl,
     authSecrets,
     settingsKeys,
+    vapid: { publicKey: vapidPublic, privateKey: vapidPrivate },
     trustedProxies,
     publicUrl,
     migrationsDir: env.MAANE_MIGRATIONS_DIR || "drizzle",

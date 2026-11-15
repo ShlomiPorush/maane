@@ -1,5 +1,6 @@
 import { loadConfig } from "@maane/server/config"
 import { openDatabase } from "@maane/server/db/client"
+import { PUSH_NOTIFY } from "@maane/server/jobs/queue"
 import { errorFacts, log } from "@maane/server/log"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
@@ -11,10 +12,11 @@ import { FileService } from "./files/service.ts"
 import { FileStore } from "./files/store.ts"
 import { GraphGateway } from "./intake/graph.ts"
 import { reconcileIntakeSource } from "./intake/jobs.ts"
-import { IntakeProcessor } from "./intake/process.ts"
+import { IntakeProcessor, type Notify } from "./intake/process.ts"
 import { WaitingFiles } from "./intake/retry.ts"
 import { IntakeSync } from "./intake/sync.ts"
 import { registerJobs } from "./jobs.ts"
+import { PushNotifier } from "./notify/push.ts"
 import { ReplySender } from "./send/sender.ts"
 import type { SmtpTimeouts } from "./send/smtp.ts"
 
@@ -44,13 +46,20 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
   const files = new FileService({ db: database.db, settings, scanner: clamdScanner, store })
   // The intake source of the tenant and mailbox in effect is current before any job runs (plan 2.3, P18).
   await reconcileIntakeSource(database.db, settings)
+  // The queue first: intake queues browser notifications through it, in the transaction that stores each message.
+  const boss = new PgBoss({ connectionString: config.databaseUrl, schema: "pgboss" })
+  boss.on("error", (error) => log.error("the job queue reported an error", errorFacts(error)))
+  const notify: Notify = async (jobs, job) => {
+    const id = await boss.send(PUSH_NOTIFY, job, { db: jobs })
+    if (!id) throw new Error("the queue did not accept a push-notify job")
+  }
   const graph = new GraphGateway()
   const intake = {
     pool: database.pool,
     settings,
     graph,
     sync: new IntakeSync({ db: database.db, settings, files, graph }),
-    process: new IntakeProcessor({ db: database.db }),
+    process: new IntakeProcessor({ db: database.db, notify }),
     retry: new WaitingFiles({ db: database.db, settings, files, graph }),
   }
   // Sending reads the database through a pool of its own whose every statement is bounded, so an attempt cannot hang
@@ -68,10 +77,10 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
     timeouts: options.timeouts,
   }
 
-  const boss = new PgBoss({ connectionString: config.databaseUrl, schema: "pgboss" })
-  boss.on("error", (error) => log.error("the job queue reported an error", errorFacts(error)))
+  const push = new PushNotifier({ db: database.db, vapid: config.vapid, publicUrl: config.publicUrl })
+
   await boss.start()
-  await registerJobs(boss, { files, intake, send })
+  await registerJobs(boss, { files, intake, send, push })
   log.info("worker started", { version: config.version })
   return {
     async stop() {

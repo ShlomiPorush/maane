@@ -34,9 +34,10 @@ import {
   ticketParticipant,
   ticketPendingReference,
 } from "@maane/server/db/schema"
+import { type PushJob, transactionWithJobs } from "@maane/server/jobs/queue"
 import { errorFacts, log } from "@maane/server/log"
 import { databaseError } from "@maane/server/organizations/refusal"
-import { customerReplied, isCustomerReply } from "@maane/server/tickets/customer-reply"
+import { customerReplied, type IntakeFacts, isCustomerReply } from "@maane/server/tickets/customer-reply"
 import { lockTicket } from "@maane/server/tickets/status"
 import {
   type IntakeMode,
@@ -50,6 +51,7 @@ import {
   type TicketFlag,
 } from "@maane/shared"
 import { and, asc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from "drizzle-orm"
+import type { Db as QueueDb } from "pg-boss"
 import { applyDeliveryReport } from "../delivery/reports.ts"
 import type { Tx } from "../files/types.ts"
 import { type AutomatedSign, type Classification, classify } from "./classify.ts"
@@ -86,6 +88,24 @@ type Match =
 type RecordFields = Omit<typeof intakeRecord.$inferInsert, "messageId" | "mode" | "outcome"> & {
   outcome: IntakeOutcome
 }
+
+/**
+ * Whether a processed message notifies agents (plan 4.5), the one place that decides it: in live mode, a message that
+ * opened a ticket (among them the follow-up a reply to a closed ticket opens, plan 4.1), and exactly what
+ * `isCustomerReply` (apps/server/src/tickets/customer-reply.ts) counts as a customer reply. Automated mail, copies,
+ * and listening mode never notify.
+ */
+export function notificationOf(record: IntakeFacts, messageId: string): PushJob | null {
+  const ticketId = record.ticketId
+  if (!ticketId) return null
+  if (isCustomerReply(record)) return { kind: "customer_reply", ticketId, messageId }
+  if (record.mode === "live" && (record.outcome === "new_ticket" || record.outcome === "new_linked_ticket"))
+    return { kind: "new_ticket", ticketId, messageId }
+  return null
+}
+
+/** Queues a notification inside the transaction that stores its message (pg-boss's documented `db` option). */
+export type Notify = (jobs: QueueDb, job: PushJob) => Promise<void>
 
 /** The intake mode, locked FOR SHARE until the transaction ends (P16). The migration made the row; it always exists. */
 export async function lockIntakeMode(tx: Pick<Tx, "select">): Promise<IntakeMode> {
@@ -165,9 +185,11 @@ export class IntakeProcessor {
   readonly #tickets: ThreadStore
   readonly #ticketsReadOnly: ThreadStore
   readonly #conversations: ThreadStore
+  readonly #notify?: Notify
 
-  constructor(options: { db: Db; now?: () => Date }) {
+  constructor(options: { db: Db; now?: () => Date; notify?: Notify }) {
     this.#db = options.db
+    this.#notify = options.notify
     this.#now = options.now ?? (() => new Date())
     this.#tickets = this.#ticketStore(false)
     this.#ticketsReadOnly = this.#ticketStore(true)
@@ -248,7 +270,7 @@ export class IntakeProcessor {
 
   /** One message in its own transaction. Does nothing when it was processed already. */
   async processOne(id: string, hooks: ProcessHooks = {}): Promise<void> {
-    await this.#db.transaction(async (tx) => {
+    const work = async (tx: Tx, jobs: QueueDb | null) => {
       const mode = await lockIntakeMode(tx)
       await hooks.afterMode?.(mode, id)
       const [row] = await tx
@@ -256,11 +278,18 @@ export class IntakeProcessor {
         .from(message)
         .where(and(eq(message.id, id), eq(message.state, "stored")))
         .for("update")
-      if (row) await this.#process(tx, row, mode)
-    })
+      if (!row) return
+      const notifications: PushJob[] = []
+      await this.#process(tx, row, mode, notifications)
+      // The notification's job commits with the message, or neither does (plan 4.5).
+      if (jobs && this.#notify) for (const job of notifications) await this.#notify(jobs, job)
+    }
+    const notify = this.#notify
+    if (notify) await transactionWithJobs(this.#db, (tx, jobs) => work(tx as unknown as Tx, jobs))
+    else await this.#db.transaction((tx) => work(tx, null))
   }
 
-  async #process(tx: Tx, msg: MessageRow, mode: IntakeMode): Promise<void> {
+  async #process(tx: Tx, msg: MessageRow, mode: IntakeMode, notifications: PushJob[]): Promise<void> {
     const live = mode === "live"
     // New threads: tickets (live) or conversations (listening). Matching also sees tickets while listening.
     const opens = live ? this.#tickets : this.#conversations
@@ -273,6 +302,8 @@ export class IntakeProcessor {
         .set({ ...patch, reviewFlags: [...flags], state: "processed", processedAt: this.#now() })
         .where(eq(message.id, msg.id))
       await tx.insert(intakeRecord).values({ messageId: msg.id, mode, ...record })
+      const notification = notificationOf({ mode, ...record }, msg.id)
+      if (notification) notifications.push(notification)
     }
 
     if (msg.content !== "parsed") return finish({}, { outcome: "unreadable", reason: msg.content })

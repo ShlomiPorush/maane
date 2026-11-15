@@ -32,6 +32,17 @@ export const SMTP_TEST = "smtp-test"
 export const DELIVERY_POLL = "delivery-poll"
 
 /**
+ * A browser notification about one ticket (plan 4.5): `PushJob`, IDs only. Intake queues it in the transaction that
+ * stores the message, so intake never waits on a push service. It is never retried: a retry would notify again the
+ * devices an earlier run reached.
+ */
+export const PUSH_NOTIFY = "push-notify"
+
+/** What a notification is about: a new ticket, or a customer's message that joined one. */
+export type PushKind = "new_ticket" | "customer_reply"
+export type PushJob = { kind: PushKind; ticketId: string; messageId: string }
+
+/**
  * The options of the queues the server sends to in a transaction, the same on both sides: pg-boss keeps the options of
  * the first createQueue. A failed run is tried again; a reply's outbox state makes a retry safe (it never sends what
  * an earlier run may have sent).
@@ -41,6 +52,8 @@ export const QUEUE_OPTIONS: Record<string, QueueOptions> = {
   // so pg-boss never retries a run that still sends.
   [SEND_REPLY]: { retryLimit: 3, retryDelay: 30, retryBackoff: true, expireInSeconds: 45 * 60 },
   [UPLOAD_SCAN]: { retryLimit: 3, retryDelay: 15, retryBackoff: true, expireInSeconds: 15 * 60 },
+  // Each push has its own deadline (PUSH_TIMEOUT_MS); the run ends long before this.
+  [PUSH_NOTIFY]: { retryLimit: 0, expireInSeconds: 15 * 60 },
 }
 
 /** pg-boss's states of a job, as the server reports them to the UI. */

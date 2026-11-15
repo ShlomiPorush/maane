@@ -99,7 +99,7 @@ Three files sit beside `docker-compose.yml`:
 |---|---|---|
 | `.env` | Compose only, to fill in `docker-compose.yml`; no container receives it | `VERSION`, `DOMAIN`, and optionally `LINK_DOMAIN` and `GEOIP_DIR`. No secret. |
 | `postgres.env` | The `postgres` service only | The database user, name, and password |
-| `app.env` | `server` and `worker` | `DATABASE_URL` with the same password, `MAANE_AUTH_SECRETS`, `MAANE_SETTINGS_KEYS`, `MAANE_TRUSTED_PROXIES` |
+| `app.env` | `server` and `worker` | `DATABASE_URL` with the same password, `MAANE_AUTH_SECRETS`, `MAANE_SETTINGS_KEYS`, `MAANE_TRUSTED_PROXIES`, and the VAPID key pair of browser notifications ([its own block](#browser-notification-keys-once)) |
 
 The secrets reach the containers only through these files, never through Compose's variable substitution, so `docker compose config --no-env-resolution` does not show them. Plain `docker compose config` reads the files and prints every secret in them. Generate the files once, on the server, and keep `postgres.env` and `app.env` with your backup: a restore without them cannot open the data (see [Back up](#5-back-up)).
 
@@ -162,6 +162,8 @@ Set `version` and `domain` before you run it:
         /^MAANE_AUTH_SECRETS=$/ { print "MAANE_AUTH_SECRETS=" ENVIRON["V_AUTH"]; next }
         /^MAANE_SETTINGS_KEYS=$/ { print "MAANE_SETTINGS_KEYS=" ENVIRON["V_SETTINGS"]; next }
         /^MAANE_TRUSTED_PROXIES=$/ { print "MAANE_TRUSTED_PROXIES=" ENVIRON["V_PROXIES"]; next }
+        # The VAPID pair comes from its own block below, which appends both lines.
+        /^MAANE_VAPID_(PUBLIC|PRIVATE)_KEY=$/ { next }
         { print }
       ' "$1.example" >"$tmp/$1"
   }
@@ -196,6 +198,48 @@ Check the result without printing a value: `cd "$HOME/maane" && docker compose c
 Everything else is set in Maane itself, in Settings. A variable in the lower part of `app.env` may override a setting instead; Settings then shows that field locked. Never set a `BETTER_AUTH_*` or `AUTH_SECRET` variable: the server refuses to start with one.
 
 **Rotating a key.** Both key sets are versioned: `MAANE_AUTH_SECRETS=2:<new>,1:<old>`. The first entry signs and encrypts new data; the others only decrypt. Keep an old version listed until nothing needs it, and keep every version you ever used with the backup of `app.env`. A settings value whose key version is gone reads as not set, and Settings asks for it again. Rotation has not been tried on a deployment yet.
+
+### Browser notification keys (once)
+
+Browser notifications (Web Push) need a VAPID key pair in `app.env`: `MAANE_VAPID_PUBLIC_KEY` and `MAANE_VAPID_PRIVATE_KEY`. The server and the worker refuse to start without them, or with values that are not one key pair. The image makes them with web-push's own generator. Run this block once, after the block above on a new deployment, and before you start a release with browser notifications on an existing one.
+
+It appends the two lines to `app.env` (after a line break when its last line has none) and changes nothing else in it. It refuses, and writes nothing, when `app.env` is missing or not mode 600, when `app.env` already sets either key in any form Compose reads (set or empty, also indented, after `export`, or with spaces around `=`), when the generator fails or prints something else, or when another run holds the file. It prints no key. Set `version` to the release you run or are about to run:
+
+```bash
+(
+  set -euo pipefail
+  umask 077
+  version=0.1.0
+  cd "$HOME/maane"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version must look like 1.2.3" >&2; exit 1; }
+  [ -f app.env ] && [ ! -L app.env ] || { echo "error: app.env is missing; generate it first" >&2; exit 1; }
+  [ "$(stat -c %a app.env)" = 600 ] || { echo "error: app.env is not mode 600; nothing was written" >&2; exit 1; }
+  # One run at a time: the lock is on app.env itself.
+  exec 9<app.env
+  flock -n 9 || { echo "error: another run is changing app.env; nothing was written" >&2; exit 1; }
+  # Any form Compose reads counts: leading spaces, export, and spaces or another separator after the name.
+  if grep -qE '^[[:space:]]*(export[[:space:]]+)?MAANE_VAPID_(PUBLIC|PRIVATE)_KEY([^][A-Za-z0-9_.-]|$)' app.env; then
+    echo "error: app.env already sets a VAPID key; nothing was written (a new pair disconnects every device)" >&2
+    exit 1
+  fi
+  # web-push's generateVAPIDKeys in the release's image, without network or privileges.
+  keys="$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --entrypoint node "ghcr.io/shlomiporush/maane:$version" dist/worker/vapid-keys.js)"
+  shape=$'^MAANE_VAPID_PUBLIC_KEY=[A-Za-z0-9_-]{87}\nMAANE_VAPID_PRIVATE_KEY=[A-Za-z0-9_-]{43}$'
+  [[ "$keys" =~ $shape ]] || { echo "error: the generator printed something unexpected; nothing was written" >&2; exit 1; }
+  # A last line without its newline would take the first key as part of its value.
+  separator=""
+  if [ -n "$(tail -c 1 app.env)" ]; then separator=$'\n'; fi
+  printf '%s%s\n' "$separator" "$keys" >>app.env
+  [ "$(grep -cE '^MAANE_VAPID_(PUBLIC|PRIVATE)_KEY=.+' app.env)" = 2 ] && [ "$(stat -c %a app.env)" = 600 ] ||
+    { echo "error: app.env does not hold the two keys as expected; check it before you start Maane" >&2; exit 1; }
+  echo "Added the VAPID key pair to $HOME/maane/app.env. Keep app.env with your backup."
+)
+```
+
+Keep the pair with your backup of `app.env`. Never generate it again for a running deployment: a new pair disconnects every device, and each user must turn notifications on again on each device. A device whose push service no longer takes a subscription (the user turned notifications off in the browser, or uninstalled it) is removed by itself on the next notification.
+
+Notifications need `https`: the push services refuse a VAPID subject that is not, so Maane uses its `https://` public address. Maane sends only to the push services of Chrome and Android (`fcm.googleapis.com`), Firefox (`updates.push.services.mozilla.com`), Edge (`*.notify.windows.com`), and Safari (`*.push.apple.com`), over HTTPS; the server needs outbound HTTPS to them.
 
 ## 4. Start and complete setup
 
@@ -325,12 +369,12 @@ Your backup must hold:
 
 | What | Where | Why |
 |---|---|---|
-| The database | `./postgres-data`, copied while the stack is stopped, or a dump (below) | All of Maane's data: users, settings, the audit log, and the job queue |
+| The database | `./postgres-data`, copied while the stack is stopped, or a dump (below) | All of Maane's data: users, settings, the audit log, the job queue, and each device's notification subscription |
 | `app.env` and `postgres.env` | `~/maane/app.env`, `~/maane/postgres.env` | `MAANE_AUTH_SECRETS` decrypts every user's two-factor secret and backup codes: without it nobody can sign in after a restore. `MAANE_SETTINGS_KEYS` decrypts the secrets stored in Settings. The database password opens the database. Keep every key version you ever used. |
 | `.env` | `~/maane/.env` | `VERSION`, `DOMAIN`, `LINK_DOMAIN`, and `GEOIP_DIR`; no secret |
 | `docker-compose.yml` | `~/maane/docker-compose.yml` | Your copy, with any label you changed |
 | Attachments | `./data` | Attachments and inline images are stored as files, named by their SHA-256, not in the database. Copy it after the dump: a dump taken after the copy of `./data` can name a file the copy lacks. |
-| The VAPID key pair (from phase 4) | `app.env` | Push notifications stop for every device when it changes |
+| The VAPID key pair | `app.env` (`MAANE_VAPID_PUBLIC_KEY`, `MAANE_VAPID_PRIVATE_KEY`) | Every device subscribed with it. A restore without it starts only with a new pair, and then every user must turn notifications on again on each device. |
 | The Zendesk archive (phase 0) | Wherever you keep it, outside every repository | The only full copy of the Zendesk history |
 
 `./clamav` is not part of the backup: it holds only ClamAV's signatures, which freshclam downloads again into an empty folder.
@@ -447,7 +491,7 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
 
 ## 7. Upgrade to a release
 
-1. Read the release notes of the new version on the repository's Releases page. They say when `docker-compose.yml` or `.env.example` changed; compare your copy with the new tag's file before you continue.
+1. Read the release notes of the new version on the repository's Releases page. They say when `docker-compose.yml` or `.env.example` changed; compare your copy with the new tag's file before you continue. The first release with browser notifications needs the VAPID key pair in `app.env` before it starts: run [its block](#browser-notification-keys-once) with the new `version` first.
 2. Set `version`, then run the block. It pulls the new image, then takes a dump into `~/maane/backups` (migrations only move forward: the dump is the way back), and only then sets `VERSION` in `.env` and restarts. When the pull or the dump fails, it stops with `.env` unchanged and the running version untouched.
 
    ```bash

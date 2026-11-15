@@ -1000,3 +1000,33 @@ export const linkClick = pgTable(
   },
   (t) => [index("link_click_link_idx").on(t.linkId, t.at)],
 )
+
+// --- Browser notifications (plan 4.5) ---
+
+/**
+ * One browser's Web Push subscription (a user on a device): the push service's endpoint and the browser's two keys,
+ * which only the worker reads to send. The server sets the owner from the session, never from the request; a row is
+ * read, changed, and deleted only by its owner, and deleted with the user. The locale is the UI's language when the
+ * user turned notifications on, the language of the notification's words. The endpoint and the keys are never logged
+ * and never returned by the API.
+ */
+export const pushSubscription = pgTable(
+  "push_subscription",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    locale: text("locale").notNull(),
+    createdAt: createdAt(),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("push_subscription_endpoint_idx").on(t.endpoint),
+    index("push_subscription_user_idx").on(t.userId),
+    check("push_subscription_locale_check", sql`${t.locale} in ('he', 'en')`),
+  ],
+)

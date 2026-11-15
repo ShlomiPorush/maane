@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/index.ts src/healthcheck.ts --bundle --platform=node --target=node26 --format=esm --outdir=dist/worker --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "build": "esbuild src/index.ts src/healthcheck.ts src/vapid-keys.ts --bundle --platform=node --target=node26 --format=esm --outdir=dist/worker --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "build:stack-check": "esbuild src/testing/stack-check.ts src/testing/stack-intake.ts src/testing/stack-worker.ts --bundle --platform=node --target=node26 --format=esm --outdir=dist/stack-check --loader:.pdf=binary --log-level=warning --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --project unit --passWithNoTests",
@@ -20,12 +20,15 @@
     "html-to-text": "10.0.1",
     "mailparser": "3.14.1",
     "nodemailer": "10.3.1",
-    "pg-boss": "12.38.1"
+    "pg-boss": "12.38.1",
+    "web-push": "3.6.7"
   },
   "devDependencies": {
     "@types/html-to-text": "9.0.4",
     "@types/mailparser": "3.9.0",
+    "@types/web-push": "3.6.4",
     "esbuild": "0.28.2",
+    "http_ece": "1.2.0",
     "iconv-lite": "0.7.3",
     "selfsigned": "5.5.0",
     "smtp-server": "3.21.3"

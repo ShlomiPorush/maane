@@ -15,6 +15,7 @@ import { createRoot } from "react-dom/client"
 import { RouterProvider } from "react-router/dom"
 import { ApiError } from "./api/client.ts"
 import { I18nProvider } from "./i18n/i18n.tsx"
+import { registerServiceWorker } from "./notifications/device.ts"
 import { createRouter } from "./routes.tsx"
 
 const queryClient = new QueryClient({
@@ -29,6 +30,8 @@ const queryClient = new QueryClient({
 })
 
 const router = createRouter()
+// The service worker shows browser notifications and opens their ticket (plan 4.5); it caches nothing.
+registerServiceWorker()
 const root = document.getElementById("root")
 if (!root) throw new Error("index.html has no #root")
 

@@ -151,8 +151,8 @@ run_integration() {
 # no secret in `docker compose config --no-env-resolution` (secrets come only through env_file), and give PostgreSQL
 # only its own variables. Runs in a subshell, so the caller removes the directory whatever happens.
 production_compose_checks() {
-  local dir="$1" password auth keys names
-  password="$(random_hex)" auth="$(random_hex)" keys="$(random_hex)"
+  local dir="$1" password auth keys vapid names
+  password="$(random_hex)" auth="$(random_hex)" keys="$(random_hex)" vapid="$(random_hex)"
   cp "$REPO_ROOT/docker-compose.yml" "$dir/docker-compose.yml"
   (
     umask 077
@@ -160,6 +160,8 @@ production_compose_checks() {
     printf 'POSTGRES_USER=maane\nPOSTGRES_DB=maane\nPOSTGRES_PASSWORD=%s\n' "$password" >"$dir/postgres.env"
     printf 'DATABASE_URL=postgres://maane:%s@postgres:5432/maane\nMAANE_AUTH_SECRETS=1:%s\nMAANE_SETTINGS_KEYS=1:%s\n' \
       "$password" "$auth" "$keys" >"$dir/app.env"
+    # Compose only passes them on here; their shape is the server's check, not this one's.
+    printf 'MAANE_VAPID_PUBLIC_KEY=%s\nMAANE_VAPID_PRIVATE_KEY=%s\n' "$vapid" "${vapid:32}" >>"$dir/app.env"
   )
   production() {
     env -u COMPOSE_ENV_FILES -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME \
@@ -168,7 +170,7 @@ production_compose_checks() {
   production config --quiet || die "docker-compose.yml is not valid with its .env, postgres.env, and app.env"
   # Never printed: the output holds this check's values when the file is wrong.
   production config --no-env-resolution >"$dir/unresolved.yml" || die "docker compose config failed"
-  if grep -qF -e "$password" -e "$auth" -e "$keys" "$dir/unresolved.yml"; then
+  if grep -qF -e "$password" -e "$auth" -e "$keys" -e "$vapid" -e "${vapid:32}" "$dir/unresolved.yml"; then
     die "docker compose config --no-env-resolution shows a secret: docker-compose.yml interpolates one or sets it under environment:"
   fi
   production config --format json >"$dir/resolved.json" || die "docker compose config failed"
@@ -326,6 +328,7 @@ run_stack() {
   build_image "$STACK_TAG" "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
   STACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-stack.XXXXXX")"
   ensure_stack_env "$STACK_DIR"
+  ensure_vapid_keys "$STACK_DIR" "maane:$STACK_TAG"
   ensure_stack_dirs "$STACK_DIR"
 
   info "Container stack: health, readiness, runtime users, and hardening ($STACK_PROJECT)"
