@@ -2,7 +2,6 @@
 // subscription, then the browser ends it at its push service. Called before Better Auth's documented signOut. And once
 // a user is signed in, a subscription this browser still holds for someone else is ended (dropForeignSubscription).
 
-import { ApiError } from "../api/client.ts"
 import { api } from "../api/endpoints.ts"
 import { pushDevice } from "./device.ts"
 
@@ -17,7 +16,7 @@ export class DeviceNotForgotten extends Error {
 /**
  * Throws when this device's notifications could not be turned off; the sign-out then stops and says so. Ending the
  * subscription in the browser is what stops them: the push service then refuses the next send, and that refusal
- * deletes the row on the server too.
+ * deletes the row on the server too. So the browser ends it whatever the server's delete answered.
  */
 export async function forgetDevice(): Promise<void> {
   const device = pushDevice()
@@ -26,13 +25,9 @@ export async function forgetDevice(): Promise<void> {
     throw new DeviceNotForgotten(error)
   })
   if (!subscription) return
-  try {
-    await api.unsubscribeDevice(subscription.endpoint)
-  } catch (error) {
-    // A session /api/v1 no longer takes (it ended, or two-factor is not set up yet) cannot remove its row; ending the
-    // browser's subscription below is enough.
-    if (!(error instanceof ApiError && (error.status === 401 || error.code === "totp_required"))) throw error
-  }
+  await api.unsubscribeDevice(subscription.endpoint).catch(() => {
+    // The row goes on the next send instead, once the browser below has ended the subscription.
+  })
   await subscription.unsubscribe().catch((error: unknown) => {
     throw new DeviceNotForgotten(error)
   })

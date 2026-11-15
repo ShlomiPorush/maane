@@ -2490,25 +2490,10 @@ describe("browser notifications on this device", () => {
     expect(events).toEqual([`DELETE ${JSON.stringify({ endpoint: ENDPOINT })}`, "unsubscribe", "signOut"])
   })
 
-  it("keeps the session when the subscription could not be removed, and says so", async () => {
-    const events = fakeDevice(true)
-    const answers: Answers = {
-      "/api/setup/status": status(),
-      "/api/v1/me": totpRequired,
-      "/api/v1/notifications/subscription": { status: 500, body: { error: "internal" } },
-    }
-    await renderAt("/enroll", answers)
-    await vi.waitFor(() => expect(button(he("account.signOut"))).not.toBeNull())
-    await act(async () => button(he("account.signOut"))?.click())
-    await vi.waitFor(() =>
-      expect(text()).toContain(he("account.signOutFailed", { reason: he("errors.server") }).slice(0, 10)),
-    )
-    expect(auth.signOut).not.toHaveBeenCalled()
-    expect(events).toEqual([])
-    expect(where()).toBe("/enroll")
-  })
-
-  it("signs out when the server refuses the delete but the browser ends the subscription", async () => {
+  it.each([
+    ["fails", { status: 500, body: { error: "internal" } } as TransportResponse],
+    ["refuses a session /api/v1 no longer takes", totpRequired],
+  ])("signs out when the server's delete %s but the browser ends the subscription", async (_, deleted) => {
     const events = fakeDevice(true)
     auth.signOut.mockImplementation(async () => {
       events.push("signOut")
@@ -2517,7 +2502,7 @@ describe("browser notifications on this device", () => {
     const answers: Answers = {
       "/api/setup/status": status(),
       "/api/v1/me": totpRequired,
-      "/api/v1/notifications/subscription": totpRequired,
+      "/api/v1/notifications/subscription": deleted,
     }
     await renderAt("/enroll", answers)
     await vi.waitFor(() => expect(button(he("account.signOut"))).not.toBeNull())
