@@ -170,12 +170,20 @@ export const organization = pgTable(
     name: text("name").notNull(),
     /** Plain text at the end of every reply sent for this organization (phase 3.1); empty for none. */
     signature: text("signature").notNull().default(""),
+    /**
+     * The automatic reminder (plan 4.3): plain text, as the signature; empty sends no reminder for this organization.
+     */
+    reminderTemplate: text("reminder_template").notNull().default(""),
+    /** The days a ticket waits for the customer before its reminder goes (`@maane/shared` REMINDER_DAYS_*). */
+    reminderDays: integer("reminder_days").notNull().default(3),
     createdAt: createdAt(),
   },
   (t) => [
     uniqueIndex("organization_name_unique").on(sql`lower(${t.name})`),
     check("organization_name_form", sql`${t.name} = btrim(${t.name}) and char_length(${t.name}) between 1 and 80`),
     check("organization_signature_length", sql`char_length(${t.signature}) <= 2000`),
+    check("organization_reminder_template_length", sql`char_length(${t.reminderTemplate}) <= 2000`),
+    check("organization_reminder_days", sql`${t.reminderDays} between 1 and 60`),
   ],
 )
 
@@ -556,7 +564,8 @@ export const message = pgTable(
     ),
     check(
       "message_written",
-      sql`${t.direction} = 'in' or (${t.authorUserId} is not null and ${t.submissionId} is not null and ${t.ticketId} is not null and ${t.state} = 'processed')`,
+      // A note always has its author; a reply has one too, except an automatic reminder (plan 4.3), sent as the organization.
+      sql`${t.direction} = 'in' or ((${t.authorUserId} is not null or ${t.direction} = 'out') and ${t.submissionId} is not null and ${t.ticketId} is not null and ${t.state} = 'processed')`,
     ),
   ],
 )
@@ -1069,12 +1078,12 @@ export const timedAction = pgTable(
   "timed_action",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    /** `reply`: a scheduled reply. */
+    /** `reply`: a scheduled reply (`scheduled_reply`); `reminder`: a waiting period's reminder (`reminder`). */
     kind: text("kind").notNull(),
     ticketId: uuid("ticket_id")
       .notNull()
       .references(() => ticket.id, { onDelete: "restrict" }),
-    /** The agent who made it. */
+    /** The agent who made it; none for a reminder, which Maane sends as the organization. */
     authorUserId: text("author_user_id").references(() => authUser.id, { onDelete: "restrict" }),
     /** The composer's submission ID: one action per click, as for a reply sent at once. */
     submissionId: uuid("submission_id"),
@@ -1091,7 +1100,7 @@ export const timedAction = pgTable(
   (t) => [
     index("timed_action_ticket_idx").on(t.ticketId),
     uniqueIndex("timed_action_submission_unique").on(t.authorUserId, t.submissionId),
-    check("timed_action_kind", sql`${t.kind} in ('reply')`),
+    check("timed_action_kind", sql`${t.kind} in ('reply', 'reminder')`),
     check("timed_action_state", sql`${t.state} in ('scheduled', 'handed', 'done', 'cancelled', 'ended')`),
   ],
 )
@@ -1123,4 +1132,53 @@ export const scheduledReply = pgTable("scheduled_reply", {
   references: text("references").array().notNull(),
   /** The links its HTML carries (`NewLink[]` of plan 3.4), written with the reply. */
   links: jsonb("links").notNull(),
+})
+
+/**
+ * A ticket's waiting period (plan 4.3): it starts when an agent's reply that sets the ticket to pending goes to
+ * sending (the moment its status action applies), and ends on a customer reply, a status change away from pending, a
+ * new agent reply, a move to another organization, or a bounce, rejection, or spam report on the reply that started it
+ * (`@maane/shared` PERIOD_END_REASONS). At most one period of a ticket is open. Only a period Maane started (`origin`)
+ * sends a reminder; the Zendesk import (phase 5) writes its periods as `import`.
+ */
+export const waitingPeriod = pgTable(
+  "waiting_period",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => ticket.id, { onDelete: "restrict" }),
+    /** `@maane/shared` WAITING_PERIOD_ORIGINS. */
+    origin: text("origin").notNull(),
+    /** The reply that started it (none for an imported period): its bounce ends the period. */
+    messageId: uuid("message_id").references(() => message.id, { onDelete: "restrict" }),
+    startedAt: at("started_at").notNull().defaultNow(),
+    endedAt: at("ended_at"),
+    /** `@maane/shared` PERIOD_END_REASONS. */
+    endReason: text("end_reason"),
+  },
+  (t) => [
+    uniqueIndex("waiting_period_open_unique").on(t.ticketId).where(sql`${t.endedAt} is null`),
+    index("waiting_period_message_idx").on(t.messageId),
+    check("waiting_period_origin", sql`${t.origin} in ('maane', 'import')`),
+    check("waiting_period_end", sql`(${t.endedAt} is null) = (${t.endReason} is null)`),
+    check(
+      "waiting_period_end_reason",
+      sql`${t.endReason} is null or ${t.endReason} in ('customer_reply', 'status_change', 'agent_reply', 'move', 'delivery_failed')`,
+    ),
+  ],
+)
+
+/**
+ * A reminder's content (plan 4.3): the waiting period it belongs to, one reminder per period. Its email is built by the
+ * worker at its time (the template, the ticket's From address and customers then), as the organization.
+ */
+export const reminder = pgTable("reminder", {
+  actionId: uuid("action_id")
+    .primaryKey()
+    .references(() => timedAction.id, { onDelete: "restrict" }),
+  periodId: uuid("period_id")
+    .notNull()
+    .unique()
+    .references(() => waitingPeriod.id, { onDelete: "restrict" }),
 })

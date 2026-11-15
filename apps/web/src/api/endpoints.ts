@@ -68,7 +68,15 @@ export type SupportAddress = { id: string; kind: AddressKind; value: string; isD
 export type OrganizationMember = { userId: string; username: string; role: string; banned: boolean; createdAt: string }
 
 export type OrganizationDetail = {
-  organization: { id: string; name: string; signature: string; createdAt: string }
+  organization: {
+    id: string
+    name: string
+    signature: string
+    /** The automatic reminder (plan 4.3): its text (empty for none) and the days a ticket waits before it goes. */
+    reminderTemplate: string
+    reminderDays: number
+    createdAt: string
+  }
   addresses: SupportAddress[]
   members: OrganizationMember[]
 }
@@ -219,6 +227,8 @@ export const api = {
   upload: (file: File) => sendFile<UploadView>("/uploads", file),
   uploadState: (id: string) => request<UploadView>("GET", `/uploads/${encodeURIComponent(id)}`),
   setSignature: (id: string, signature: string) => request<{ ok: true }>("PUT", `${at(id)}/signature`, { signature }),
+  setReminder: (id: string, template: string, days: number) =>
+    request<{ ok: true }>("PUT", `${at(id)}/reminder`, { template, days }),
   setAgentName: (userId: string, name: string) =>
     request<{ ok: true }>("PUT", `/admin/users/${encodeURIComponent(userId)}/name`, { name }),
   checkAddress: (address: string) =>

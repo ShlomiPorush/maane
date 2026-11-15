@@ -14,6 +14,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const NameBody = z.object({ name: z.string() })
 const MemberBody = z.object({ userId: z.string() })
 const SignatureBody = z.object({ signature: z.string() })
+const ReminderBody = z.object({ template: z.string(), days: z.number() })
 const AddressBody = z.object({ kind: z.enum(ADDRESS_KINDS), value: z.string() })
 
 type Handler = (c: Context<ApiEnv>) => Promise<Response>
@@ -93,6 +94,17 @@ export function organizationRoutes(organizations: Organizations): Hono<ApiEnv> {
       const id = idParam(c, "id", "organization_not_found")
       const { signature } = await body(c, SignatureBody)
       await organizations.setSignature(id, signature, acting(c))
+      return c.json({ ok: true })
+    }),
+  )
+
+  // The automatic reminder of the organization's waiting tickets: its template and days (plan 4.3).
+  routes.put(
+    "/:id/reminder",
+    refusals(async (c) => {
+      const id = idParam(c, "id", "organization_not_found")
+      const { template, days } = await body(c, ReminderBody)
+      await organizations.setReminder(id, { template, days }, acting(c))
       return c.json({ ok: true })
     }),
   )

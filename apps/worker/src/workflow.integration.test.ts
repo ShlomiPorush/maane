@@ -94,7 +94,12 @@ function sender() {
     "mail.bounceAddress": BOUNCE,
   }
   const settings = new Settings(h.database.db, createSettingsCipher([{ version: 1, value: h.cipherKey }]), values)
-  return new ReplySender({ db: h.database.db, settings, timeouts: QUICK })
+  return new ReplySender({
+    db: h.database.db,
+    settings,
+    queue: (jobs, name, data, startAfter) => queue.sendIn(jobs, name, data, { startAfter }),
+    timeouts: QUICK,
+  })
 }
 
 const browser = () => new TestBrowser(app.fetch, nextIp())

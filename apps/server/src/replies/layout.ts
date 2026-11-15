@@ -16,7 +16,7 @@ import { convert } from "html-to-text"
 import { textDirection } from "../mail/bidi.ts"
 import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
 import { renderEmailHtml } from "../mail/html.ts"
-import { COLUMN_WIDTH, type PreparedImage, shownSize } from "./images.ts"
+import { COLUMN_WIDTH, type PreparedImage, shownSize } from "./sizes.ts"
 import { wordCopies } from "./word.ts"
 
 /** The words of the email, in the default language (he.json and en.json, `mail`). */

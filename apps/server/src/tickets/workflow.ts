@@ -15,6 +15,7 @@ import type { Db } from "../db/client.ts"
 import { category, organization, ticket, ticketCategory } from "../db/schema.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
+import { endWaitingPeriod } from "../reminders/periods.ts"
 import { fromAddresses, supportRules } from "../replies/rules.ts"
 import { changeStatus, type LockedTicket, lockTicket } from "./status.ts"
 
@@ -113,6 +114,8 @@ export class Workflow {
       if (!held || fromAddresses(await supportRules(tx), organizationId, held.supportAddress).from.length === 0)
         throw new Refusal("move_no_sending_address", 409)
       await tx.update(ticket).set({ organizationId }).where(eq(ticket.id, locked.id))
+      // The waiting period ends with the move (plan 4.3): its reminder was the old organization's; the move starts none.
+      await endWaitingPeriod(tx, locked.id, "move")
       // Scheduled replies were written as the old organization (its From address, its signature): cancelled.
       const cancelled = await cancelTicketActions(tx, locked.id, "move")
       await writeAudit(tx, user.actor, {

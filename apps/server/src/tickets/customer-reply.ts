@@ -16,6 +16,7 @@ import { cancelTicketActions } from "../actions/timed.ts"
 import { SYSTEM } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import { intakeRecord, ticket, timedAction } from "../db/schema.ts"
+import { endWaitingPeriod } from "../reminders/periods.ts"
 import { customerEndsSnooze } from "./snooze.ts"
 import { changeStatus, lockTicket } from "./status.ts"
 
@@ -76,11 +77,13 @@ export function statusAfterCustomerReply(status: TicketStatus): TicketStatus {
 /**
  * What a customer reply does to its ticket, in the transaction that attached the message: the ticket becomes open
  * (pending, on hold, solved, and new alike), audited as the system's change, and its last activity moves. Plan 4.2:
- * its scheduled replies that have not gone to the send point are cancelled, and its snooze ends.
+ * its scheduled replies that have not gone to the send point are cancelled, and its snooze ends. Plan 4.3: its waiting
+ * period ends first (so the reason is the customer's, not the status change's), and its reminder never goes.
  */
 export async function customerReplied(tx: Tx, ticketId: string, at: Date): Promise<void> {
   const locked = await lockTicket(tx, ticketId)
   if (!locked) throw new Error("a customer reply's ticket does not exist")
+  await endWaitingPeriod(tx, ticketId, "customer_reply")
   await changeStatus(
     tx,
     locked,

@@ -56,6 +56,8 @@ export const ERROR_TEXT: Record<string, string> = {
   reply_not_retryable: "errors.code.replyNotRetryable",
   reply_not_unknown: "errors.code.replyNotUnknown",
   signature_invalid: "errors.code.signatureInvalid",
+  reminder_template_invalid: "errors.code.reminderTemplateInvalid",
+  reminder_days_invalid: "errors.code.reminderDaysInvalid",
   name_invalid: "errors.code.nameInvalid",
   status_admin_only: "errors.code.statusAdminOnly",
   move_not_allowed: "errors.code.moveNotAllowed",

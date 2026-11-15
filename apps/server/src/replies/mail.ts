@@ -58,6 +58,8 @@ export interface ReplyMail {
   history: Entry[]
   /** The address the HTML part carries for an http or https link of the reply (a tracked link, plan 3.4). */
   link?: (href: string) => string
+  /** Headers of its own: only an automatic reminder has one, `Auto-Submitted: auto-generated` (plan 4.3). */
+  headers?: Record<string, string>
 }
 
 /** The reply's message is larger than the provider takes, even with its history trimmed. */
@@ -89,14 +91,19 @@ export function newMessageId(from: string): string {
   return `${randomUUID()}@${from.slice(from.lastIndexOf("@") + 1)}`
 }
 
-/** The signature as HTML: one block per line, each with its own direction, escaped. */
-export function signatureHtml(signature: string, dir: "rtl" | "ltr"): string {
-  const lines = signature.replace(/\r\n?/g, "\n").split("\n")
-  if (signature.trim() === "") return ""
-  const inner = lines
+/** Plain text as HTML: one block per line, each with its own direction, escaped (a signature, a reminder template). */
+export function plainTextHtml(text: string, dir: "rtl" | "ltr"): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
     .map((line) => `<div dir="${textDirection(line) ?? dir}">${line.trim() === "" ? "<br>" : escapeHtml(line)}</div>`)
     .join("")
-  return `<div style="margin-top:16px">${inner}</div>`
+}
+
+/** The signature as HTML: one block per line, each with its own direction, escaped. */
+export function signatureHtml(signature: string, dir: "rtl" | "ltr"): string {
+  if (signature.trim() === "") return ""
+  return `<div style="margin-top:16px">${plainTextHtml(signature, dir)}</div>`
 }
 
 /** What the ticket view keeps of a reply or a note: the agent's text and the signature, without the reference line. */
@@ -178,6 +185,8 @@ async function compose(mail: ReplyMail, conversation: Conversation, trim: Trim):
         contentDisposition: "inline" as const,
       })),
     ],
+    // MailComposer's documented `headers` option.
+    ...(mail.headers ? { headers: mail.headers } : {}),
     disableFileAccess: true,
     disableUrlAccess: true,
     newline: "win",

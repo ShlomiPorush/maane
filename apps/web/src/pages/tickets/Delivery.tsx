@@ -96,16 +96,17 @@ export function Delivery({
         <Tag tone={OUTBOX_TONE[delivery.state]}>{t(`delivery.state.${delivery.state}`)}</Tag>
       </div>
       {delivery.state === "unknown" ? (
-        <Banner tone="warn" title={t("delivery.unknownTitle")} action={actions}>
-          {t("delivery.unknownHint")}
+        <Banner tone="warn" title={t("delivery.unknownTitle")} action={delivery.reminder ? undefined : actions}>
+          {delivery.reminder ? t("delivery.reminderOnce") : t("delivery.unknownHint")}
         </Banner>
       ) : null}
       {delivery.state === "failed" ? (
         <Banner
           tone="fail"
           title={delivery.problem ? t(`delivery.problem.${delivery.problem}`) : t("delivery.refusedAll")}
-          // A scheduled reply ended before it went out never goes again (plan 4.2): the server refuses Send again.
-          action={delivery.scheduledEnded ? undefined : actions}
+          // A scheduled reply ended before it went out never goes again (plan 4.2), nor does an automatic reminder (plan
+          // 4.3): the server refuses Send again.
+          action={delivery.scheduledEnded || delivery.reminder ? undefined : actions}
         />
       ) : null}
       {delivery.unmatchedDelivery ? (

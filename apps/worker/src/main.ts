@@ -72,7 +72,13 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
   const send = {
     db: database.db,
     settings,
-    sender: new ReplySender({ db: sending.db, settings: sendSettings, timeouts: options.timeouts }),
+    sender: new ReplySender({
+      db: sending.db,
+      settings: sendSettings,
+      // A scheduled reply that sets pending starts a waiting period in its claim, whose reminder waits for its time.
+      queue: (jobs, name, data, startAfter) => boss.send(name, data, { db: jobs, startAfter }),
+      timeouts: options.timeouts,
+    }),
     poll: new ActivityPoll({ db: database.db, settings }),
     timeouts: options.timeouts,
   }

@@ -91,11 +91,22 @@ function sender(options: { afterClaim?: (id: string) => Promise<void> } = {}) {
     "mail.bounceAddress": BOUNCE,
   }
   const settings = new Settings(h.database.db, createSettingsCipher([{ version: 1, value: h.cipherKey }]), values)
-  return new ReplySender({ db: h.database.db, settings, timeouts: QUICK, ...options })
+  return new ReplySender({
+    db: h.database.db,
+    settings,
+    queue: (jobs, name, data, startAfter) => queue.sendIn(jobs, name, data, { startAfter }),
+    timeouts: QUICK,
+    ...options,
+  })
 }
 
 /** The worker's timed-action job, queueing its send-reply job through pg-boss in the job's own transaction. */
-const actions = () => new TimedActions({ db: db(), queue: (tx, name, data) => boss.send(name, data, { db: tx }) })
+const actions = () =>
+  new TimedActions({
+    db: db(),
+    settings: new Settings(h.database.db, createSettingsCipher([{ version: 1, value: h.cipherKey }]), {}),
+    queue: (tx, name, data) => boss.send(name, data, { db: tx }),
+  })
 
 async function firstAdmin() {
   const b = browser()

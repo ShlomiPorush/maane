@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import {
+  type ActionState,
   type AttachmentView,
   DELIVERY_SOURCES,
   DELIVERY_STATUSES,
@@ -39,7 +40,7 @@ import {
 } from "@maane/shared"
 import { and, asc, type Column, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm"
 import { alias, QueryBuilder } from "drizzle-orm/pg-core"
-import { actionPassed } from "../actions/timed.ts"
+import { actionPassed, OPEN_ACTION_STATES } from "../actions/timed.ts"
 import { Categories } from "../categories/service.ts"
 import type { Db } from "../db/client.ts"
 import {
@@ -466,6 +467,7 @@ export class Tickets {
             unmatchedDeliveryEvent: outbox.unmatchedDeliveryEvent,
             actionId: outbox.actionId,
             actionVersion: outbox.actionVersion,
+            actionKind: timedAction.kind,
             actionState: timedAction.state,
             actionCurrent: timedAction.version,
           })
@@ -541,13 +543,15 @@ export class Tickets {
         unmatchedDelivery: unmatchedOf(sent),
         // A scheduled reply stopped before it went out (plan 4.2): Send again refuses it, so the view never offers it.
         scheduledEnded:
-          sent.actionId !== null &&
+          sent.actionKind === "reply" &&
           !actionPassed(
             sent.actionState === null || sent.actionCurrent === null
               ? null
               : { state: sent.actionState, version: sent.actionCurrent },
             sent.actionVersion,
           ),
+        // An automatic reminder (plan 4.3) is never sent again: Send again refuses it.
+        reminder: sent.actionKind === "reminder",
       }
     }
     const views: MessageView[] = messages.map((m) => {
@@ -596,9 +600,23 @@ export class Tickets {
         fields: fieldNotices(m.fieldScans),
         attachments,
         links: clicked.get(m.id) ?? [],
-        scheduled: outboxes.some((o) => o.messageId === m.id && o.actionId !== null),
+        scheduled: outboxes.some((o) => o.messageId === m.id && o.actionKind === "reply"),
+        reminder: outboxes.some((o) => o.messageId === m.id && o.actionKind === "reminder"),
       }
     })
+    // The reminder of the ticket's waiting period that has not gone yet (plan 4.3): when it goes.
+    const [pending] = await this.db
+      .select({ id: timedAction.id, dueAt: timedAction.dueAt, state: timedAction.state })
+      .from(timedAction)
+      .where(
+        and(
+          eq(timedAction.ticketId, t.id),
+          eq(timedAction.kind, "reminder"),
+          inArray(timedAction.state, [...OPEN_ACTION_STATES]),
+        ),
+      )
+      .orderBy(desc(timedAction.createdAt))
+      .limit(1)
 
     return {
       ticket: {
@@ -620,6 +638,9 @@ export class Tickets {
       categories: await new Categories(this.db).refs(),
       moveTargets: await workflow.moveTargets(scope, t.organizationId),
       messages: views,
+      reminder: pending
+        ? { id: pending.id, dueAt: pending.dueAt.toISOString(), state: pending.state as ActionState }
+        : null,
       ticketId: t.id,
       organizationSignature: row.signature,
     }

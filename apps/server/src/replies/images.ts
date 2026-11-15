@@ -5,9 +5,9 @@
 // An animated image (more than one page) is sent as it is, only sized. An image sharp cannot read is not embedded.
 
 import sharp from "sharp"
+import { COLUMN_WIDTH, type ImageType, type PreparedImage } from "./sizes.ts"
 
-/** The width of the email's column in CSS pixels (the layout's inner table). */
-export const COLUMN_WIDTH = 600
+export { COLUMN_WIDTH, type ImageType, type PreparedImage, shownSize } from "./sizes.ts"
 
 /** The widest an embedded image is kept, in pixels: twice the column. */
 export const IMAGE_MAX_WIDTH = COLUMN_WIDTH * 2
@@ -15,19 +15,14 @@ export const IMAGE_MAX_WIDTH = COLUMN_WIDTH * 2
 /** The most pixels sharp reads from one image (a guard against decompression bombs): 50 megapixels. */
 const INPUT_PIXELS_MAX = 50_000_000
 
-const FORMATS = { "image/jpeg": "jpeg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" } as const
-
-export type ImageType = keyof typeof FORMATS
+const FORMATS = {
+  "image/jpeg": "jpeg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+} as const satisfies Record<ImageType, string>
 
 export const EMBEDDABLE_TYPES = Object.keys(FORMATS) as ImageType[]
-
-export interface PreparedImage {
-  content: Buffer
-  contentType: ImageType
-  /** The size the image is seen at, in pixels, after any downscaling. */
-  width: number
-  height: number
-}
 
 /** An image ready to embed: downscaled when wider than IMAGE_MAX_WIDTH; null when sharp cannot read it. */
 export async function prepareImage(bytes: Buffer, contentType: string): Promise<PreparedImage | null> {
@@ -49,12 +44,6 @@ export async function prepareImage(bytes: Buffer, contentType: string): Promise<
   } catch {
     return null
   }
-}
-
-/** The size an image is shown at in a column: no wider than the column, the height in proportion. */
-export function shownSize(image: { width: number; height: number }, column: number): { width: number; height: number } {
-  const width = Math.min(image.width, column)
-  return { width, height: Math.max(1, Math.round((image.height * width) / image.width)) }
 }
 
 /** The most one history image and one history message may embed (as the ticket view's frame shows them). */

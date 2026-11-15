@@ -1,6 +1,7 @@
 // Writing a reply or an internal note that is already built (plan 3.1), in the caller's transaction: the message, its
 // parts, and for a reply its outbox row, recipients, links, and the `send-reply` job. The server writes a reply sent at
-// once with it; the worker writes a scheduled reply at its time with it (plan 4.2), from the version the server built.
+// once with it; the worker writes a scheduled reply at its time with it (plan 4.2), from the version the server built,
+// and a reminder at its time (plan 4.3).
 // Kept apart from the reply service so the worker never loads sharp. The ticket's status, its last activity, and the
 // audit row are the caller's.
 
@@ -46,8 +47,9 @@ export async function writeMessage(
   tx: Pick<Tx, "insert">,
   input: {
     ticketId: string
-    authorUserId: string
-    /** The composer's submission ID (a scheduled reply's own at its time). */
+    /** The agent; none for an automatic reminder (plan 4.3), which goes as the organization. */
+    authorUserId: string | null
+    /** The composer's submission ID (a scheduled reply's or a reminder's own at its time). */
     submissionId: string
     at: Date
     ready: ReadyMessage

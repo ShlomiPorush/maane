@@ -954,6 +954,63 @@ describe("organization dialogs", () => {
     expect(button(he("organization.members.showMore"), dialog() as HTMLElement)).toBeUndefined()
   })
 
+  it("shows the automatic reminder and edits its text and days, checking the days first (plan 4.3)", async () => {
+    const SHALOM = String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)
+    const set = ok({
+      organization: {
+        id: ORG,
+        name: "Example Support",
+        signature: "",
+        reminderTemplate: "",
+        reminderDays: 3,
+        createdAt: when,
+      },
+      addresses: [],
+      members: [],
+    })
+    await renderAt(`/organizations/${ORG}`, {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      [`/api/v1/admin/organizations/${ORG}`]: set,
+      [`/api/v1/admin/organizations/${ORG}/reminder`]: ok({ ok: true }),
+    })
+    const panel = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-testid="organization-reminder"]')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    // No template: no reminders for this organization.
+    expect(panel.textContent).toContain(he("organization.reminder.empty"))
+    await act(async () => button(he("organization.reminder.edit"), panel)?.click())
+    const form = await vi.waitFor(() => {
+      const found = dialog()
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    const area = form.querySelector("textarea") as HTMLTextAreaElement
+    const days = form.querySelector<HTMLInputElement>('input[data-field="days"]') as HTMLInputElement
+    expect(days.value).toBe("3")
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set
+      setter?.call(area, `${SHALOM},\nOrder 1234`)
+      area.dispatchEvent(new Event("input", { bubbles: true }))
+      type(days, "0")
+    })
+    await act(async () => button(he("organization.reminder.save"))?.click())
+    // Days outside their bounds are refused before anything is sent.
+    expect(form.textContent).toContain(he("organization.reminder.daysRule", { min: 1, max: 60 }))
+    expect(requests.some((r) => r.url.endsWith("/reminder"))).toBe(false)
+    await act(async () => type(days, "5"))
+    await act(async () => button(he("organization.reminder.save"))?.click())
+    const put = await vi.waitFor(() => {
+      const found = requests.find((r) => r.method === "PUT" && r.url === `/api/v1/admin/organizations/${ORG}/reminder`)
+      expect(found).toBeDefined()
+      return JSON.parse(found?.body ?? "null")
+    })
+    expect(put).toEqual({ template: `${SHALOM},\nOrder 1234`, days: 5 })
+    await vi.waitFor(() => expect(dialog()).toBeNull())
+  })
+
   it("stays on another organization when the answer to deleting the previous one arrives late", async () => {
     const OTHER = "6f1e2d3c-4b5a-4968-8776-655443322110"
     const empty = (id: string, name: string) =>
@@ -1417,6 +1474,7 @@ describe("tickets", () => {
     ticketOver: Record<string, unknown> = {},
     moveTargets: { id: string; name: string }[] = [{ id: ORG_B, name: "Beta" }],
     scheduled: object[] = [],
+    reminder: object | null = null,
   ) =>
     ok({
       ticket: {
@@ -1485,6 +1543,7 @@ describe("tickets", () => {
       ],
       moveTargets,
       scheduled,
+      reminder,
     })
 
   it("lists tickets across organizations, and keeps the filters in the address", async () => {
@@ -2202,6 +2261,54 @@ describe("tickets", () => {
     expect(card(ENDED)?.textContent).toContain(he("delivery.problem.listening"))
     expect(resend(ENDED)).toHaveLength(0)
     expect(resend(PASSED)).toHaveLength(1)
+  })
+
+  it("shows the reminder that has not gone yet, and a sent one as the organization's, never offered again (plan 4.3)", async () => {
+    const SENT = "00000000-0000-4000-8000-0000000000b1"
+    const due = "2026-11-15T07:30:00.000Z"
+    const sent = reply({
+      id: SENT,
+      author: null,
+      reminder: true,
+      delivery: {
+        state: "unknown",
+        problem: null,
+        unmatchedDelivery: null,
+        scheduledEnded: false,
+        reminder: true,
+        recipients: [
+          { address: "dana@example.com", name: null, kind: "to", state: "unknown", provider: "smtp2go", marked: false },
+        ],
+      },
+    })
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [sent], false, { status: "pending" }, undefined, [], {
+        id: "00000000-0000-4000-8000-0000000000b2",
+        dueAt: due,
+        state: "scheduled",
+      }),
+    })
+    const card = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-testid="ticket-reminder"]')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    // When it goes, in Israel time, and what stops it.
+    expect(card.textContent).toContain(he("reminder.title"))
+    expect(card.textContent).toContain(he("reminder.goesAt"))
+    expect(card.querySelector("time")?.getAttribute("datetime")).toBe(due)
+    expect(card.textContent).toContain(he("reminder.hint"))
+    // The sent one: marked, under the organization's name, and without Send again (Mark as sent stays).
+    const message = document.querySelector<HTMLElement>(`[data-message="${SENT}"]`) as HTMLElement
+    expect(message.textContent).toContain(he("ticket.reminder"))
+    expect(message.textContent).toContain("Alpha")
+    expect(message.textContent).not.toContain(he("ticket.scheduledReply"))
+    expect(message.textContent).toContain(he("delivery.reminderOnce"))
+    const labels = Array.from(message.querySelectorAll("button")).map((b) => b.textContent?.trim())
+    expect(labels).not.toContain(he("delivery.resend"))
+    expect(labels).toContain(he("delivery.markSent"))
   })
 
   it("shows a scheduled reply still waiting minutes after its time as late, with the way out (plan 4.2)", async () => {

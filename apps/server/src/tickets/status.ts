@@ -2,7 +2,8 @@
 // pending", and a customer reply in intake all change a status here, inside their own transaction, on the ticket row
 // locked FOR UPDATE: the change is decided from the locked row, never from a row read before, and `closed` is set and
 // left only by an admin (mayChangeStatus). Each real change writes its audit row in the same transaction; a change to
-// the status the ticket already has writes nothing.
+// the status the ticket already has writes nothing. A change away from pending ends the ticket's waiting period, so
+// its reminder never goes (plan 4.3).
 
 import { mayChangeStatus, TICKET_STATUSES, type TicketStatus } from "@maane/shared"
 import { eq } from "drizzle-orm"
@@ -10,6 +11,7 @@ import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import { ticket } from "../db/schema.ts"
 import { Refusal } from "../organizations/refusal.ts"
+import { endWaitingPeriod } from "../reminders/periods.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
@@ -40,7 +42,7 @@ export async function lockTicket(tx: Pick<Tx, "select">, id: string): Promise<Lo
  * whether the status changed. The ticket's last activity is the caller's to set.
  */
 export async function changeStatus(
-  tx: Pick<Tx, "update" | "insert">,
+  tx: Pick<Tx, "select" | "update" | "insert">,
   locked: LockedTicket,
   to: TicketStatus,
   by: StatusActor,
@@ -51,6 +53,7 @@ export async function changeStatus(
     by.role === "system" ? locked.status === "closed" || to === "closed" : !mayChangeStatus(by.role, locked.status, to)
   )
     throw new Refusal("status_admin_only", 403)
+  if (locked.status === "pending") await endWaitingPeriod(tx, locked.id, "status_change")
   await tx.update(ticket).set({ status: to }).where(eq(ticket.id, locked.id))
   await writeAudit(tx, by.actor, {
     action: "ticket.status",

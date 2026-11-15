@@ -2963,6 +2963,22 @@ textarea.ui-input.ui-textarea {
   padding: 4px var(--ui-pad-x) 16px;
   white-space: pre-wrap;
 }
+/* An organization's automatic reminder (plan 4.3): when it goes, above its text. */
+.ui-reminder-after {
+  margin: 0;
+  padding: 4px var(--ui-pad-x) 0;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+}
+.ui-input-days {
+  max-width: 7ch;
+}
+/* A ticket's reminder that has not gone yet (plan 4.3): the scheduled card's layout, its title in the line. */
+.ui-reminder-title {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+}
 
 @media (max-width: 760px) {
   .ui-composer-fields {

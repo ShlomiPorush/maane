@@ -11,7 +11,7 @@ import type {
   TicketStatus,
 } from "./intake.ts"
 import type { TrackedLinkView } from "./links.ts"
-import type { ComposeView, DeliveryView, MessageDirection, ScheduledReplyView } from "./replies.ts"
+import type { ComposeView, DeliveryView, MessageDirection, ReminderView, ScheduledReplyView } from "./replies.ts"
 import type { CategoryRef } from "./workflow.ts"
 
 /**
@@ -136,6 +136,8 @@ export interface MessageView {
   links: TrackedLinkView[]
   /** A reply a scheduled reply made at its time (plan 4.2). */
   scheduled: boolean
+  /** An automatic reminder (plan 4.3), sent as the organization: it has no author. */
+  reminder: boolean
 }
 
 export interface TicketView {
@@ -168,6 +170,8 @@ export interface TicketView {
   moveTargets: OrganizationRef[]
   /** The ticket's scheduled replies (plan 4.2), newest first, in every state. */
   scheduled: ScheduledReplyView[]
+  /** The reminder of the ticket's waiting period that has not gone yet (plan 4.3), or null. */
+  reminder: ReminderView | null
 }
 
 /** A row of the intake log: what processing did (live) or would have done (listening) with one message. */

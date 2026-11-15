@@ -61,6 +61,7 @@ import { linkBase, ReplyLinks } from "../links/service.ts"
 import { contentIdsIn, sanitizeMailHtml } from "../mail/html.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
+import { endWaitingPeriod, startWaitingPeriod } from "../reminders/periods.ts"
 import type { Settings } from "../settings/service.ts"
 import { wellFormedText } from "../text.ts"
 import { changeStatus, lockTicket } from "../tickets/status.ts"
@@ -258,8 +259,18 @@ export class Replies {
       // The same submission committed meanwhile: nothing more is written, and its message is returned below.
       if (!id) return null
       // "Send and set pending" (plan 4.1): in the reply's own transaction, by the one status rule, never on acceptance.
-      // A plain send and an internal note leave the status as it is.
-      if (isReply && input.setPending) await changeStatus(tx, locked, "pending", user, "reply")
+      // A plain send and an internal note leave the status as it is. Plan 4.3: a reply ends the ticket's waiting period,
+      // and one that leaves the ticket pending starts a new one, with its reminder, now that it goes to sending.
+      if (isReply) {
+        await endWaitingPeriod(tx, t.id, "agent_reply")
+        if (input.setPending) {
+          await changeStatus(tx, locked, "pending", user, "reply")
+          if (locked.status === "pending")
+            await startWaitingPeriod(tx, t.id, id, (data, startAfter) =>
+              this.jobs.sendIn(jobs, TIMED_ACTION, data, { startAfter }),
+            )
+        }
+      }
       await tx.update(ticket).set({ lastActivityAt: now }).where(eq(ticket.id, t.id))
       await writeAudit(tx, user.actor, {
         action: isReply ? "message.reply" : "message.note",
@@ -710,7 +721,9 @@ export class Replies {
         .filter((part) => part.kind === "attachment" && part.sha256 && STORED.has(part.status))
         .map((part) => ({ name: cleanFileName(part.fileName ?? "file"), href: links.file(part.id) }))
       const agent = row.authorUserId ? (names.get(row.authorUserId) ?? row.authorUserId) : null
-      const customer = row.fromName?.trim() || row.fromAddress || "?"
+      // A reply without an author is an automatic reminder (plan 4.3): it went as the organization.
+      const customer =
+        row.direction === "out" && !agent ? organizationName : row.fromName?.trim() || row.fromAddress || "?"
       return {
         name: agent ? `${agent} (${organizationName})` : customer,
         initialsOf: agent ?? customer,
@@ -868,9 +881,11 @@ export class Replies {
       if (row.state !== "unknown" && row.state !== "failed") throw new Refusal("reply_not_retryable", 409)
       // A scheduled reply's message goes again only once its action passed the send point's check (plan 4.2): one that
       // a customer reply, a move, or a failed check ended before it went out is never sent by Send again.
+      // An automatic reminder (plan 4.3) never goes again: its waiting period may have ended since.
       if (row.actionId) {
         const action = await lockAction(tx, row.actionId)
-        if (!actionPassed(action, row.actionVersion)) throw new Refusal("reply_not_retryable", 409)
+        if (action?.kind !== "reply" || !actionPassed(action, row.actionVersion))
+          throw new Refusal("reply_not_retryable", 409)
       }
       await tx
         .update(outboxRecipient)

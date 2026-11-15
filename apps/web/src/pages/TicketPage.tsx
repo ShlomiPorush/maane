@@ -7,7 +7,9 @@
 // notes (plan 3.1) show their author, a reply where its sending is per recipient and which of its links were clicked
 // and history files downloaded (plan 3.4), and the composer comes last. The details hold the workflow (plan 4.1): the
 // status, the categories, moving the ticket to another organization, and (plan 4.2) its snooze (tickets/Workflow.tsx);
-// its scheduled replies show above the composer (tickets/Scheduled.tsx), and a reply one of them made is marked.
+// its scheduled replies show above the composer (tickets/Scheduled.tsx), and a reply one of them made is marked. The
+// reminder of its waiting period that has not gone yet shows there too, with when it goes (plan 4.3,
+// tickets/Reminder.tsx); a sent one is a message marked as an automatic reminder, under the organization's name.
 
 import type { AttachmentView, MessageView, ScheduledReplyView, TicketView } from "@maane/shared"
 import { Download, Eye, Paperclip } from "lucide-react"
@@ -29,6 +31,7 @@ import { Composer } from "./tickets/Composer.tsx"
 import { Delivery } from "./tickets/Delivery.tsx"
 import { FilePreview } from "./tickets/FilePreview.tsx"
 import { AddressLine, ScanTag, Sender, TicketNumber, TicketTags } from "./tickets/parts.tsx"
+import { PendingReminder } from "./tickets/Reminder.tsx"
 import { ScheduledReplies } from "./tickets/Scheduled.tsx"
 import { CategoriesControl, OrganizationControl, SnoozeControl, StatusControl } from "./tickets/Workflow.tsx"
 
@@ -190,9 +193,16 @@ function Ticket({ view }: { view: TicketView }) {
       </section>
       <h2 className="ui-section-title">{t("ticket.messagesTitle")}</h2>
       {view.messages.map((message) => (
-        <MessageCard key={message.id} message={message} ticketNumber={ticket.number} onPreview={setPreview} />
+        <MessageCard
+          key={message.id}
+          message={message}
+          ticketNumber={ticket.number}
+          organizationName={ticket.organization.name}
+          onPreview={setPreview}
+        />
       ))}
       <ScheduledReplies view={view} editing={editing?.id ?? null} onEdit={setEditing} />
+      {view.reminder ? <PendingReminder reminder={view.reminder} /> : null}
       {/* One composer per ticket: moving to another ticket starts a fresh one (recipients, text, files, submission). */}
       <Composer
         key={ticket.number}
@@ -209,10 +219,13 @@ function Ticket({ view }: { view: TicketView }) {
 function MessageCard({
   message,
   ticketNumber,
+  organizationName,
   onPreview,
 }: {
   message: MessageView
   ticketNumber: number
+  /** An automatic reminder goes as the organization: its name stands where an agent's would (plan 4.3). */
+  organizationName?: string
   onPreview: (file: AttachmentView) => void
 }) {
   const { t } = useI18n()
@@ -227,7 +240,9 @@ function MessageCard({
         <span className="ui-message-from">
           {message.direction !== "in" ? <Tag tone="neutral">{t(`ticket.direction.${message.direction}`)}</Tag> : null}
           {message.scheduled ? <Tag tone="info">{t("ticket.scheduledReply")}</Tag> : null}
+          {message.reminder ? <Tag tone="info">{t("ticket.reminder")}</Tag> : null}
           {message.author ? <bdi dir="auto">{message.author.name}</bdi> : null}
+          {message.reminder && organizationName ? <bdi dir="auto">{organizationName}</bdi> : null}
           {message.direction === "note" ? null : message.from ? (
             <AddressLine value={message.from} />
           ) : (
