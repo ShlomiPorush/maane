@@ -279,6 +279,16 @@ function SignatureDialog({ id, signature, onClose }: { id: string; signature: st
   )
 }
 
+/** A text's lines, each keyed by where it starts in the text. */
+function linesOf(text: string): { key: number; line: string }[] {
+  let at = 0
+  return text.split("\n").map((line) => {
+    const key = at
+    at += line.length + 1
+    return { key, line }
+  })
+}
+
 /** The automatic reminder: its text as the customer reads it, and after how many days it goes; or that there is none. */
 function Reminder({ template, days, onEdit }: { template: string; days: number; onEdit: () => void }) {
   const { t } = useI18n()
@@ -294,9 +304,14 @@ function Reminder({ template, days, onEdit }: { template: string; days: number; 
       {template ? (
         <>
           <p className="ui-reminder-after">{t("organization.reminder.after", { days: formatNumber(days) })}</p>
-          <p className="ui-signature" dir="auto" data-testid="organization-reminder-text">
-            {template}
-          </p>
+          {/* Each line with its own direction, as the email gives it: a Hebrew line and an English line both read right. */}
+          <div className="ui-signature" data-testid="organization-reminder-text">
+            {linesOf(template).map(({ key, line }) => (
+              <div key={key} dir="auto">
+                {line === "" ? <br /> : line}
+              </div>
+            ))}
+          </div>
         </>
       ) : (
         <Empty title={t("organization.reminder.empty")} hint={t("organization.reminder.emptyHint")} />
