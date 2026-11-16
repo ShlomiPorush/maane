@@ -1776,9 +1776,43 @@ describe("tickets", () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
-      "/api/v1/tickets/7": view("v1", [], true, { imported }),
+      "/api/v1/tickets/7": view(
+        "v1",
+        [
+          {
+            id: "00000000-0000-4000-8000-0000000000c1",
+            direction: "in",
+            author: null,
+            delivery: null,
+            receivedAt: when,
+            sentAt: when,
+            from: { address: "dana@example.com", name: "Dana Customer" },
+            to: [],
+            cc: [],
+            subject: null,
+            content: "parsed",
+            reviewFlags: [],
+            body: null,
+            remoteImages: 0,
+            bodyLines: 0,
+            bodyVersion: "v1",
+            fields: [],
+            attachments: [
+              file({ id: "f9", fileName: "virus.txt", status: "infected", signature: "Eicar", download: false }),
+            ],
+            imported: { authorName: "Dana Customer", sideConversation: false },
+          },
+        ],
+        true,
+        { imported },
+      ),
     })
     await vi.waitFor(() => expect(text()).toContain(he("ticket.imported.readOnly")))
+    // A file of an imported comment the scanner refused (plan 5.2): its original is in the Zendesk archive.
+    const virus = document.querySelector('[data-file="virus.txt"]')
+    expect(virus?.textContent).toContain(he("scan.hintImported.infected"))
+    expect(virus?.textContent).not.toContain(he("scan.hint.infected"))
+    expect(document.querySelector('[data-file="invoice.pdf"]')?.textContent).toContain(he("scan.hint.infected"))
     // No control changes it: status, snooze, categories, move, and the composer are not offered.
     expect(document.querySelector('[data-testid="ticket-status"]')).toBeNull()
     expect(button(he("ticket.categories.edit"))).toBeUndefined()

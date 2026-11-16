@@ -464,6 +464,10 @@
       "not_scanned": "The scanner was unavailable and Settings allow keeping files unscanned. Open it only if you trust the sender.",
       "unavailable": "The message was gone from the mailbox before this could be scanned.",
       "too_large": "Larger than the file size limit, so Maane did not scan or keep it."
+    },
+    "hintImported": {
+      "infected": "Maane did not keep it. The original stays only in the Zendesk archive.",
+      "blocked_type": "This type of file is blocked in Settings. The original stays only in the Zendesk archive."
     }
   },
   "flag": {
