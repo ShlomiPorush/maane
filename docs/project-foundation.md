@@ -529,7 +529,7 @@ Decisions where the plan was silent (4.3, for the owner's review):
 - Mark as sent stays offered for a reminder whose fate is unknown; only Send again is refused.
 - A reply without an author is allowed only as `out` (the `message_written` check now lets an automatic reminder through; a note always has its author).
 
-Open for the owner after 4.3: requirements 2.3's "moving a ticket ... rebuilds its reminders from the new organization's templates", which this build does not do (see above). Migration `0023_reminders` follows `0022_scheduled`.
+Open for the owner after 4.3: none beyond the decisions above. Migration `0023_reminders` follows `0022_scheduled`.
 
 ### Search (4.4)
 
