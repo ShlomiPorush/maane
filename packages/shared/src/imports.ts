@@ -1,0 +1,185 @@
+// The words of the import from the Zendesk archive (plan 5.1) that the server, the worker, and the UI share: the states
+// of a run, why a run was refused or stopped, the reasons of the report, and the shapes of the import page.
+
+import type { IntakeMode } from "./settings.ts"
+import type { OrganizationRef } from "./tickets.ts"
+import type { CategoryRef } from "./workflow.ts"
+
+/**
+ * A run's state: `running` (started, its job active or waiting to go on after a crash), `done`, `stopped` (the archive
+ * changed under it, or the window closed: the next start is a full pass), or `refused` (nothing was written).
+ */
+export const IMPORT_RUN_STATES = ["running", "done", "stopped", "refused"] as const
+export type ImportRunState = (typeof IMPORT_RUN_STATES)[number]
+
+/**
+ * Why a run was refused or stopped, or a start refused:
+ * - `went_live`: Maane went live; the import window is closed for good.
+ * - `not_listening`: the intake mode is not listening.
+ * - `no_agent`: no Maane user was chosen for the comments of Zendesk agents.
+ * - `no_archive`: no archive at the mount.
+ * - `backup_running`: the backup tool holds the archive's lock; finish the backup first.
+ * - `archive_incomplete`: the strict offline check found problems.
+ * - `other_origin`: the archive comes from another Zendesk account than earlier imports.
+ * - `archive_changed`: a backup ran or started during the run (or between its check and its first write).
+ * - `scanner`: the scanner did not answer; the run goes on when it does.
+ */
+export const IMPORT_STOP_REASONS = [
+  "went_live",
+  "not_listening",
+  "no_agent",
+  "no_archive",
+  "backup_running",
+  "archive_incomplete",
+  "other_origin",
+  "archive_changed",
+  "scanner",
+] as const
+export type ImportStopReason = (typeof IMPORT_STOP_REASONS)[number]
+
+/**
+ * What the report lists:
+ * - `unmapped_brand`: the ticket's brand maps to no organization; it was not imported.
+ * - `deleted_in_zendesk`: the archive marks the ticket deleted; it was not imported (owner's decision 3).
+ * - `number_taken`: a ticket Maane opened already has this number; it was not imported.
+ * - `file_failed`: the manifest marks a file of the ticket failed.
+ * - `blocked_content`: the scanner blocked a text of a comment, which was kept without it.
+ */
+export const IMPORT_REPORT_REASONS = [
+  "unmapped_brand",
+  "deleted_in_zendesk",
+  "number_taken",
+  "file_failed",
+  "blocked_content",
+] as const
+export type ImportReportReason = (typeof IMPORT_REPORT_REASONS)[number]
+
+/** What a run counted. Files are listed and counted only: they are imported by the next step (plan 5.2). */
+export interface ImportCounts {
+  tickets: number
+  messages: number
+  notes: number
+  sideConversations: number
+  links: number
+  files: number
+  skipped: number
+}
+
+export const emptyImportCounts = (): ImportCounts => ({
+  tickets: 0,
+  messages: 0,
+  notes: 0,
+  sideConversations: 0,
+  links: 0,
+  files: 0,
+  skipped: 0,
+})
+
+/** Rows per page of a run's report. */
+export const IMPORT_REPORT_PAGE_SIZE = 50
+
+export interface ImportRunView {
+  id: string
+  state: ImportRunState
+  reason: ImportStopReason | null
+  /** The first problems of a failed archive check, as the check wrote them. */
+  problems: string[]
+  createdAt: string
+  finishedAt: string | null
+  coveredUntil: string | null
+  highestNumber: number | null
+  total: number
+  done: number
+  counts: ImportCounts
+  reportRows: number
+}
+
+export interface ImportReportRow {
+  id: number
+  zendeskId: number
+  reason: ImportReportReason
+  detail: string | null
+}
+
+export interface ImportReportPage {
+  rows: ImportReportRow[]
+  next: string | null
+}
+
+/** The archive at the mount, as the import page shows it. */
+export interface ImportArchiveView {
+  /** Whether an archive is at the mount. */
+  present: boolean
+  /** The Zendesk account it was made from. */
+  origin: string | null
+  /** Backup runs that wrote it, and the time its tickets cover. */
+  runs: number
+  coveredUntil: string | null
+  /** The backup tool holds its lock. */
+  backupRunning: boolean
+  /** The archive was made from another account than earlier imports. */
+  otherOrigin: boolean
+  tickets: number
+}
+
+export interface ImportBrandView {
+  id: string
+  name: string
+  tickets: number
+  organizationId: string | null
+}
+
+export interface ImportTagView {
+  tag: string
+  tickets: number
+  categoryId: string | null
+}
+
+export interface ImportView {
+  /** The import window: open while intake listens and Maane never went live. */
+  window: { open: boolean; mode: IntakeMode; wentLiveAt: string | null }
+  archive: ImportArchiveView
+  brands: ImportBrandView[]
+  tags: ImportTagView[]
+  /** The Maane user Zendesk agents' comments and notes are attributed to. */
+  agentUserId: string | null
+  /** Users who may be chosen: admins and agents, not disabled. */
+  users: { id: string; name: string }[]
+  organizations: OrganizationRef[]
+  categories: CategoryRef[]
+  /** The newest run, or null. */
+  run: ImportRunView | null
+}
+
+/** The mapping the import page saves: each brand to an organization or none, each tag to a category or none. */
+export interface ImportMappingInput {
+  brands: Record<string, string | null>
+  tags: Record<string, string | null>
+  agentUserId: string | null
+}
+
+/** A field of a Zendesk ticket as the "From Zendesk" block shows it. */
+export interface ImportedField {
+  name: string
+  value: string
+}
+
+/** What the ticket view shows of an imported ticket. */
+export interface ImportedTicketView {
+  zendeskId: number
+  /** Read-only until Maane first goes live. */
+  readOnly: boolean
+  brand: string | null
+  tags: string[]
+  fields: ImportedField[]
+  /** Followers: source information, never recipients. */
+  followers: { name: string | null; address: string | null }[]
+}
+
+/** What the ticket view shows of an imported comment. */
+export interface ImportedMessageView {
+  /** The Zendesk author's name as recorded. */
+  authorName: string | null
+  /** A message of a side conversation, kept as an internal note. */
+  sideConversation: boolean
+}

@@ -10,6 +10,7 @@ import { ActivityPoll } from "./delivery/poll.ts"
 import { clamdScanner } from "./files/scanner.ts"
 import { FileService } from "./files/service.ts"
 import { FileStore } from "./files/store.ts"
+import { ZendeskImport } from "./import/run.ts"
 import { GraphGateway } from "./intake/graph.ts"
 import { reconcileIntakeSource } from "./intake/jobs.ts"
 import { IntakeProcessor, type Notify } from "./intake/process.ts"
@@ -86,7 +87,12 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
   const push = new PushNotifier({ db: database.db, vapid: config.vapid, publicUrl: config.publicUrl })
 
   await boss.start()
-  await registerJobs(boss, { files, intake, send, push })
+  // The import from the Zendesk archive (plan 5.1), read from its read-only mount.
+  const zendeskImport = {
+    pool: database.pool,
+    importer: new ZendeskImport({ db: database.db, files, archiveDir: config.archiveDir }),
+  }
+  await registerJobs(boss, { files, intake, send, push, zendeskImport })
   log.info("worker started", { version: config.version })
   return {
     async stop() {

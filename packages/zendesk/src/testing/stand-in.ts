@@ -15,20 +15,28 @@ export interface StandInFile {
   serve: "redirect" | "direct" | "missing"
 }
 
-interface Comment {
+export interface StandInComment {
   id: number
   public: boolean
   body: string
   files: StandInFile[]
+  /** More fields of the comment record (author_id, html_body, created_at, via, metadata), as Zendesk names them. */
+  extra?: Record<string, unknown>
 }
 
 interface Ticket {
   id: number
   status: string
   updatedAt: string
-  comments: Comment[]
+  comments: StandInComment[]
   /** The comments endpoint answers 404: deleted after the export listed it. */
   gone?: boolean
+  /** More fields of the ticket record (brand_id, requester_id, tags, custom_fields, via), as Zendesk names them. */
+  record?: Record<string, unknown>
+  /** The audits, in place of the ones made from the comments. */
+  audits?: Record<string, unknown>[]
+  /** Side conversations in place of ticket 1's own: each with its events. */
+  sides?: { id: string; subject: string; events: Record<string, unknown>[] }[]
 }
 
 export class StandInZendesk {
@@ -64,7 +72,13 @@ export class StandInZendesk {
   readonly tickets = new Map<number, Ticket>()
   /** The ticket export's change log; a cursor is a position in it. */
   readonly ticketLog: number[] = []
-  readonly users = [1, 2, 3].map((id) => ({ id, name: `User ${id}`, email: `user${id}@example.com` }))
+  readonly users: { id: number; name: string; email: string | null; role?: string }[] = [1, 2, 3].map((id) => ({
+    id,
+    name: `User ${id}`,
+    email: `user${id}@example.com`,
+  }))
+  /** Records of a collection in place of the three made up from its name. */
+  readonly collectionRecords = new Map<string, Record<string, unknown>[]>()
   readonly organizations = [1, 2, 3].map((id) => ({ id, name: `Organization ${id}`, updated_ts: 1000 + id }))
   #clock = Date.parse("2026-01-01T00:00:00Z")
   #rateLimited = new Set<string>()
@@ -100,13 +114,28 @@ export class StandInZendesk {
     this.addTicket(5, "closed", [], true)
   }
 
-  addTicket(id: number, status: string, comments: Comment[], gone = false): void {
-    this.tickets.set(id, { id, status, updatedAt: this.#tick(), comments, gone })
+  addTicket(
+    id: number,
+    status: string,
+    comments: StandInComment[],
+    gone = false,
+    more: Pick<Ticket, "record" | "audits" | "sides"> = {},
+  ): void {
+    this.tickets.set(id, { id, status, updatedAt: this.#tick(), comments, gone, ...more })
     this.ticketLog.push(id)
   }
 
+  /** Changes a ticket (its record, comments, audits, or side conversations): a new version in the export. */
+  change(ticketId: number, edit: (ticket: Ticket) => void): void {
+    const ticket = this.tickets.get(ticketId)
+    if (!ticket) throw new Error(`no ticket ${ticketId}`)
+    edit(ticket)
+    ticket.updatedAt = this.#tick()
+    this.ticketLog.push(ticketId)
+  }
+
   /** A new comment on an existing ticket: a new version in the export. */
-  addComment(ticketId: number, comment: Comment): void {
+  addComment(ticketId: number, comment: StandInComment): void {
     const ticket = this.tickets.get(ticketId)
     if (!ticket) throw new Error(`no ticket ${ticketId}`)
     ticket.comments.push(comment)
@@ -213,7 +242,14 @@ export class StandInZendesk {
     const ids = [...new Set(this.ticketLog.slice(start, end))]
     const tickets = ids.map((id) => {
       const t = this.tickets.get(id) as Ticket
-      return { id: t.id, encoded_id: `X${t.id}Y`, status: t.status, updated_at: t.updatedAt, subject: `Ticket ${t.id}` }
+      return {
+        id: t.id,
+        encoded_id: `X${t.id}Y`,
+        subject: `Ticket ${t.id}`,
+        ...t.record,
+        status: t.status,
+        updated_at: t.updatedAt,
+      }
     })
     send(res, 200, {
       tickets,
@@ -246,7 +282,9 @@ export class StandInZendesk {
     if (!ticket || ticket.gone || ticket.status === "deleted") return send(res, 404, { error: "RecordNotFound" })
     if (kind === "audits") {
       return send(res, 200, {
-        audits: ticket.comments.map((c) => ({ id: c.id * 10, ticket_id: id, events: [{ type: "Comment", id: c.id }] })),
+        audits:
+          ticket.audits ??
+          ticket.comments.map((c) => ({ id: c.id * 10, ticket_id: id, events: [{ type: "Comment", id: c.id }] })),
         meta: { has_more: false },
         links: { next: null },
       })
@@ -260,6 +298,7 @@ export class StandInZendesk {
         id: c.id,
         public: c.public,
         body: c.body,
+        ...c.extra,
         attachments: c.files
           .filter((f) => inline || !f.inline)
           .map((f) => ({
@@ -282,12 +321,19 @@ export class StandInZendesk {
     if (!this.sideConversationsAvailable || this.deletedDuringSave.has(ticketId)) {
       return send(res, 404, { error: "InvalidEndpoint" })
     }
+    const own = this.tickets.get(ticketId)?.sides
+    if (own) {
+      const list = own.map((side) => ({ id: side.id, subject: side.subject, state: "open" }))
+      return send(res, 200, { side_conversations: list, next_page: null, count: list.length })
+    }
     const ids = ticketId === 1 ? ["sc-1", ...this.brokenSideConversations] : []
     const list = ids.map((id) => ({ id, subject: "Asking the supplier", state: "open" }))
     send(res, 200, { side_conversations: list, next_page: null, count: list.length })
   }
 
   #sideEvents(res: ServerResponse, ticketId: number, sideId: string) {
+    const own = this.tickets.get(ticketId)?.sides?.find((side) => side.id === sideId)
+    if (this.sideConversationsAvailable && own) return send(res, 200, { events: own.events, next_page: null })
     if (!this.sideConversationsAvailable || ticketId !== 1 || sideId !== "sc-1") return send(res, 404, { error: "x" })
     const f = this.sideFile
     send(res, 200, {
@@ -317,7 +363,7 @@ export class StandInZendesk {
   #collection(url: URL, res: ServerResponse, name: string) {
     if (this.forbiddenCollections.has(name)) return send(res, 403, { error: "Forbidden" })
     const after = Number(url.searchParams.get("page[after]") ?? 0)
-    const records = [1, 2, 3].map((id) => ({ id, name: `${name} ${id}` }))
+    const records = this.collectionRecords.get(name) ?? [1, 2, 3].map((id) => ({ id, name: `${name} ${id}` }))
     const page = records.slice(after, after + 2)
     const more = after + 2 < records.length
     const origin = this.foreignLinkIn === name ? "https://other.example.com" : this.apiOrigin

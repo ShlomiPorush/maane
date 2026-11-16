@@ -79,8 +79,9 @@ export type TicketStatus = (typeof TICKET_STATUSES)[number]
 /**
  * Why a ticket is linked to another (`ticket_link.reason`): the two review flags of intake, and `follow_up`, a ticket
  * opened by a customer reply to a closed ticket (plan 4.1). A follow-up needs no review, so it is not a ticket flag.
+ * The import (plan 5.1) links Zendesk's follow-ups as `follow_up` and its merged tickets as `merged`.
  */
-export const LINK_REASONS = ["sender_not_participant", "ambiguous_original", "follow_up"] as const
+export const LINK_REASONS = ["sender_not_participant", "ambiguous_original", "follow_up", "merged"] as const
 export type LinkReason = (typeof LINK_REASONS)[number]
 
 /**

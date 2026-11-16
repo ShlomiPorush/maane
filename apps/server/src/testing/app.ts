@@ -46,6 +46,8 @@ export function createTestApp(
   links: { trustedProxies?: string[]; geoipDir?: string | null } = {},
   /** The VAPID public key the notification routes hand out. */
   vapidPublicKey = randomBytes(65).toString("base64url"),
+  /** The Zendesk archive the import page reads (plan 5.1). */
+  archiveDir = "/nonexistent",
 ) {
   const audit = openDatabase(database.url, 2)
   const clock = new TestClock()
@@ -84,6 +86,7 @@ export function createTestApp(
     trustedProxies: links.trustedProxies ?? [],
     geoipDir: links.geoipDir ?? null,
     vapidPublicKey,
+    archiveDir,
   })
   return {
     ready,

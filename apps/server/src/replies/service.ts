@@ -56,6 +56,7 @@ import {
 } from "../db/schema.ts"
 import { refreshDeliveryFlag } from "../delivery/service.ts"
 import { storedFilePath } from "../files/paths.ts"
+import { refuseImported } from "../imports/window.ts"
 import { type JobQueue, SEND_REPLY, TIMED_ACTION, transactionWithJobs, UPLOAD_SCAN } from "../jobs/queue.ts"
 import { linkBase, ReplyLinks } from "../links/service.ts"
 import { contentIdsIn, sanitizeMailHtml } from "../mail/html.ts"
@@ -240,6 +241,9 @@ export class Replies {
     const found = await this.#ticket(scope, number)
     if (!found) throw new Refusal("not_found", 404)
     const t = found.ticket
+    // An imported ticket is read-only until Maane goes live (plan 5.1): before the send point's checks, so a note and a
+    // reply give the same answer; again under the ticket's lock below.
+    await refuseImported(this.db, t.id)
     const isReply = input.kind === "reply"
     const now = new Date()
     const ready = await this.#prepare(found, user, input, now)
@@ -249,6 +253,7 @@ export class Replies {
       // leaves nothing to write to (a note too), and any move since then refuses a reply's From.
       const locked = await lockTicket(tx, t.id)
       if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
+      await refuseImported(tx, locked.id)
       if (isReply && locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
       // Again under the ticket lock: a scheduled reply with this ID that committed while this request waited for it.
       if (await this.#scheduledBy(user.id, input.submissionId, tx)) throw new Refusal("submission_reused", 409)
@@ -416,12 +421,14 @@ export class Replies {
     const found = await this.#ticket(scope, number)
     if (!found) throw new Refusal("not_found", 404)
     const t = found.ticket
+    await refuseImported(this.db, t.id)
     if (input.setPending && !mayChangeStatus(user.role, t.status as TicketStatus, "pending"))
       throw new Refusal("status_admin_only", 403)
     const ready = await this.#prepare(found, user, input, sendAt)
     const id = await transactionWithJobs(this.db, async (tx, jobs) => {
       const locked = await lockTicket(tx, t.id)
       if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
+      await refuseImported(tx, locked.id)
       if (locked.organizationId !== t.organizationId) throw new Refusal("from_not_allowed", 400)
       // Again under the ticket lock: a reply or a note with this ID that committed while this request waited for it.
       if (await this.#submitted(user.id, input.submissionId, tx)) throw new Refusal("submission_reused", 409)
@@ -524,6 +531,7 @@ export class Replies {
     const found = await this.#ticket(scope, action.number)
     if (!found) throw new Refusal("not_found", 404)
     const t = found.ticket
+    await refuseImported(this.db, t.id)
     if (input.setPending && !mayChangeStatus(user.role, t.status as TicketStatus, "pending"))
       throw new Refusal("status_admin_only", 403)
     const ready = await this.#prepare(found, user, { ...input, kind: "reply" }, sendAt)
@@ -564,6 +572,7 @@ export class Replies {
       const [row] = await tx.select({ id: ticket.id }).from(ticket).where(eq(ticket.number, action.number))
       const locked = row ? await lockTicket(tx, row.id) : null
       if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
+      await refuseImported(tx, locked.id)
       const held = await lockAction(tx, actionId)
       // Until it starts sending: also once its reply was written and waits for the send point, which then refuses it.
       if (!held || held.ticketId !== locked.id || !(OPEN_ACTION_STATES as readonly string[]).includes(held.state))
@@ -632,7 +641,7 @@ export class Replies {
 
   /**
    * The public history a reply quotes, newest first (requirements 4.1): the ticket's incoming messages and its replies
-   * that at least one recipient accepted, never an internal note; each with its files' names and the images its HTML
+   * that at least one recipient accepted (or that an agent made public in Zendesk, plan 5.1), never an internal note; each with its files' names and the images its HTML
    * embeds. An image is embedded only as the ticket view shows one: a part of the same message that scanned clean, its
    * stored file clean, with an image type, within the same sizes; prepared (downscaled) with sharp, with a new content
    * ID in the From address's domain. Every other image of the stored HTML is left out when the email is drawn.
@@ -665,7 +674,11 @@ export class Replies {
           eq(message.ticketId, ticketId),
           eq(message.content, "parsed"),
           isNull(message.duplicateOf),
-          or(eq(message.direction, "in"), and(eq(message.direction, "out"), exists(accepted))),
+          // A comment an agent made public in Zendesk (plan 5.1) was sent by Zendesk: it has no outbox or delivery state.
+          or(
+            eq(message.direction, "in"),
+            and(eq(message.direction, "out"), or(exists(accepted), isNotNull(message.zendeskKey))),
+          ),
         ),
       )
       .orderBy(desc(message.receivedAt), desc(message.createdAt))
@@ -868,6 +881,7 @@ export class Replies {
       .where(eq(ticket.id, row.ticketId))
       .for("key share")
     if (!held || !inScope(scope, held.organizationId)) throw new Refusal("not_found", 404)
+    await refuseImported(tx, row.ticketId)
     return { ...row, organizationId: held.organizationId, status: held.status as TicketStatus }
   }
 

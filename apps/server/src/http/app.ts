@@ -23,6 +23,7 @@ import type { Auth } from "../auth/auth.ts"
 import type { SetupWindow } from "../auth/setup-window.ts"
 import type { Db } from "../db/client.ts"
 import { auditLog, authUser, scannerCheck } from "../db/schema.ts"
+import { Imports } from "../imports/service.ts"
 import { GRAPH_TEST, type JobQueue, SCANNER_SELF_TEST, SMTP_TEST } from "../jobs/queue.ts"
 import { Geo } from "../links/geo.ts"
 import { Links } from "../links/service.ts"
@@ -34,6 +35,7 @@ import { Replies } from "../replies/service.ts"
 import { type Settings, SettingsError } from "../settings/service.ts"
 import { clientIp, rememberClient, trustOf } from "./client.ts"
 import { hookRoutes } from "./hooks.ts"
+import { importRoutes } from "./imports.ts"
 import { linkRoutes } from "./links.ts"
 import { notificationRoutes } from "./notifications.ts"
 import { organizationRoutes } from "./organizations.ts"
@@ -63,6 +65,8 @@ export interface AppContext {
   geoipDir: string | null
   /** MAANE_VAPID_PUBLIC_KEY: the key a browser subscribes to notifications with (plan 4.5). */
   vapidPublicKey: string
+  /** MAANE_ZENDESK_ARCHIVE_DIR: the Zendesk archive's read-only mount, which the import page reads (plan 5.1). */
+  archiveDir: string
 }
 
 type User = AppUser
@@ -406,6 +410,7 @@ export function createApp(ctx: AppContext) {
   })
 
   api.route("/admin/organizations", organizationRoutes(new Organizations(ctx.db)))
+  api.route("/admin/import", importRoutes(new Imports(ctx.db, ctx.jobs, ctx.archiveDir)))
   api.route("/notifications", notificationRoutes(new Subscriptions(ctx.db), ctx.vapidPublicKey))
   const replies = new Replies(ctx.db, ctx.settings, ctx.jobs, ctx.filesDir, ctx.publicUrl)
   api.route("/", ticketRoutes(ctx.db, ctx.filesDir, replies))

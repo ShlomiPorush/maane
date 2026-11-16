@@ -14,6 +14,7 @@ import { cancelTicketActions } from "../actions/timed.ts"
 import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import { category, organization, ticket, ticketCategory } from "../db/schema.ts"
+import { refuseImported } from "../imports/window.ts"
 import { type JobQueue, TIMED_ACTION, transactionWithJobs } from "../jobs/queue.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
@@ -56,6 +57,8 @@ export class Workflow {
     const [row] = await tx.select({ id: ticket.id }).from(ticket).where(eq(ticket.number, number))
     const locked = row ? await lockTicket(tx, row.id) : null
     if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
+    // An imported ticket is read-only until Maane goes live (plan 5.1).
+    await refuseImported(tx, locked.id)
     return locked
   }
 

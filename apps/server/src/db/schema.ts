@@ -331,7 +331,10 @@ export const intakeCursor = pgTable(
   ],
 )
 
-/** Ticket numbers. The cutover (phase 6) sets the floor above the highest Zendesk number. */
+/**
+ * Ticket numbers. An imported ticket keeps its Zendesk number; after each import run the sequence continues right
+ * after the highest ticket number, with no gap (owner's decision 1, 2026-11-16).
+ */
 export const ticketNumber = pgSequence("ticket_number_seq", { startWith: 1 })
 
 /**
@@ -364,9 +367,21 @@ export const ticket = pgTable(
      */
     snoozedUntil: at("snoozed_until"),
     snoozeVersion: integer("snooze_version").notNull().default(0),
+    /**
+     * An imported ticket (plan 5.1): its Zendesk ticket ID, which is also its Maane number (owner's decision,
+     * 2026-11-16). Null for a ticket Maane opened. An imported ticket is read-only until Maane first goes live.
+     */
+    zendeskId: bigint("zendesk_id", { mode: "number" }).unique(),
+    /**
+     * What the import keeps of the Zendesk ticket beside its own columns (`ImportedTicketSource` in
+     * apps/server/src/imports/source.ts): the brand, the original tags, the custom fields with their names, the
+     * followers (never recipients), and the merged and follow-up tickets it names.
+     */
+    zendesk: jsonb("zendesk"),
   },
   (t) => [
     index("ticket_organization_idx").on(t.organizationId),
+    check("ticket_zendesk", sql`(${t.zendeskId} is null) = (${t.zendesk} is null)`),
     // Search (plan 4.4): ILIKE '%term%' through pg_trgm's documented GIN operator class.
     index("ticket_subject_trgm_idx").using("gin", t.subject.op("gin_trgm_ops")),
     check("ticket_status", sql`${t.status} in ('new', 'open', 'pending', 'on_hold', 'solved', 'closed')`),
@@ -544,6 +559,18 @@ export const message = pgTable(
     authorUserId: text("author_user_id").references(() => authUser.id, { onDelete: "restrict" }),
     /** A reply or a note: the composer's ID for one click, so a repeated request finds this message again. */
     submissionId: uuid("submission_id"),
+    /**
+     * An imported comment (plan 5.1): its source key, `comment:<Zendesk comment ID>` or `side:<side conversation event
+     * ID>`, unique, so a run again updates the same row. Null for every message Maane received or wrote.
+     */
+    zendeskKey: text("zendesk_key").unique(),
+    /**
+     * An imported comment's source (`ImportedMessageSource` in apps/server/src/imports/source.ts): its Zendesk IDs,
+     * the author's name and role, and the email identifiers Zendesk recorded (Message-ID, the original sender and
+     * recipients), or the explicit mark that it recorded none. Kept here only: the Message-ID never enters
+     * `message_id_header`, so intake's threading and copies never see it.
+     */
+    zendesk: jsonb("zendesk"),
     createdAt: createdAt(),
   },
   (t) => [
@@ -558,14 +585,23 @@ export const message = pgTable(
     check("message_content", sql`${t.content} in ('parsed', 'unavailable', 'unparsed', 'too_large')`),
     check("message_folder", sql`${t.folder} in ('inbox', 'junkemail')`),
     check("message_direction", sql`${t.direction} in ('in', 'out', 'note')`),
+    check("message_zendesk", sql`(${t.zendeskKey} is null) = (${t.zendesk} is null)`),
+    check(
+      "message_imported",
+      // An imported comment is written processed on its ticket; an agent's comment or note by the Maane user the admin
+      // chose (owner's decision 2), an end user's without one.
+      sql`${t.zendeskKey} is null or (${t.ticketId} is not null and ${t.state} = 'processed' and ${t.submissionId} is null and (${t.direction} = 'in') = (${t.authorUserId} is null))`,
+    ),
     check(
       "message_incoming",
-      sql`${t.direction} <> 'in' or (${t.sourceId} is not null and ${t.graphId} is not null and ${t.folder} is not null and ${t.graph} is not null)`,
+      // An imported comment (plan 5.1) came from the archive, not from Graph.
+      sql`${t.direction} <> 'in' or ${t.zendeskKey} is not null or (${t.sourceId} is not null and ${t.graphId} is not null and ${t.folder} is not null and ${t.graph} is not null)`,
     ),
     check(
       "message_written",
       // A note always has its author; a reply has one too, except an automatic reminder (plan 4.3), sent as the organization.
-      sql`${t.direction} = 'in' or ((${t.authorUserId} is not null or ${t.direction} = 'out') and ${t.submissionId} is not null and ${t.ticketId} is not null and ${t.state} = 'processed')`,
+      // An imported comment has its own rule (message_imported).
+      sql`${t.direction} = 'in' or ${t.zendeskKey} is not null or ((${t.authorUserId} is not null or ${t.direction} = 'out') and ${t.submissionId} is not null and ${t.ticketId} is not null and ${t.state} = 'processed')`,
     ),
   ],
 )
@@ -1182,3 +1218,93 @@ export const reminder = pgTable("reminder", {
     .unique()
     .references(() => waitingPeriod.id, { onDelete: "restrict" }),
 })
+
+// --- The import from the Zendesk archive (plan 5.1) ---
+
+/**
+ * The import's one row (made by a migration, so it always exists and a transaction can lock it): when Maane first went
+ * live, which closes the import window for good (the first switch of the intake mode to live records it, under the
+ * mode row's lock); the archive origin of the first run, which every later run must match; and the Maane user that
+ * Zendesk agents' comments and notes are attributed to (owner's decision 2, 2026-11-16).
+ */
+export const zendeskImport = pgTable(
+  "zendesk_import",
+  {
+    id: integer("id").primaryKey(),
+    wentLiveAt: at("went_live_at"),
+    origin: text("origin"),
+    agentUserId: text("agent_user_id").references(() => authUser.id, { onDelete: "restrict" }),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+  },
+  (t) => [check("zendesk_import_one_row", sql`${t.id} = 1`)],
+)
+
+/** Which organization a Zendesk brand's tickets go to (requirements 3.1): explicit; an unmapped brand is not imported. */
+export const zendeskBrandMap = pgTable("zendesk_brand_map", {
+  brandId: text("brand_id").primaryKey(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organization.id, { onDelete: "cascade" }),
+})
+
+/** Which category a Zendesk tag gives a ticket (requirements 3.1); a tag without a row gives none. Tags stay as they are. */
+export const zendeskTagMap = pgTable("zendesk_tag_map", {
+  tag: text("tag").primaryKey(),
+  categoryId: uuid("category_id")
+    .notNull()
+    .references(() => category.id, { onDelete: "cascade" }),
+})
+
+/**
+ * One run of the import (`@maane/shared` IMPORT_RUN_STATES). At most one is `running`: started and not finished, its
+ * job active or waiting to go on. It records the archive state it imports (`state.json`'s run count and coverage)
+ * and goes on after a crash from `position` (the last Zendesk ticket ID it committed) only while the archive still
+ * holds that state; otherwise it stops, and the next start is a full pass.
+ */
+export const importRun = pgTable(
+  "import_run",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    state: text("state").notNull().default("running"),
+    /** `@maane/shared` IMPORT_STOP_REASONS: why a run was refused or stopped. */
+    reason: text("reason"),
+    /** The first problems of a failed archive check, for the admin to read. */
+    problems: jsonb("problems"),
+    startedBy: text("started_by").references(() => authUser.id, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+    finishedAt: at("finished_at"),
+    archiveOrigin: text("archive_origin"),
+    /** `state.json`'s run count and `coveredUntil` of the archive this run imports, read before its check. */
+    archiveRuns: integer("archive_runs"),
+    coveredUntil: at("covered_until"),
+    /** The highest Zendesk ticket ID of the archive. */
+    highestNumber: bigint("highest_number", { mode: "number" }),
+    /** The last Zendesk ticket ID whose transaction committed; the run goes on after it. */
+    position: bigint("position", { mode: "number" }),
+    total: integer("total").notNull().default(0),
+    done: integer("done").notNull().default(0),
+    /** `@maane/shared` ImportCounts. */
+    counts: jsonb("counts").notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => [
+    uniqueIndex("import_run_one_running").on(sql`(true)`).where(sql`${t.state} = 'running'`),
+    index("import_run_created_idx").on(t.createdAt),
+    check("import_run_state", sql`${t.state} in ('running', 'done', 'stopped', 'refused')`),
+  ],
+)
+
+/** What a run did not import, or imported only in part, with the reason (`@maane/shared` IMPORT_REPORT_REASONS). */
+export const importReport = pgTable(
+  "import_report",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => importRun.id, { onDelete: "cascade" }),
+    zendeskId: bigint("zendesk_id", { mode: "number" }).notNull(),
+    reason: text("reason").notNull(),
+    /** What the reason names: the brand, a comment, a file. */
+    detail: text("detail"),
+  },
+  (t) => [index("import_report_run_idx").on(t.runId, t.id)],
+)

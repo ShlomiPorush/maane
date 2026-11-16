@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/node-postgres"
 import pg from "pg"
-import { PgBoss, type Db as QueueDb, type QueueOptions } from "pg-boss"
+import { PgBoss, type Queue, type Db as QueueDb } from "pg-boss"
 import type { Db } from "../db/client.ts"
 import * as schema from "../db/schema.ts"
 import { errorFacts, log } from "../log.ts"
@@ -54,11 +54,18 @@ export type PushKind = "new_ticket" | "customer_reply"
 export type PushJob = { kind: PushKind; ticketId: string; messageId: string }
 
 /**
+ * One run of the import from the Zendesk archive (plan 5.1): `{ runId }`. One at a time: the queue holds one job queued
+ * or active, and the worker's session lock covers a retry pg-boss starts while an expired run still works. A failed
+ * run is tried again; it goes on from its last committed ticket.
+ */
+export const ZENDESK_IMPORT = "zendesk-import"
+
+/**
  * The options of the queues the server sends to in a transaction, the same on both sides: pg-boss keeps the options of
  * the first createQueue. A failed run is tried again; a reply's outbox state makes a retry safe (it never sends what
  * an earlier run may have sent).
  */
-export const QUEUE_OPTIONS: Record<string, QueueOptions> = {
+export const QUEUE_OPTIONS: Record<string, Omit<Queue, "name">> = {
   // Longer than the slowest run (two providers, each up to SMTP_TIMEOUTS' setup and send deadlines, about 23 minutes),
   // so pg-boss never retries a run that still sends.
   [SEND_REPLY]: { retryLimit: 3, retryDelay: 30, retryBackoff: true, expireInSeconds: 45 * 60 },
@@ -69,6 +76,13 @@ export const QUEUE_OPTIONS: Record<string, QueueOptions> = {
   // a late run from acting twice. pg-boss keeps a job until its startAfter plus the retention, so a far time is kept.
   [TIMED_ACTION]: { retryLimit: 5, retryDelay: 30, retryBackoff: true, expireInSeconds: 5 * 60 },
   [SNOOZE_END]: { retryLimit: 5, retryDelay: 30, retryBackoff: true, expireInSeconds: 5 * 60 },
+  [ZENDESK_IMPORT]: {
+    policy: "exclusive",
+    retryLimit: 5,
+    retryDelay: 60,
+    retryBackoff: true,
+    expireInSeconds: 6 * 60 * 60,
+  },
 }
 
 /** pg-boss's states of a job, as the server reports them to the UI. */
@@ -102,6 +116,7 @@ export async function openJobQueue(connectionString: string): Promise<JobQueue> 
   await boss.createQueue(UPLOAD_SCAN, QUEUE_OPTIONS[UPLOAD_SCAN])
   await boss.createQueue(TIMED_ACTION, QUEUE_OPTIONS[TIMED_ACTION])
   await boss.createQueue(SNOOZE_END, QUEUE_OPTIONS[SNOOZE_END])
+  await boss.createQueue(ZENDESK_IMPORT, QUEUE_OPTIONS[ZENDESK_IMPORT])
   return {
     async send(name, data = {}) {
       const id = await boss.send(name, data)

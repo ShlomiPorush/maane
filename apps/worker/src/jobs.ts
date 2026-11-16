@@ -16,6 +16,7 @@ import {
   TIMED_ACTION,
   TIMED_RECOVER,
   UPLOAD_SCAN,
+  ZENDESK_IMPORT,
 } from "@maane/server/jobs/queue"
 import { errorFacts, log } from "@maane/server/log"
 import type { Settings } from "@maane/server/settings/service"
@@ -26,6 +27,7 @@ import { requeueOverdue, TimedActions, timedActionJob } from "./actions/run.ts"
 import type { ActivityPoll } from "./delivery/poll.ts"
 import { selfTestView } from "./files/self-test.ts"
 import type { FileService } from "./files/service.ts"
+import { importJob, type ZendeskImport } from "./import/run.ts"
 import { type GraphGateway, graphConfig } from "./intake/graph.ts"
 import { type LockPool, runExclusive } from "./intake/jobs.ts"
 import type { IntakeProcessor } from "./intake/process.ts"
@@ -54,6 +56,8 @@ export interface JobOptions {
   send?: SendJobs
   /** Browser notifications (plan 4.5); registered before intake, which queues them. */
   push?: PushNotifier
+  /** The import from the Zendesk archive (plan 5.1), with the pool its run lock takes a connection from. */
+  zendeskImport?: { pool: LockPool; importer: ZendeskImport }
 }
 
 export interface SendJobs {
@@ -168,6 +172,17 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
       await boss.schedule(DELIVERY_POLL, "*/10 * * * *")
       await boss.work(DELIVERY_POLL, async () => poll.run())
     }
+  }
+
+  const zendesk = options.zendeskImport
+  if (zendesk) {
+    // One run at a time: one job queued or active, and a session lock against a run pg-boss expired that still works.
+    await boss.createQueue(ZENDESK_IMPORT, QUEUE_OPTIONS[ZENDESK_IMPORT])
+    await boss.work<{ runId?: unknown }>(ZENDESK_IMPORT, async ([job]) => {
+      const runId = job?.data.runId
+      if (typeof runId === "string")
+        return runExclusive(zendesk.pool, ZENDESK_IMPORT, () => importJob(zendesk.importer, runId))
+    })
   }
 
   const push = options.push
