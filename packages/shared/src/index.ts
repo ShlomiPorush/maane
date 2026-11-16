@@ -102,10 +102,8 @@ export {
 } from "./links.ts"
 export { DEFAULT_LOCALE, direction, LOCALES, type Locale, MESSAGES, type Messages } from "./locales.ts"
 export {
-  ACTION_KINDS,
   ACTION_REASONS,
   ACTION_STATES,
-  type ActionKind,
   type ActionReason,
   type ActionState,
   AGENT_NAME_MAX,
@@ -126,7 +124,6 @@ export {
   type Provider,
   RECIPIENT_STATES,
   RECIPIENTS_MAX,
-  REMINDER_DAYS_DEFAULT,
   REMINDER_DAYS_MAX,
   REMINDER_DAYS_MIN,
   REMINDER_TEMPLATE_MAX,
@@ -149,8 +146,6 @@ export {
   UPLOAD_STATUSES,
   type UploadStatus,
   type UploadView,
-  WAITING_PERIOD_ORIGINS,
-  type WaitingPeriodOrigin,
 } from "./replies.ts"
 export {
   BLOCKED_TYPE,

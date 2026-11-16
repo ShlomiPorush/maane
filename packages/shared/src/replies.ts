@@ -249,25 +249,13 @@ export const ACTION_REASONS = [
 ] as const
 export type ActionReason = (typeof ACTION_REASONS)[number]
 
-/** The kinds of timed action: a scheduled reply (plan 4.2) and a reminder (plan 4.3). */
-export const ACTION_KINDS = ["reply", "reminder"] as const
-export type ActionKind = (typeof ACTION_KINDS)[number]
-
-/**
- * Where a waiting period came from (plan 4.3): Maane started it (an agent's reply that set the ticket to pending went
- * to sending), or the Zendesk import made it (phase 5). Only Maane's own periods send a reminder.
- */
-export const WAITING_PERIOD_ORIGINS = ["maane", "import"] as const
-export type WaitingPeriodOrigin = (typeof WAITING_PERIOD_ORIGINS)[number]
-
 /** Why a waiting period ended (plan 4.3); its reminder, if it had not gone yet, never goes. */
 export const PERIOD_END_REASONS = ["customer_reply", "status_change", "agent_reply", "move", "delivery_failed"] as const
 export type PeriodEndReason = (typeof PERIOD_END_REASONS)[number]
 
 /** The longest reminder template an organization keeps, in characters (as a signature). */
 export const REMINDER_TEMPLATE_MAX = 2000
-/** The days a ticket waits for the customer before its reminder: the default, and the bounds an admin may set. */
-export const REMINDER_DAYS_DEFAULT = 3
+/** The bounds of the days a ticket waits for the customer before its reminder (the default is the column's, three). */
 export const REMINDER_DAYS_MIN = 1
 export const REMINDER_DAYS_MAX = 60
 

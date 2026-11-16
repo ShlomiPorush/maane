@@ -1148,7 +1148,7 @@ export const waitingPeriod = pgTable(
     ticketId: uuid("ticket_id")
       .notNull()
       .references(() => ticket.id, { onDelete: "restrict" }),
-    /** `@maane/shared` WAITING_PERIOD_ORIGINS. */
+    /** `maane` (Maane started it) or `import` (the Zendesk import, phase 5): only `maane` periods send a reminder. */
     origin: text("origin").notNull(),
     /** The reply that started it (none for an imported period): its bounce ends the period. */
     messageId: uuid("message_id").references(() => message.id, { onDelete: "restrict" }),
