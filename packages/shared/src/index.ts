@@ -50,6 +50,7 @@ export {
 } from "./files.ts"
 export {
   emptyImportCounts,
+  IMPORT_FAILURES,
   IMPORT_REPORT_PAGE_SIZE,
   IMPORT_REPORT_REASONS,
   IMPORT_RUN_STATES,
@@ -60,6 +61,7 @@ export {
   type ImportedField,
   type ImportedMessageView,
   type ImportedTicketView,
+  type ImportFailure,
   type ImportMappingInput,
   type ImportReportPage,
   type ImportReportReason,

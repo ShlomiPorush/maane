@@ -9,7 +9,10 @@
 // the strict offline check of the whole archive; that its origin is the origin of earlier imports; and that the state
 // is still the same, with no lock (a change means a new full check). After each ticket it reads the state again: a
 // backup that ran or started meanwhile stops the run, and the next start is a full pass. A run that stopped otherwise
-// (a crash, the scanner) goes on from the last ticket it committed while the archive still holds its state.
+// (a crash, the scanner, a ticket the database refused) goes on from the last ticket it committed while the archive
+// still holds its state. An error stops the run where it is, open: it records why (`scanner` or `failed`), and a
+// ticket that caused it gets a `ticket_failed` report row with the kind of error and no text of the error. When its
+// job has used up its retries, the page offers Continue (the same Start) once the cause is fixed.
 //
 // Each ticket is one transaction, which first locks the intake mode row FOR SHARE and checks the window again: it
 // writes the ticket and replaces its imported comments, notes, participants, categories, and fields from the newest
@@ -38,6 +41,7 @@ import {
   emptyImportCounts,
   type FieldScan,
   type ImportCounts,
+  type ImportFailure,
   type ImportReportReason,
   type ImportStopReason,
   type MessageFlag,
@@ -63,6 +67,7 @@ import {
   addressOf,
   commentMessage,
   type FieldDefinition,
+  type FileFacts,
   fieldDefinitions,
   fieldsOf,
   followersOf,
@@ -78,6 +83,8 @@ import {
 const CHECK_ATTEMPTS = 3
 /** The archive check's problems a refused run keeps for the page. */
 const PROBLEMS_KEPT = 20
+/** Link rows per insert: three parameters each, far below PostgreSQL's 65,535 parameters of one statement. */
+export const LINK_BATCH = 1000
 
 /** The scanner gave no answer for a text: the run stops here and goes on from this ticket when it answers. */
 export class ScannerWaitingError extends Error {
@@ -107,8 +114,11 @@ export type ImportOutcome =
 interface PlannedTicket {
   zendeskId: number
   record: ZendeskTicketRecord
-  messages: (PlannedMessage & { scans: Partial<Record<TextField, FieldScan>>; invalid: boolean })[]
-  failedFiles: { id: string; name: string | null }[]
+  messages: (PlannedMessage & {
+    failed: FileFacts["failed"]
+    scans: Partial<Record<TextField, FieldScan>>
+    invalid: boolean
+  })[]
   files: number
   links: ImportedTicketSource["links"]
   /** The scan of the ticket's own texts (its subject, field values, and tags), as the header block of a message. */
@@ -145,6 +155,42 @@ export class ZendeskImport {
   async run(runId: string): Promise<ImportOutcome> {
     const [run] = await this.#db.select().from(importRun).where(eq(importRun.id, runId))
     if (run?.state !== "running") return { skipped: true }
+    const at: { ticket: number | null } = { ticket: null }
+    try {
+      return await this.#go(run, at)
+    } catch (error) {
+      await this.#stoppedOn(runId, at.ticket, error)
+      throw error
+    }
+  }
+
+  /**
+   * Records why an open run stopped on an error, in a transaction of its own (the ticket's rolled back): the reason,
+   * and for a ticket the database or the archive refused, one `ticket_failed` row (the newest error of the run). A
+   * failure to record it is logged; the run's own error is what its job reports.
+   */
+  async #stoppedOn(runId: string, zendeskId: number | null, error: unknown): Promise<void> {
+    const waiting = error instanceof ScannerWaitingError
+    try {
+      await this.#db.transaction(async (tx) => {
+        const [open] = await tx
+          .update(importRun)
+          .set({ reason: waiting ? "scanner" : "failed" })
+          .where(and(eq(importRun.id, runId), eq(importRun.state, "running")))
+          .returning({ id: importRun.id })
+        if (!open || waiting || zendeskId === null) return
+        await tx
+          .delete(importReport)
+          .where(and(eq(importReport.runId, runId), eq(importReport.reason, "ticket_failed")))
+        await tx.insert(importReport).values({ runId, zendeskId, reason: "ticket_failed", detail: failureOf(error) })
+      })
+    } catch (recordError) {
+      log.warn("an import run's error could not be recorded", errorFacts(recordError))
+    }
+  }
+
+  async #go(run: typeof importRun.$inferSelect, at: { ticket: number | null }): Promise<ImportOutcome> {
+    const runId = run.id
     const reader = new ArchiveReader(this.#dir)
 
     const window = await importWindow(this.#db)
@@ -172,6 +218,14 @@ export class ZendeskImport {
 
     // A run that goes on after a crash imports the same archive state, or stops: the next start is a full pass.
     if (run.archiveRuns !== null && !sameRecorded(run, mark)) return this.#finish(runId, "stopped", "archive_changed")
+    // Going on after an error: what stopped it no longer shows while the run works.
+    if (run.archiveRuns !== null)
+      await this.#db.transaction(async (tx) => {
+        await tx.update(importRun).set({ reason: null }).where(eq(importRun.id, runId))
+        await tx
+          .delete(importReport)
+          .where(and(eq(importReport.runId, runId), eq(importReport.reason, "ticket_failed")))
+      })
 
     const records = await reader.tickets()
     const order = [...records.keys()].map(Number).sort((a, b) => a - b)
@@ -219,17 +273,11 @@ export class ZendeskImport {
       if (zendeskId <= position) continue
       const record = records.get(String(zendeskId)) as ZendeskTicketRecord
       const gone = state.tickets[String(zendeskId)]?.gone === true
+      at.ticket = zendeskId
       let planned: PlannedTicket | null = null
-      if (!DELETED.has(record.status ?? "") && !gone) {
-        try {
-          planned = await this.#plan(reader, zendeskId, record, context)
-        } catch (error) {
-          if (error instanceof ScannerWaitingError)
-            await this.#db.update(importRun).set({ reason: "scanner" }).where(eq(importRun.id, runId))
-          throw error
-        }
-      }
+      if (!DELETED.has(record.status ?? "") && !gone) planned = await this.#plan(reader, zendeskId, record, context)
       const written = await this.#write(runId, zendeskId, record, planned, context)
+      at.ticket = null
       if (written === "closed") return this.#finish(runId, "stopped", "went_live")
       await this.#hooks.afterTicket?.(zendeskId)
       if (!sameMark(mark, await reader.mark())) return this.#finish(runId, "stopped", "archive_changed")
@@ -292,7 +340,6 @@ export class ZendeskImport {
       zendeskId,
       record,
       messages,
-      failedFiles: planned.flatMap((item) => item.failed),
       files: planned.reduce((sum, item) => sum + item.source.files.length, 0),
       links: linksOf(record, version.audits),
       ticketScan,
@@ -407,11 +454,16 @@ export class ZendeskImport {
           details: { ticket: zendeskId, reason: planned.ticketScan?.status, signature: planned.ticketScan?.signature },
         })
 
-      // Participants (the requester and the CCs) and categories (from the tag mapping) are the source's.
+      // Participants (the requester and the CCs) and categories (from the tag mapping) are the source's. The composer
+      // takes the earliest participant as the recipient (then the address), so each is a millisecond after the one
+      // before it: the requester first, then the CCs in Zendesk's order.
       await tx.delete(ticketParticipant).where(eq(ticketParticipant.ticketId, ticketId))
       people = wellFormed(people).value
+      const since = Date.now()
       if (people.length > 0)
-        await tx.insert(ticketParticipant).values(people.map((person) => ({ ticketId, ...person })))
+        await tx
+          .insert(ticketParticipant)
+          .values(people.map((person, index) => ({ ticketId, ...person, createdAt: new Date(since + index) })))
       await tx.delete(ticketCategory).where(eq(ticketCategory.ticketId, ticketId))
       const categories = [...new Set(tags.flatMap((tag) => context.tagMap.get(tag) ?? []))]
       if (categories.length > 0)
@@ -440,6 +492,7 @@ export class ZendeskImport {
         ).map((row) => [row.key as string, row]),
       )
       const keys = planned.messages.map((item) => item.key)
+      const fileReports: Report[] = []
       for (const item of planned.messages) {
         const flags: MessageFlag[] = []
         if (item.invalid) flags.push("invalid_characters")
@@ -485,6 +538,9 @@ export class ZendeskImport {
           item.scans,
         )
         if (blocked) reports.push({ reason: "blocked_content", detail: item.key })
+        // A file the manifest marks failed, by its name; by its ID when the scanner blocked the names (P12).
+        for (const file of item.failed)
+          fileReports.push({ reason: "file_failed", detail: headersOk ? (file.name ?? file.id) : file.id })
         if (item.direction === "note") {
           if (item.source.sideConversation) counts.sideConversations = (counts.sideConversations ?? 0) + 1
           else counts.notes = (counts.notes ?? 0) + 1
@@ -495,7 +551,7 @@ export class ZendeskImport {
       if (gone.length > 0)
         await tx.delete(message).where(and(eq(message.ticketId, ticketId), inArray(message.zendeskKey, gone)))
 
-      for (const file of planned.failedFiles) reports.push({ reason: "file_failed", detail: file.name ?? file.id })
+      reports.push(...fileReports)
       counts.tickets = 1
       counts.files = planned.files
       // The numbers go on after the highest one as each ticket commits, so a run that stops leaves no number to reuse.
@@ -504,24 +560,26 @@ export class ZendeskImport {
     })
   }
 
-  /** Replaces the links between imported tickets with the merged and follow-up tickets their sources name. */
+  /**
+   * Replaces the links between imported tickets with the merged and follow-up tickets their sources name. The old ones
+   * go by subqueries and the new ones in batches, so no statement carries a parameter per imported ticket.
+   */
   async #link(tx: Tx): Promise<number> {
     const imported = await tx
       .select({ id: ticket.id, zendeskId: ticket.zendeskId, zendesk: ticket.zendesk })
       .from(ticket)
       .where(isNotNull(ticket.zendeskId))
     const byZendesk = new Map(imported.map((row) => [row.zendeskId as number, row.id]))
-    const ids = imported.map((row) => row.id)
-    if (ids.length > 0)
-      await tx
-        .delete(ticketLink)
-        .where(
-          and(
-            inArray(ticketLink.ticketId, ids),
-            inArray(ticketLink.linkedTicketId, ids),
-            inArray(ticketLink.reason, ["merged", "follow_up"]),
-          ),
-        )
+    const importedIds = tx.select({ id: ticket.id }).from(ticket).where(isNotNull(ticket.zendeskId))
+    await tx
+      .delete(ticketLink)
+      .where(
+        and(
+          inArray(ticketLink.ticketId, importedIds),
+          inArray(ticketLink.linkedTicketId, importedIds),
+          inArray(ticketLink.reason, ["merged", "follow_up"]),
+        ),
+      )
     const pairs = new Map<string, { ticketId: string; linkedTicketId: string; reason: string }>()
     for (const row of imported) {
       const links = ((row.zendesk as ImportedTicketSource | null)?.links ?? []) as ImportedTicketSource["links"]
@@ -534,7 +592,7 @@ export class ZendeskImport {
       }
     }
     const values = [...pairs.values()]
-    if (values.length > 0) await tx.insert(ticketLink).values(values).onConflictDoNothing()
+    for (const batch of batches(values, LINK_BATCH)) await tx.insert(ticketLink).values(batch).onConflictDoNothing()
     return values.length
   }
 
@@ -629,11 +687,49 @@ async function addCounts(tx: Tx, runId: string, add: Partial<ImportCounts>): Pro
 /**
  * The ticket numbers go on right after the highest ticket number, with no gap (owner's decision 1). `setval` is not
  * transactional: it is set to a number a ticket holds, so a rollback after it leaves a gap at worst, never a reuse.
+ * Called after each ticket, so both reads use the number's unique index: `max` and `exists`, never a count.
  */
 async function continueNumbers(tx: Tx): Promise<void> {
   await tx.execute(
-    sql`select setval('ticket_number_seq', greatest((select coalesce(max(${ticket.number}), 0) from ${ticket}), 1), (select count(*) > 0 from ${ticket}))`,
+    sql`select setval('ticket_number_seq', greatest((select coalesce(max(${ticket.number}), 0) from ${ticket}), 1), exists (select 1 from ${ticket}))`,
   )
+}
+
+/** A list in batches of at most `size` items, in order. */
+export function batches<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let start = 0; start < items.length; start += size) out.push(items.slice(start, start + size))
+  return out
+}
+
+/**
+ * What kind of error stopped a ticket, for its report row: the database's (by its SQLSTATE, with the constraint's name
+ * when it named one) or the archive's. Never the error's text: it may hold the row's values.
+ */
+export function failureOf(error: unknown): string {
+  let current: unknown = error
+  for (let depth = 0; current && depth < 5; depth++) {
+    const facts = current as { code?: unknown; constraint?: unknown; cause?: unknown }
+    if (typeof facts.code === "string" && /^[0-9A-Z]{5}$/.test(facts.code)) {
+      const code = facts.code
+      const kind: ImportFailure =
+        code === "23505"
+          ? "duplicate"
+          : code === "23503"
+            ? "reference"
+            : code.startsWith("23")
+              ? "rule"
+              : code.startsWith("22")
+                ? "value"
+                : "other"
+      const constraint = typeof facts.constraint === "string" ? facts.constraint : ""
+      return /^[a-z0-9_]{1,63}$/.test(constraint) ? `${kind}:${constraint}` : kind
+    }
+    if ((typeof facts.code === "string" && /^E[A-Z]+$/.test(facts.code)) || current instanceof SyntaxError)
+      return "archive"
+    current = facts.cause
+  }
+  return "other"
 }
 
 /** Runs the job of a run, and logs what stopped it. */

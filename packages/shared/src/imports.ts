@@ -23,6 +23,8 @@ export type ImportRunState = (typeof IMPORT_RUN_STATES)[number]
  * - `other_origin`: the archive comes from another Zendesk account than earlier imports.
  * - `archive_changed`: a backup ran or started during the run (or between its check and its first write).
  * - `scanner`: the scanner did not answer; the run goes on when it does.
+ * - `failed`: the run stopped on an error and waits, open; when a ticket caused it, its `ticket_failed` report row
+ *   names the ticket and why. Continue goes on from the last committed ticket once the cause is fixed.
  */
 export const IMPORT_STOP_REASONS = [
   "went_live",
@@ -34,6 +36,7 @@ export const IMPORT_STOP_REASONS = [
   "other_origin",
   "archive_changed",
   "scanner",
+  "failed",
 ] as const
 export type ImportStopReason = (typeof IMPORT_STOP_REASONS)[number]
 
@@ -44,6 +47,9 @@ export type ImportStopReason = (typeof IMPORT_STOP_REASONS)[number]
  * - `number_taken`: a ticket Maane opened already has this number; it was not imported.
  * - `file_failed`: the manifest marks a file of the ticket failed.
  * - `blocked_content`: the scanner blocked a text of a comment, which was kept without it.
+ * - `ticket_failed`: the ticket could not be saved, so the run stopped there (the last such error of the run). Its
+ *   detail is an IMPORT_FAILURES kind, then `:` and the database constraint's name when one was named; never the
+ *   error's text, which may hold the row's values.
  */
 export const IMPORT_REPORT_REASONS = [
   "unmapped_brand",
@@ -51,8 +57,13 @@ export const IMPORT_REPORT_REASONS = [
   "number_taken",
   "file_failed",
   "blocked_content",
+  "ticket_failed",
 ] as const
 export type ImportReportReason = (typeof IMPORT_REPORT_REASONS)[number]
+
+/** Why a ticket could not be saved: a key already held, a database rule, a missing row, a value, the archive, other. */
+export const IMPORT_FAILURES = ["duplicate", "rule", "reference", "value", "archive", "other"] as const
+export type ImportFailure = (typeof IMPORT_FAILURES)[number]
 
 /** What a run counted. Files are listed and counted only: they are imported by the next step (plan 5.2). */
 export interface ImportCounts {
@@ -92,6 +103,11 @@ export interface ImportRunView {
   done: number
   counts: ImportCounts
   reportRows: number
+  /**
+   * Whether a job is queued, waiting to retry, or working on this run. A running run without one (its job used up its
+   * retries) waits for Continue.
+   */
+  jobActive: boolean
 }
 
 export interface ImportReportRow {

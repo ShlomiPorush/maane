@@ -7,8 +7,8 @@ import { errorFacts, log } from "../log.ts"
 
 // The job queues the server and the worker share. The worker runs every job; the server only queues the ones a user
 // asks for (a scanner, Graph, or SMTP connection test, a reply to send, an upload to scan, a timed action or the end
-// of a snooze at its time) and reads their state, through pg-boss's documented send (with `startAfter` for a time) and
-// getJobById. The server never calls an outside service itself.
+// of a snooze at its time) and reads their state, through pg-boss's documented send (with `startAfter` for a time),
+// getJobById, and findJobs. The server never calls an outside service itself.
 
 /** The scanner self-test: on worker start, every hour, when the scanner address changes, and for a connection test. */
 export const SCANNER_SELF_TEST = "scanner-self-test"
@@ -93,6 +93,8 @@ export interface JobQueue {
   sendIn(db: QueueDb, name: string, data: object, options?: { startAfter?: Date }): Promise<string>
   /** A job's state and the output its handler returned, or null when no such job exists. */
   job(name: string, id: string): Promise<{ state: JobState; output: unknown } | null>
+  /** Whether a job of this queue whose data contains `data` is queued, waiting to retry, or working. */
+  pending(name: string, data: object): Promise<boolean>
   stop(): Promise<void>
 }
 
@@ -126,6 +128,11 @@ export async function openJobQueue(connectionString: string): Promise<JobQueue> 
     async job(name, id) {
       const job = await boss.getJobById(name, id)
       return job ? { state: job.state as JobState, output: job.output ?? null } : null
+    },
+    async pending(name, data) {
+      // findJobs' `queued` covers only the states before `active`, so the states are read here.
+      const jobs = await boss.findJobs(name, { data })
+      return jobs.some((job) => job.state === "created" || job.state === "retry" || job.state === "active")
     },
     stop: () => boss.stop({ graceful: false }),
   }

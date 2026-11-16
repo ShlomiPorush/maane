@@ -56,7 +56,8 @@ export interface ZendeskFullComment {
   audit_id?: number | string | null
   attachments?: ZendeskAttachment[]
   via?: ZendeskVia | null
-  metadata?: { system?: Record<string, unknown> | null } | null
+  /** Zendesk's example response keeps the comment's via object here, beside `system`. */
+  metadata?: { system?: Record<string, unknown> | null; via?: ZendeskVia | null } | null
 }
 
 export interface ZendeskAudit {
@@ -140,6 +141,8 @@ const list = <T>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) 
 
 export class ArchiveReader {
   readonly archive: Archive
+  /** state.json as last parsed, by its file's identity (inode, size, and times): parsed again only when it changed. */
+  #state: { id: string; state: ArchiveState } | null = null
 
   constructor(root: string) {
     this.archive = new Archive(root)
@@ -149,13 +152,21 @@ export class ArchiveReader {
     return JSON.parse(await readFile(this.archive.path(relativePath), "utf8")) as Record<string, unknown>
   }
 
-  /** The pages of a list, in order: `<prefix>-000001.json`, ... in a folder (or `000001.json` with no prefix). */
-  async #pages(folder: string, prefix: string): Promise<Record<string, unknown>[]> {
+  /**
+   * The pages of a list, one at a time and in order: `<prefix>-000001.json`, ... in a folder (or `000001.json` with
+   * no prefix). Only the page being read is held, so a large export never sits in memory whole.
+   */
+  async *#pages(folder: string, prefix: string): AsyncGenerator<Record<string, unknown>> {
     const pattern = prefix ? new RegExp(`^${prefix}-\\d+\\.json$`) : /^\d+\.json$/
     const names = (await files(this.archive.path(folder))).filter((name) => pattern.test(name))
-    const pages: Record<string, unknown>[] = []
-    for (const name of names) pages.push(await this.#json(`${folder}/${name}`))
-    return pages
+    for (const name of names) yield await this.#json(`${folder}/${name}`)
+  }
+
+  /** Every record of a list's pages under `key`, in order. */
+  async #records<T>(folder: string, prefix: string, key: string): Promise<T[]> {
+    const records: T[] = []
+    for await (const page of this.#pages(folder, prefix)) records.push(...list<T>(page[key]))
+    return records
   }
 
   /** archive.json, or undefined when the folder holds no Maane archive. */
@@ -168,9 +179,12 @@ export class ArchiveReader {
     return this.archive.state()
   }
 
-  /** The mark a run compares before its first write and after each ticket. */
+  /**
+   * The mark a run compares before its first write and after each ticket. state.json is parsed only when its file
+   * changed: the backup saves it through a temporary name and a rename, which gives it a new inode and new times.
+   */
   async mark(): Promise<ArchiveMark> {
-    const state = await this.archive.state()
+    const state = await this.#currentState()
     const locked = await stat(this.archive.path(".lock")).then(
       () => true,
       () => false,
@@ -178,10 +192,19 @@ export class ArchiveReader {
     return { runs: state.runs, coveredUntil: state.coveredUntil, locked }
   }
 
+  async #currentState(): Promise<ArchiveState> {
+    const facts = await stat(this.archive.path("state.json"), { bigint: true }).catch(() => null)
+    const id = facts ? [facts.dev, facts.ino, facts.size, facts.mtimeNs, facts.ctimeNs].join(":") : "none"
+    if (this.#state?.id === id) return this.#state.state
+    const state = await this.archive.state()
+    this.#state = { id, state }
+    return state
+  }
+
   /** The newest version of every ticket the export returned, by ID: a later page wins a tie. */
   async tickets(): Promise<Map<string, ZendeskTicketRecord>> {
     const newest = new Map<string, ZendeskTicketRecord>()
-    for (const page of await this.#pages("raw/incremental/tickets", "")) {
+    for await (const page of this.#pages("raw/incremental/tickets", "")) {
       for (const record of list<ZendeskTicketRecord>(page.tickets)) {
         if (record?.id === undefined || typeof record.updated_at !== "string") continue
         const id = String(record.id)
@@ -196,7 +219,7 @@ export class ArchiveReader {
   /** Every user the users export returned, the newest record of each. */
   async users(): Promise<Map<string, ZendeskUser>> {
     const users = new Map<string, ZendeskUser>()
-    for (const page of await this.#pages("raw/incremental/users", "")) {
+    for await (const page of this.#pages("raw/incremental/users", "")) {
       for (const user of list<ZendeskUser>(page.users)) if (user?.id !== undefined) users.set(String(user.id), user)
     }
     return users
@@ -207,28 +230,25 @@ export class ArchiveReader {
     const runs = await folders(this.archive.path("raw", "collections", name))
     const newest = runs.at(-1)
     if (!newest) return []
-    const records: Record<string, unknown>[] = []
-    for (const page of await this.#pages(`raw/collections/${name}/${newest}`, ""))
-      records.push(...list<Record<string, unknown>>(page[name]))
-    return records
+    return this.#records<Record<string, unknown>>(`raw/collections/${name}/${newest}`, "", name)
   }
 
   /** The saved lists of a ticket's version: its comments, audits, and side conversations with their events. */
   async version(id: string, updatedAt: string): Promise<TicketVersion> {
     if (!/^\d{1,15}$/.test(id)) throw new Error("not a ticket ID")
     const folder = `raw/tickets/${id}/${stamp(updatedAt)}`
-    const comments = (await this.#pages(folder, "comments")).flatMap((page) => list<ZendeskFullComment>(page.comments))
-    const audits = (await this.#pages(folder, "audits")).flatMap((page) => list<ZendeskAudit>(page.audits))
-    const listed = (await this.#pages(folder, "side_conversations")).flatMap((page) =>
-      list<{ id?: unknown; subject?: unknown }>(page.side_conversations),
+    const comments = await this.#records<ZendeskFullComment>(folder, "comments", "comments")
+    const audits = await this.#records<ZendeskAudit>(folder, "audits", "audits")
+    const listed = await this.#records<{ id?: unknown; subject?: unknown }>(
+      folder,
+      "side_conversations",
+      "side_conversations",
     )
     const sideConversations: ZendeskSideConversation[] = []
     for (const side of listed) {
       const sideId = String(side.id ?? "")
       if (!/^[A-Za-z0-9-]{1,100}$/.test(sideId)) continue
-      const events = (await this.#pages(`${folder}/side_conversations/${sideId}`, "events")).flatMap((page) =>
-        list<ZendeskSideEvent>(page.events),
-      )
+      const events = await this.#records<ZendeskSideEvent>(`${folder}/side_conversations/${sideId}`, "events", "events")
       sideConversations.push({ id: sideId, subject: typeof side.subject === "string" ? side.subject : null, events })
     }
     return { comments, audits, sideConversations }

@@ -115,6 +115,56 @@ describe("the import's mapping", () => {
     })
   })
 
+  it("reads the sender and recipients from metadata.via, as Zendesk's example keeps them, before the comment's via", () => {
+    // The shape of Zendesk's List Comments example: the via object inside metadata, beside system, and none at the top.
+    const documented = {
+      id: 1274,
+      author_id: 123123,
+      body: "Thanks for your help!",
+      public: true,
+      metadata: {
+        system: { client: "Mozilla/5.0", ip_address: "192.0.2.10", location: "Example City" },
+        via: {
+          channel: "email",
+          source: {
+            from: { address: "Customer@Example.com", name: "Customer", original_recipients: ["help@example.com"] },
+            rel: null,
+            to: { address: "help@example.com", name: "Help", email_ccs: ["ron@example.com"] },
+          },
+        },
+      },
+    }
+    expect(emailOf(documented)).toEqual({
+      kind: "recorded",
+      messageId: null,
+      from: { address: "customer@example.com", name: "Customer" },
+      to: { address: "help@example.com", name: "Help" },
+      cc: ["ron@example.com"],
+      originalRecipients: ["help@example.com"],
+    })
+    const planned = commentMessage(10, documented, users, { files: {} }, new Date("2025-05-01T09:00:00Z"))
+    expect(planned.source.channel).toBe("email")
+    expect(planned.from).toEqual({ address: "customer@example.com", name: "Customer" })
+    // metadata.via first; a value only the comment's via holds still counts.
+    expect(
+      emailOf({
+        id: 2,
+        metadata: { via: { channel: "email", source: { from: { address: "first@example.com" } } } },
+        via: {
+          channel: "web",
+          source: { from: { address: "second@example.com" }, to: { address: "help@example.com" } },
+        },
+      }),
+    ).toMatchObject({ from: { address: "first@example.com" }, to: { address: "help@example.com" } })
+    // The example's web comment (empty from and to) recorded no identifiers in either place.
+    expect(
+      emailOf({
+        id: 3,
+        metadata: { system: {}, via: { channel: "web", source: { from: {}, rel: "web_widget", to: {} } } },
+      }),
+    ).toEqual({ kind: "none" })
+  })
+
   it("makes a public end user's comment incoming, an agent's or admin's a reply, a private one a note", () => {
     const at = new Date("2025-05-01T09:00:00Z")
     const manifest = { files: {} }

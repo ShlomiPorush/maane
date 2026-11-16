@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SYSTEM } from "@maane/server/audit"
@@ -27,7 +27,7 @@ import {
 import { Refusal } from "@maane/server/organizations/refusal"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
-import { createTestDatabase, testKey } from "@maane/server/testing/db"
+import { createTestDatabase, MIGRATIONS_DIR, testKey } from "@maane/server/testing/db"
 import { MEGABYTE } from "@maane/shared"
 import { Archive } from "@maane/zendesk"
 import type { StandInZendesk } from "@maane/zendesk/testing/stand-in"
@@ -38,7 +38,7 @@ import { FileService } from "../files/service.ts"
 import { FileStore } from "../files/store.ts"
 import { MARKERS, type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
 import { AGENT, BRANDS, backupInto, HEBREW_BODY, HEBREW_SUBJECT, standInAccount } from "../testing/zendesk-archive.ts"
-import { type ImportHooks, ZendeskImport } from "./run.ts"
+import { batches, type ImportHooks, LINK_BATCH, ZendeskImport } from "./run.ts"
 
 let clamd: StandInClamd
 beforeAll(async () => {
@@ -478,6 +478,131 @@ describe("the import from the Zendesk archive", () => {
     expect(events).toHaveLength(1)
   })
 
+  it("stops at a ticket the database refuses, says which and why, and goes on from it once the cause is fixed", async () => {
+    const h = await start()
+    await h.db.execute(sql`alter table ticket add constraint test_refuses_three check (zendesk_id is distinct from 3)`)
+    const [made] = await h.db.insert(importRun).values({ startedBy: h.owner }).returning({ id: importRun.id })
+    const id = made?.id ?? ""
+    const failures = async () => (await reportOf(h, id)).filter((row) => row.includes(":ticket_failed:"))
+    await expect(h.again(id)).rejects.toThrow()
+    // The run stays open where it stopped; the report names the ticket and the kind of error, never its text.
+    expect(await runOf(h, id)).toMatchObject({ state: "running", reason: "failed", position: 2, done: 2 })
+    expect(await failures()).toEqual(["3:ticket_failed:rule:test_refuses_three"])
+    // Tried again before the cause is fixed: the newest error only.
+    await expect(h.again(id)).rejects.toThrow()
+    expect(await failures()).toEqual(["3:ticket_failed:rule:test_refuses_three"])
+    await h.db.execute(sql`alter table ticket drop constraint test_refuses_three`)
+    expect(await h.again(id)).toEqual({ state: "done", reason: null })
+    expect(await runOf(h, id)).toMatchObject({ state: "done", reason: null, done: 7, position: 7 })
+    expect(await failures()).toEqual([])
+    expect(await h.db.select().from(ticket)).toHaveLength(4)
+  })
+
+  it("reports a failed file by its ID when the scanner blocked its name", async () => {
+    const h = await start()
+    h.zendesk.change(2, (t) => {
+      const big = t.comments[0]?.files[0]
+      if (big) big.name = `big ${MARKERS.infected}.zip`
+    })
+    await h.backup()
+    const run = await h.run()
+    const report = await reportOf(h, run.id)
+    expect(report).toContain("2:file_failed:201")
+    expect(report).toContain("2:blocked_content:comment:21")
+    expect(report.join("\n")).not.toContain(MARKERS.infected)
+    const rows = await h.db.select({ detail: importReport.detail }).from(importReport)
+    expect(rows.some((row) => row.detail?.includes("big"))).toBe(false)
+  })
+
+  it("links more imported tickets than one statement has parameters for", async () => {
+    const h = await start()
+    // 33,000 imported tickets, each a follow-up of the one before: more than PostgreSQL's 65,535 parameters if each
+    // ticket's ID were a parameter twice, or each link three. The reference code is distinct per ticket, of the form.
+    const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+    const digit = (power: number) => sql.raw(`substr('${alphabet}', (n / ${31 ** power}) % 31 + 1, 1)`)
+    await h.db.execute(sql`
+      insert into ticket (number, zendesk_id, reference_code, organization_id, support_address, status, zendesk)
+      select n, n, 'AAAA-' || ${digit(3)} || ${digit(2)} || ${digit(1)} || ${digit(0)}, ${h.org}, 'store@example.com',
+        'open', jsonb_build_object('links', jsonb_build_array(jsonb_build_object('zendeskId', n - 1, 'reason', 'follow_up')))
+      from generate_series(100001, 133000) as n`)
+    const run = await h.run()
+    expect(run.outcome).toEqual({ state: "done", reason: null })
+    // The archive's two links and 32,999 follow-ups (the first one's original is not imported).
+    const [links] = (await h.db.execute(sql`select count(*)::int as n from ticket_link`)).rows as { n: number }[]
+    expect(links?.n).toBe(2 + 32_999)
+    expect((await runOf(h, run.id)).counts).toMatchObject({ links: 2 + 32_999 })
+    expect(await nextNumber(h)).toBe(133_001)
+  })
+
+  it("closes the window in its migration for a database that went live and back to listening", async () => {
+    const database = await createTestDatabase()
+    try {
+      const db = database.db
+      const migration = await readFile(join(MIGRATIONS_DIR, "0025_import_row.sql"), "utf8")
+      const replayed = async () => {
+        await db.delete(zendeskImport)
+        await db.execute(sql.raw(migration))
+        const [row] = await db.select().from(zendeskImport)
+        if (!row) throw new Error("no row")
+        return row.wentLiveAt !== null
+      }
+      const [org] = await db.insert(organization).values({ name: "Example Store" }).returning({ id: organization.id })
+      const at = { organizationId: org?.id ?? "", supportAddress: "store@example.com" }
+      // Never used: open. Imported rows alone (an imported ticket and comment) leave it open too.
+      expect(await replayed()).toBe(false)
+      const [imported] = await db
+        .insert(ticket)
+        .values({ ...at, number: 900, zendeskId: 900, zendesk: {}, referenceCode: "AAAA-BBBB" })
+        .returning({ id: ticket.id })
+      const [comment] = await db
+        .insert(message)
+        .values({
+          direction: "in",
+          receivedAt: new Date(),
+          ticketId: imported?.id,
+          state: "processed",
+          content: "parsed",
+          zendeskKey: "comment:1",
+          zendesk: sql`'{}'::jsonb`,
+        })
+        .returning({ id: message.id })
+      const messageId = comment?.id ?? ""
+      expect(await replayed()).toBe(false)
+      // A message intake processed in live mode: closed; one it processed while listening: open.
+      await db.insert(intakeRecord).values({ messageId, mode: "live", outcome: "joined" })
+      expect(await replayed()).toBe(true)
+      await db.update(intakeRecord).set({ mode: "listening" })
+      expect(await replayed()).toBe(false)
+      await db.delete(intakeRecord)
+      // An outbox row: closed.
+      await db.insert(outbox).values({
+        messageId,
+        mime: Buffer.from("x"),
+        messageIdHeader: "reply-1@example.com",
+        fromAddress: "store@example.com",
+      })
+      expect(await replayed()).toBe(true)
+      await db.delete(outbox)
+      // A ticket Maane opened: closed.
+      const [opened] = await db
+        .insert(ticket)
+        .values({ ...at, number: 1, referenceCode: "CCCC-DDDD" })
+        .returning({ id: ticket.id })
+      expect(await replayed()).toBe(true)
+      await db.delete(ticket).where(eq(ticket.id, opened?.id ?? ""))
+      expect(await replayed()).toBe(false)
+      // Live intake now: closed.
+      await db
+        .insert(supportAddress)
+        .values({ organizationId: at.organizationId, kind: "exact", value: at.supportAddress, isDefault: true })
+      const settings = new Settings(db, createSettingsCipher([{ version: 1, value: testKey() }]), {})
+      await settings.update({ "intake.mode": "live" }, SYSTEM)
+      expect(await replayed()).toBe(true)
+    } finally {
+      await database.drop()
+    }
+  })
+
   it("leaves a ticket Maane already numbered and reports it", async () => {
     const h = await start()
     await h.db.insert(ticket).values({
@@ -501,5 +626,13 @@ describe("the import from the Zendesk archive", () => {
         .from(ticketLink)
         .where(and(isNotNull(ticketLink.reason), eq(ticketLink.reason, "merged"))),
     ).toHaveLength(0)
+  })
+})
+
+describe("the import's batches", () => {
+  it("splits a list in order into batches of at most the size", () => {
+    expect(batches([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]])
+    expect(batches([], 2)).toEqual([])
+    expect(LINK_BATCH * 3).toBeLessThan(65_535)
   })
 })

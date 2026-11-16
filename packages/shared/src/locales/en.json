@@ -1545,7 +1545,8 @@
         "archive_incomplete": "The archive check found problems. Run the backup again, then start.",
         "other_origin": "The archive comes from another Zendesk account than earlier imports.",
         "archive_changed": "A backup changed the archive. Start again for a full pass.",
-        "scanner": "The scanner did not answer. The import goes on when it does."
+        "scanner": "The scanner did not answer. The import goes on when it does.",
+        "failed": "The run stopped on an error. When a ticket caused it, the report names the ticket and why."
       },
       "problems": "What the archive check found",
       "startedAt": "Started",
@@ -1561,7 +1562,9 @@
         "files": "Files listed",
         "skipped": "Tickets not imported"
       },
-      "filesNext": "Files are listed and counted here. The next step imports them."
+      "filesNext": "Files are listed and counted here. The next step imports them.",
+      "continue": "Continue import",
+      "waiting": "Nothing is working on this run now. Fix what stopped it, then press Continue import."
     },
     "report": {
       "title": "Report",
@@ -1578,7 +1581,16 @@
         "deleted_in_zendesk": "Deleted in Zendesk: not imported",
         "number_taken": "A Maane ticket has this number: not imported",
         "file_failed": "A file failed in the backup",
-        "blocked_content": "The scanner blocked a text"
+        "blocked_content": "The scanner blocked a text",
+        "ticket_failed": "Could not be saved, so the run stopped here"
+      },
+      "failure": {
+        "duplicate": "Maane already holds a row with the same key.",
+        "rule": "A value breaks one of the database's rules.",
+        "reference": "It names a row that is not in Maane.",
+        "value": "A value is too long, or of a form the database cannot store.",
+        "archive": "Its files in the archive could not be read.",
+        "other": "An unexpected error."
       }
     }
   }

@@ -1,9 +1,19 @@
 // Import from Zendesk, /import, admins only (plan 5.1): the archive at its read-only mount, the brand and tag
 // mappings, the Maane user that Zendesk agents' comments and notes are attributed to, Start, the run's progress, and
 // the paged report of the newest run (GET /api/v1/admin/import). The import runs only before Maane first goes live;
-// after that the page says the import is closed for good. Imported tickets are read-only until then.
+// after that the page says the import is closed for good. Imported tickets are read-only until then. A run that stopped
+// on an error stays open; once its job has used up its retries the page offers Continue (the same Start), and the
+// report names the ticket that stopped it and why.
 
-import type { ImportCounts, ImportReportPage, ImportRunView, ImportView } from "@maane/shared"
+import {
+  IMPORT_FAILURES,
+  type ImportCounts,
+  type ImportFailure,
+  type ImportReportPage,
+  type ImportReportRow,
+  type ImportRunView,
+  type ImportView,
+} from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { Play, Save } from "lucide-react"
 import { useEffect, useState } from "react"
@@ -76,7 +86,7 @@ function ImportBody({ view }: { view: ImportView }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
   // While a run works, only the run is read again, every few seconds: the page's summary reads the whole archive.
-  const [running, setRunning] = useState(view.run?.state === "running")
+  const [running, setRunning] = useState(view.run?.state === "running" && view.run.jobActive)
   const progress = usePageQuery({
     queryKey: qk.importRun,
     queryFn: api.importRun,
@@ -84,10 +94,10 @@ function ImportBody({ view }: { view: ImportView }) {
   })
   const run = progress.data ? progress.data.run : view.run
   useEffect(() => {
-    const now = run?.state === "running"
+    const now = run?.state === "running" && run.jobActive
     if (running && !now) void queryClient.invalidateQueries({ queryKey: qk.importPage })
     setRunning(now)
-  }, [run?.state, running, queryClient])
+  }, [run?.state, run?.jobActive, running, queryClient])
   const saved = mappingOf(view)
   const [mapping, setMapping] = useState<Mapping>(saved)
   const [base, setBase] = useState<Mapping>(saved)
@@ -333,7 +343,9 @@ function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: bool
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
-  const running = run?.state === "running"
+  // An open run without a job (it used up its retries) goes on from its last ticket: Start is Continue then.
+  const resumable = run?.state === "running" && !run.jobActive
+  const working = run?.state === "running" && !resumable
 
   const start = async () => {
     setBusy(true)
@@ -358,11 +370,11 @@ function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: bool
         <button
           type="button"
           className="ui-btn ui-btn-primary ui-btn-sm"
-          disabled={!canStart || busy || running}
+          disabled={!canStart || busy || working}
           onClick={() => void start()}
         >
           <Play aria-hidden="true" />
-          {busy ? t("import.run.starting") : t("import.run.start")}
+          {busy ? t("import.run.starting") : resumable ? t("import.run.continue") : t("import.run.start")}
         </button>
       </div>
       {!run ? <Empty title={t("import.run.none")} hint={t("import.run.noneHint")} /> : <RunView run={run} />}
@@ -392,6 +404,7 @@ function RunView({ run }: { run: ImportRunView }) {
       {run.reason ? (
         <Banner tone={run.state === "running" ? "warn" : "fail"} title={t(`import.run.reason.${run.reason}`)} />
       ) : null}
+      {run.state === "running" && !run.jobActive ? <p className="ui-hint">{t("import.run.waiting")}</p> : null}
       {run.problems.length > 0 ? (
         <ul className="ui-import-problems" aria-label={t("import.run.problems")}>
           {run.problems.map((problem) => (
@@ -452,7 +465,7 @@ function ReportPanel({ run }: { run: ImportRunView }) {
     queryKey: qk.importReport(run.id),
     queryFn: (after) => api.importReport(run.id, after),
     nextCursor: (page) => page.next,
-    every: run.state === "running" ? WHILE_RUNNING : EVERY.live,
+    every: run.state === "running" && run.jobActive ? WHILE_RUNNING : EVERY.live,
   })
   const rows = query.data?.pages.flatMap((page) => page.rows) ?? []
   return (
@@ -476,11 +489,7 @@ function ReportPanel({ run }: { run: ImportRunView }) {
             </span>
             <span className="ui-item-meta">
               <span>{t(`import.report.reason.${row.reason}`)}</span>
-              {row.detail ? (
-                <bdi className="ui-mono" dir="auto">
-                  {row.detail}
-                </bdi>
-              ) : null}
+              <ReportDetail row={row} />
             </span>
           </div>
         </div>
@@ -505,5 +514,32 @@ function ReportPanel({ run }: { run: ImportRunView }) {
         <p className="ui-list-note">{t("import.report.end")}</p>
       ) : null}
     </section>
+  )
+}
+
+/** A report row's detail: for a ticket that stopped the run, why in plain words and the database rule it named. */
+function ReportDetail({ row }: { row: ImportReportRow }) {
+  const { t } = useI18n()
+  if (!row.detail) return null
+  if (row.reason === "ticket_failed") {
+    const [kind = "", constraint] = row.detail.split(":")
+    const known: ImportFailure = (IMPORT_FAILURES as readonly string[]).includes(kind)
+      ? (kind as ImportFailure)
+      : "other"
+    return (
+      <>
+        <span>{t(`import.report.failure.${known}`)}</span>
+        {constraint ? (
+          <bdi className="ui-mono" dir="ltr">
+            {constraint}
+          </bdi>
+        ) : null}
+      </>
+    )
+  }
+  return (
+    <bdi className="ui-mono" dir="auto">
+      {row.detail}
+    </bdi>
   )
 }

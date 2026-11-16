@@ -170,29 +170,65 @@ const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.flatMap((item) => (typeof item === "string" ? [item] : [])) : []
 
 /**
+ * A comment's via objects, in the order the import reads them: `metadata.via` (where Zendesk's example response of
+ * the comments keeps it), then the comment's own `via` (the field the reference lists). Each value is taken from the
+ * first one that has it.
+ */
+const viasOf = (comment: ZendeskFullComment): ZendeskVia[] =>
+  [comment.metadata?.via, comment.via].filter((via): via is ZendeskVia => typeof via === "object" && via !== null)
+
+/** The first value `pick` finds in the via objects, else null. */
+function first<T>(vias: ZendeskVia[], pick: (via: ZendeskVia) => T | null): T | null {
+  for (const via of vias) {
+    const value = pick(via)
+    if (value !== null) return value
+  }
+  return null
+}
+
+/** The first non-empty list `pick` finds in the via objects, else none. */
+function firstList<T>(vias: ZendeskVia[], pick: (via: ZendeskVia) => T[]): T[] {
+  for (const via of vias) {
+    const value = pick(via)
+    if (value.length > 0) return value
+  }
+  return []
+}
+
+/**
  * The email identifiers Zendesk recorded for a comment: its Message-ID (`metadata.system.message_id`, not in Zendesk's
- * reference, read when present), the original sender and recipients of the via object; or the mark that it recorded
- * none.
+ * reference, read when present), the original sender and recipients of its via objects (`metadata.via` first, then
+ * `via`); or the mark that neither recorded any.
  */
 export function emailOf(comment: ZendeskFullComment): EmailIdentifiers {
   const system = (comment.metadata?.system ?? {}) as Record<string, unknown>
   const rawId = text(system.message_id)
   const messageId = rawId ? rawId.replace(/^<|>$/g, "").slice(0, 998) : null
-  const from = comment.via?.source?.from
-  const to = comment.via?.source?.to
-  const original = strings(from?.original_recipients).flatMap((value) => addressOf(value) ?? [])
-  const cc = strings(to?.email_ccs).flatMap((value) => addressOf(value) ?? [])
-  const fromAddress = addressOf(from?.address)
-  const toAddress = addressOf(to?.address)
+  const vias = viasOf(comment)
+  const original = firstList(vias, (via) =>
+    strings(via.source?.from?.original_recipients).flatMap((value) => addressOf(value) ?? []),
+  )
+  const cc = firstList(vias, (via) => strings(via.source?.to?.email_ccs).flatMap((value) => addressOf(value) ?? []))
+  const fromAddress = first(vias, (via) => addressOf(via.source?.from?.address))
+  const fromName = first(vias, (via) => text(via.source?.from?.name))
+  const toAddress = first(vias, (via) => addressOf(via.source?.to?.address))
+  const toName = first(vias, (via) => text(via.source?.to?.name))
   if (!messageId && !fromAddress && !toAddress && original.length === 0 && cc.length === 0) return { kind: "none" }
   return {
     kind: "recorded",
     messageId,
-    from: fromAddress || text(from?.name) ? { address: fromAddress, name: text(from?.name) } : null,
-    to: toAddress || text(to?.name) ? { address: toAddress, name: text(to?.name) } : null,
+    from: fromAddress || fromName ? { address: fromAddress, name: fromName } : null,
+    to: toAddress || toName ? { address: toAddress, name: toName } : null,
     cc,
     originalRecipients: original,
   }
+}
+
+/** The channel a comment came by: `metadata.via` first, then `via`. */
+function channelOf(comment: ZendeskFullComment): string | null {
+  return first(viasOf(comment), (via) =>
+    typeof via.channel === "string" || typeof via.channel === "number" ? String(via.channel) : null,
+  )
 }
 
 /** Whether a Zendesk user is one of its agents (an agent or an admin). */
@@ -251,7 +287,6 @@ export function commentMessage(
     email.kind === "recorded" && email.to?.address ? [{ address: email.to.address, name: email.to.name }] : []
   const cc: MailAddress[] = email.kind === "recorded" ? email.cc.map((address) => ({ address, name: null })) : []
   const { files, failed } = filesOf(comment.attachments, manifest)
-  const channel = comment.via?.channel
   return {
     key: `comment:${String(comment.id)}`,
     direction,
@@ -275,7 +310,7 @@ export function commentMessage(
       auditId: id(comment.audit_id),
       author: { id: authorId, name: authorName, role: text(author?.role) },
       public: isPublic,
-      channel: typeof channel === "string" || typeof channel === "number" ? String(channel) : null,
+      channel: channelOf(comment),
       email,
       files,
     },

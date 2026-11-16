@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SYSTEM } from "@maane/server/audit"
 import { authUser, category, organization, outbox, supportAddress, ticket } from "@maane/server/db/schema"
-import { type JobQueue, openJobQueue } from "@maane/server/jobs/queue"
+import { type JobQueue, openJobQueue, ZENDESK_IMPORT } from "@maane/server/jobs/queue"
 import { Organizations } from "@maane/server/organizations/service"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
@@ -12,10 +12,12 @@ import { createTestApp } from "@maane/server/testing/app"
 import { nextIp, TestBrowser, testPassword } from "@maane/server/testing/browser"
 import { createTestDatabase, testKey } from "@maane/server/testing/db"
 import { type ImportView, MEGABYTE, type TicketList, type TicketView, userEmail } from "@maane/shared"
+import { ArchiveReader } from "@maane/zendesk"
 import type { StandInZendesk } from "@maane/zendesk/testing/stand-in"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { simpleParser } from "mailparser"
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { PgBoss } from "pg-boss"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { clamdScanner } from "../files/scanner.ts"
 import { FileService } from "../files/service.ts"
 import { FileStore } from "../files/store.ts"
@@ -118,14 +120,19 @@ async function newAgent(admin: TestBrowser, name: string, organizations: string[
   return b
 }
 
-/** The admin maps the store brand and the vip tag, chooses themself, starts a run, and the worker runs it. */
-async function imported(admin: { b: TestBrowser; id: string }) {
-  const mapped = await admin.b.call("PUT", "/api/v1/admin/import/mapping", {
+/** The admin maps the store brand and the vip tag and chooses themself. */
+async function mapped(admin: { b: TestBrowser; id: string }) {
+  const saved = await admin.b.call("PUT", "/api/v1/admin/import/mapping", {
     brands: { [String(BRANDS.mapped)]: org, [String(BRANDS.other)]: null },
     tags: { vip, billing: null },
     agentUserId: admin.id,
   })
-  expect(mapped.status, JSON.stringify(mapped.json)).toBe(200)
+  expect(saved.status, JSON.stringify(saved.json)).toBe(200)
+}
+
+/** The admin maps, starts a run, and the worker runs it. */
+async function imported(admin: { b: TestBrowser; id: string }) {
+  await mapped(admin)
   const started = await admin.b.call("POST", "/api/v1/admin/import/start")
   expect(started.status).toBe(202)
   expect(await importer.run(started.json.run.id)).toEqual({ state: "done", reason: null })
@@ -265,6 +272,88 @@ describe("imported tickets", () => {
     expect(mail.text).toContain("Answer")
     expect((await b.call("PUT", "/api/v1/tickets/1/status", { status: "solved" })).status).toBe(200)
     expect((await b.call("DELETE", `/api/v1/admin/categories/${vip}`)).status).toBe(200)
+  })
+
+  it("offers Continue for an open run whose job is gone, and the report says which ticket stopped it", async () => {
+    const admin = await firstAdmin()
+    await mapped(admin)
+    await database.db.execute(
+      sql`alter table ticket add constraint test_refuses_three check (zendesk_id is distinct from 3)`,
+    )
+    const started = await admin.b.call("POST", "/api/v1/admin/import/start")
+    const id = started.json.run.id as string
+    expect(started.json.run).toMatchObject({ state: "running", jobActive: true })
+    await expect(importer.run(id)).rejects.toThrow()
+    // Its job still waits in the queue (no worker here): the page does not offer Continue yet.
+    expect((await admin.b.call("GET", "/api/v1/admin/import/run")).json.run).toMatchObject({
+      state: "running",
+      reason: "failed",
+      jobActive: true,
+    })
+    // The job used up its retries: pg-boss's documented cancel leaves the run with no job, waiting for Continue.
+    const boss = new PgBoss({ connectionString: database.url, supervise: false, schedule: false })
+    await boss.start()
+    const jobs = await boss.findJobs(ZENDESK_IMPORT, { data: { runId: id } })
+    expect(jobs).toHaveLength(1)
+    await boss.cancel(
+      ZENDESK_IMPORT,
+      jobs.map((job) => job.id),
+    )
+    await boss.stop({ graceful: false })
+    expect((await admin.b.call("GET", "/api/v1/admin/import/run")).json.run).toMatchObject({
+      id,
+      state: "running",
+      reason: "failed",
+      jobActive: false,
+    })
+    const report = await admin.b.call("GET", `/api/v1/admin/import/runs/${id}/report`)
+    expect(report.json.rows.filter((row: { reason: string }) => row.reason === "ticket_failed")).toMatchObject([
+      { zendeskId: 3, detail: "rule:test_refuses_three" },
+    ])
+    // Going live stays refused while the run is open.
+    expect((await admin.b.call("PUT", "/api/v1/settings", { "intake.mode": "live" })).json.error).toBe("import_running")
+    // The cause fixed, Continue (the same Start) queues a job for the same run, which goes on from ticket 3.
+    await database.db.execute(sql`alter table ticket drop constraint test_refuses_three`)
+    const resumed = await admin.b.call("POST", "/api/v1/admin/import/start")
+    expect(resumed.json.run).toMatchObject({ id, state: "running", jobActive: true })
+    expect(await importer.run(id)).toEqual({ state: "done", reason: null })
+    expect((await admin.b.call("GET", "/api/v1/admin/import/run")).json.run).toMatchObject({
+      id,
+      state: "done",
+      reason: null,
+      jobActive: false,
+      done: 7,
+    })
+  })
+
+  it("reads the archive's tickets for the page once per archive state", async () => {
+    const admin = await firstAdmin()
+    const read = vi.spyOn(ArchiveReader.prototype, "tickets")
+    try {
+      expect((await admin.b.call("GET", "/api/v1/admin/import")).json.archive).toMatchObject({ runs: 1, tickets: 6 })
+      await admin.b.call("GET", "/api/v1/admin/import")
+      expect(read).toHaveBeenCalledTimes(1)
+      // A backup that ran meanwhile changed its state: read again, with what it brought.
+      zendesk.setStatus(6, "deleted")
+      await backupInto(zendesk, join(root, "archive"))
+      expect((await admin.b.call("GET", "/api/v1/admin/import")).json.archive).toMatchObject({ runs: 2, tickets: 5 })
+      expect(read).toHaveBeenCalledTimes(2)
+    } finally {
+      read.mockRestore()
+    }
+  })
+
+  it("makes the requester the composer's recipient even when a CC's address sorts first", async () => {
+    // user3 asks, user2 is in CC: by address alone user2 would come first.
+    zendesk.change(1, (t) => {
+      t.record = { ...t.record, requester_id: 3, email_cc_ids: [2] }
+    })
+    await backupInto(zendesk, join(root, "archive"))
+    const admin = await firstAdmin()
+    await imported(admin)
+    const view = (await admin.b.call("GET", "/api/v1/tickets/1")).json as TicketView
+    expect(view.compose.to.map((entry) => entry.address)).toEqual(["user3@example.com"])
+    expect(view.compose.cc.map((entry) => entry.address)).toEqual(["user2@example.com"])
   })
 
   it("shows imported tickets only within the organization scope, in the list and in search", async () => {

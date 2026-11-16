@@ -43,30 +43,30 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 type RunRow = typeof importRun.$inferSelect
 
 interface ArchiveSummary {
-  archive: ImportArchiveView
+  /** Without `otherOrigin`, which depends on the earlier imports' origin, not on the archive. */
+  archive: Omit<ImportArchiveView, "otherOrigin">
   brands: Map<string, { name: string; tickets: number }>
   tags: Map<string, number>
 }
 
 export class Imports {
+  /** The newest summary of a readable archive, by its origin and state: read again only when the state changes. */
+  #cached: { key: string; summary: ArchiveSummary } | null = null
+
   constructor(
     private readonly db: Db,
     private readonly jobs: JobQueue,
     private readonly archiveDir: string,
   ) {}
 
-  /** What the archive at the mount holds: its state, and the brands and tags of its tickets with their counts. */
-  async #summary(origin: string | null): Promise<ArchiveSummary> {
+  /**
+   * What the archive at the mount holds: its state, and the brands and tags of its tickets with their counts. Reading
+   * every ticket of a large archive is slow, so a readable archive's summary is kept until its state (`state.json`'s
+   * run count and coverage, and the backup's lock) or its origin changes; the page reads again every half minute.
+   */
+  async #summary(): Promise<ArchiveSummary> {
     const empty: ArchiveSummary = {
-      archive: {
-        present: false,
-        origin: null,
-        runs: 0,
-        coveredUntil: null,
-        backupRunning: false,
-        otherOrigin: false,
-        tickets: 0,
-      },
+      archive: { present: false, origin: null, runs: 0, coveredUntil: null, backupRunning: false, tickets: 0 },
       brands: new Map(),
       tags: new Map(),
     }
@@ -75,6 +75,8 @@ export class Imports {
     if (!info) return empty
     try {
       const mark = await reader.mark()
+      const key = JSON.stringify([info.apiOrigin, mark.runs, mark.coveredUntil, mark.locked])
+      if (this.#cached?.key === key) return this.#cached.summary
       const tickets = await reader.tickets()
       const brands = new Map<string, { name: string; tickets: number }>()
       for (const record of await reader.collection("brands"))
@@ -97,19 +99,20 @@ export class Imports {
         for (const tag of Array.isArray(record.tags) ? new Set(record.tags) : [])
           if (typeof tag === "string" && tag.length <= TAG_MAX) tags.set(tag, (tags.get(tag) ?? 0) + 1)
       }
-      return {
+      const summary: ArchiveSummary = {
         archive: {
           present: true,
           origin: info.apiOrigin,
           runs: mark.runs,
           coveredUntil: mark.coveredUntil,
           backupRunning: mark.locked,
-          otherOrigin: origin !== null && origin !== info.apiOrigin,
           tickets: live,
         },
         brands,
         tags,
       }
+      this.#cached = { key, summary }
+      return summary
     } catch (error) {
       // An archive that cannot be read shows as absent; the run's own check says what is wrong.
       log.warn("the Zendesk archive could not be read", { error: (error as Error).name })
@@ -120,7 +123,8 @@ export class Imports {
   async view(): Promise<ImportView> {
     const window = await importWindow(this.db)
     const [config] = await this.db.select().from(zendeskImport).where(eq(zendeskImport.id, 1))
-    const summary = await this.#summary(config?.origin ?? null)
+    const summary = await this.#summary()
+    const origin = config?.origin ?? null
     const brandMap = new Map((await this.db.select().from(zendeskBrandMap)).map((row) => [row.brandId, row]))
     const tagMap = new Map((await this.db.select().from(zendeskTagMap)).map((row) => [row.tag, row]))
     const users = await this.db
@@ -131,7 +135,10 @@ export class Imports {
     const [run] = await this.db.select().from(importRun).orderBy(desc(importRun.createdAt)).limit(1)
     return {
       window: { open: window.open, mode: window.mode, wentLiveAt: window.wentLiveAt?.toISOString() ?? null },
-      archive: summary.archive,
+      archive: {
+        ...summary.archive,
+        otherOrigin: summary.archive.present && origin !== null && origin !== summary.archive.origin,
+      },
       // Every brand the archive or a saved mapping names, so a mapping is never hidden.
       brands: [...new Set([...summary.brands.keys(), ...brandMap.keys()])]
         .map((id) => ({
@@ -179,6 +186,8 @@ export class Imports {
       done: run.done,
       counts: { ...emptyImportCounts(), ...((run.counts ?? {}) as Partial<ImportCounts>) },
       reportRows: rows?.n ?? 0,
+      // An open run without a job (its job used up its retries) waits for Continue.
+      jobActive: run.state === "running" && (await this.jobs.pending(ZENDESK_IMPORT, { runId: run.id })),
     }
   }
 
