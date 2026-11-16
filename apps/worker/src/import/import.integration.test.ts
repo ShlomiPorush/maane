@@ -31,7 +31,7 @@ import { createTestDatabase, MIGRATIONS_DIR, testKey } from "@maane/server/testi
 import { MEGABYTE } from "@maane/shared"
 import { Archive } from "@maane/zendesk"
 import type { StandInZendesk } from "@maane/zendesk/testing/stand-in"
-import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { clamdScanner } from "../files/scanner.ts"
 import { FileService } from "../files/service.ts"
@@ -597,6 +597,12 @@ describe("the import from the Zendesk archive", () => {
         .values({ organizationId: at.organizationId, kind: "exact", value: at.supportAddress, isDefault: true })
       const settings = new Settings(db, createSettingsCipher([{ version: 1, value: testKey() }]), {})
       await settings.update({ "intake.mode": "live" }, SYSTEM)
+      expect(await replayed()).toBe(true)
+      // Switched to live and back to listening with no mail meanwhile: the audited switch alone closes it.
+      await settings.update({ "intake.mode": "listening" }, SYSTEM)
+      expect(await db.select().from(ticket).where(isNull(ticket.zendeskId))).toEqual([])
+      expect(await db.select().from(outbox)).toEqual([])
+      expect(await db.select().from(intakeRecord)).toEqual([])
       expect(await replayed()).toBe(true)
     } finally {
       await database.drop()
