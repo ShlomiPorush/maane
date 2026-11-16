@@ -514,6 +514,38 @@ describe("the import from the Zendesk archive", () => {
     expect(await h.db.select().from(ticket)).toHaveLength(4)
   })
 
+  it("names the stage and the kind of an error no ticket caused, and clears them when the run goes on", async () => {
+    const h = await start()
+    const [made] = await h.db.insert(importRun).values({ startedBy: h.owner }).returning({ id: importRun.id })
+    const id = made?.id ?? ""
+    const failures = async () => (await reportOf(h, id)).filter((row) => row.includes(":ticket_failed:"))
+    // A users' page that no longer parses after the check: an error of the archive while reading it.
+    const page = join(h.archive, "raw/incremental/users/000001.json")
+    const original = await readFile(page, "utf8")
+    await expect(h.again(id, { afterCheck: () => writeFile(page, "{") })).rejects.toThrow(SyntaxError)
+    expect(await runOf(h, id)).toMatchObject({
+      state: "running",
+      reason: "failed",
+      failure: "archive:archive",
+      done: 0,
+    })
+    expect(await failures()).toEqual([])
+    await writeFile(page, original)
+    // The database refuses every link: an error of the links stage, with the rule it named.
+    await h.db.execute(sql`alter table ticket_link add constraint test_refuses_links check (ticket_id is null)`)
+    await expect(h.again(id)).rejects.toThrow()
+    expect(await runOf(h, id)).toMatchObject({
+      state: "running",
+      reason: "failed",
+      failure: "links:rule:test_refuses_links",
+      done: 7,
+    })
+    expect(await failures()).toEqual([])
+    await h.db.execute(sql`alter table ticket_link drop constraint test_refuses_links`)
+    expect(await h.again(id)).toEqual({ state: "done", reason: null })
+    expect(await runOf(h, id)).toMatchObject({ state: "done", reason: null, failure: null })
+  })
+
   it("reports a failed file by its ID when the scanner blocked its name", async () => {
     const h = await start()
     h.zendesk.change(2, (t) => {

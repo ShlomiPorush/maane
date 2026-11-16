@@ -3504,6 +3504,7 @@ describe("import from Zendesk", () => {
     done: 12,
     counts: { tickets: 11, messages: 40, notes: 5, sideConversations: 1, links: 2, files: 9, skipped: 1 },
     reportRows: 1,
+    failure: null,
     jobActive: false,
   }
 
@@ -3590,6 +3591,29 @@ describe("import from Zendesk", () => {
     await vi.waitFor(() =>
       expect(requests.some((r) => r.method === "POST" && r.url === "/api/v1/admin/import/start")).toBe(true),
     )
+  })
+
+  it("names the stage and the kind of an error no ticket caused", async () => {
+    const stopped = {
+      ...run,
+      state: "running",
+      reason: "failed",
+      finishedAt: null,
+      done: 12,
+      failure: { stage: "links", kind: "rule", constraint: "ticket_link_rule" },
+    }
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": page({ agentUserId: "u1", run: stopped }),
+      "/api/v1/admin/import/run": ok({ run: stopped }),
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("import.run.stage.links")))
+    const failure = document.querySelector('[data-failure="links"]')
+    expect(failure?.textContent).toContain(he("import.report.failure.rule"))
+    expect(failure?.textContent).toContain("ticket_link_rule")
+    expect(text()).toContain(he("import.run.reason.failed"))
   })
 
   it("keeps Start off while a job works on the open run", async () => {

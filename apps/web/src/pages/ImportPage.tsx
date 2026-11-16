@@ -402,7 +402,21 @@ function RunView({ run }: { run: ImportRunView }) {
         <span style={{ inlineSize: `${share}%` }} />
       </div>
       {run.reason ? (
-        <Banner tone={run.state === "running" ? "warn" : "fail"} title={t(`import.run.reason.${run.reason}`)} />
+        <Banner tone={run.state === "running" ? "warn" : "fail"} title={t(`import.run.reason.${run.reason}`)}>
+          {run.failure ? (
+            <span data-failure={run.failure.stage}>
+              {t(`import.run.stage.${run.failure.stage}`)} {t(`import.report.failure.${run.failure.kind}`)}
+              {run.failure.constraint ? (
+                <>
+                  {" "}
+                  <bdi className="ui-mono" dir="ltr">
+                    {run.failure.constraint}
+                  </bdi>
+                </>
+              ) : null}
+            </span>
+          ) : null}
+        </Banner>
       ) : null}
       {run.state === "running" && !run.jobActive ? (
         <p className="ui-hint ui-import-hint">{t("import.run.waiting")}</p>

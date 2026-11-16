@@ -1548,6 +1548,11 @@
         "scanner": "The scanner did not answer. The import goes on when it does.",
         "failed": "The run stopped on an error. When a ticket caused it, the report names the ticket and why."
       },
+      "stage": {
+        "start": "It stopped while preparing the run.",
+        "archive": "It stopped while reading the archive.",
+        "links": "It stopped while linking the imported tickets."
+      },
       "problems": "What the archive check found",
       "startedAt": "Started",
       "finishedAt": "Finished",

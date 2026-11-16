@@ -24,7 +24,8 @@ export type ImportRunState = (typeof IMPORT_RUN_STATES)[number]
  * - `archive_changed`: a backup ran or started during the run (or between its check and its first write).
  * - `scanner`: the scanner did not answer; the run goes on when it does.
  * - `failed`: the run stopped on an error and waits, open; when a ticket caused it, its `ticket_failed` report row
- *   names the ticket and why. Continue goes on from the last committed ticket once the cause is fixed.
+ *   names the ticket and why, and otherwise the run's `failure` names the stage and the kind of error. Continue goes on
+ *   from the last committed ticket once the cause is fixed.
  */
 export const IMPORT_STOP_REASONS = [
   "went_live",
@@ -61,6 +62,13 @@ export const IMPORT_REPORT_REASONS = [
 ] as const
 export type ImportReportReason = (typeof IMPORT_REPORT_REASONS)[number]
 
+/**
+ * Where a run stopped on an error no ticket caused: `start` (preparing the run in the database), `archive` (reading or
+ * checking the archive), or `links` (linking the imported tickets and continuing the ticket numbers).
+ */
+export const IMPORT_STAGES = ["start", "archive", "links"] as const
+export type ImportStage = (typeof IMPORT_STAGES)[number]
+
 /** Why a ticket could not be saved: a key already held, a database rule, a missing row, a value, the archive, other. */
 export const IMPORT_FAILURES = ["duplicate", "rule", "reference", "value", "archive", "other"] as const
 export type ImportFailure = (typeof IMPORT_FAILURES)[number]
@@ -95,6 +103,11 @@ export interface ImportRunView {
   reason: ImportStopReason | null
   /** The first problems of a failed archive check, as the check wrote them. */
   problems: string[]
+  /**
+   * For an open run stopped by an error no ticket caused: the stage, the kind of error, and the database constraint it
+   * named, if any. Never the error's text.
+   */
+  failure: { stage: ImportStage; kind: ImportFailure; constraint: string | null } | null
   createdAt: string
   finishedAt: string | null
   coveredUntil: string | null

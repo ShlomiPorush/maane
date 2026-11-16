@@ -1268,6 +1268,11 @@ export const importRun = pgTable(
     state: text("state").notNull().default("running"),
     /** `@maane/shared` IMPORT_STOP_REASONS: why a run was refused or stopped. */
     reason: text("reason"),
+    /**
+     * Where and why an open run stopped on an error that no ticket caused: `stage:kind`, then `:` and the database
+     * constraint's name when one was named (`@maane/shared` IMPORT_STAGES and IMPORT_FAILURES); never the error's text.
+     */
+    failure: text("failure"),
     /** The first problems of a failed archive check, for the admin to read. */
     problems: jsonb("problems"),
     startedBy: text("started_by").references(() => authUser.id, { onDelete: "restrict" }),

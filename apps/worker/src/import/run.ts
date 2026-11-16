@@ -11,7 +11,8 @@
 // backup that ran or started meanwhile stops the run, and the next start is a full pass. A run that stopped otherwise
 // (a crash, the scanner, a ticket the database refused) goes on from the last ticket it committed while the archive
 // still holds its state. An error stops the run where it is, open: it records why (`scanner` or `failed`), and a
-// ticket that caused it gets a `ticket_failed` report row with the kind of error and no text of the error. When its
+// ticket that caused it gets a `ticket_failed` report row with the kind of error and no text of the error; an error no
+// ticket caused records the stage it stopped in and the kind of error (`failure`), never its text. When its
 // job has used up its retries, the page offers Continue (the same Start) once the cause is fixed.
 //
 // Each ticket is one transaction, which first locks the intake mode row FOR SHARE and checks the window again: it
@@ -43,6 +44,7 @@ import {
   type ImportCounts,
   type ImportFailure,
   type ImportReportReason,
+  type ImportStage,
   type ImportStopReason,
   type MessageFlag,
   type TextField,
@@ -139,6 +141,9 @@ interface Context {
 
 type Report = { reason: ImportReportReason; detail: string | null }
 
+/** Where a run is: the ticket it writes (an error there is that ticket's), or the stage of an error no ticket caused. */
+type At = { ticket: number | null; stage: ImportStage }
+
 const DELETED = new Set(["deleted"])
 
 export class ZendeskImport {
@@ -157,27 +162,32 @@ export class ZendeskImport {
   async run(runId: string): Promise<ImportOutcome> {
     const [run] = await this.#db.select().from(importRun).where(eq(importRun.id, runId))
     if (run?.state !== "running") return { skipped: true }
-    const at: { ticket: number | null } = { ticket: null }
+    const at: At = { ticket: null, stage: "start" }
     try {
       return await this.#go(run, at)
     } catch (error) {
-      await this.#stoppedOn(runId, at.ticket, error)
+      await this.#stoppedOn(runId, at, error)
       throw error
     }
   }
 
   /**
    * Records why an open run stopped on an error, in a transaction of its own (the ticket's rolled back): the reason,
-   * and for a ticket the database or the archive refused, one `ticket_failed` row (the newest error of the run). A
-   * failure to record it is logged; the run's own error is what its job reports.
+   * and for a ticket the database or the archive refused, one `ticket_failed` row (the newest error of the run); for
+   * an error no ticket caused, the stage and the kind of error. A failure to record it is logged; the run's own error
+   * is what its job reports.
    */
-  async #stoppedOn(runId: string, zendeskId: number | null, error: unknown): Promise<void> {
+  async #stoppedOn(runId: string, at: At, error: unknown): Promise<void> {
     const waiting = error instanceof ScannerWaitingError
+    const zendeskId = at.ticket
     try {
       await this.#db.transaction(async (tx) => {
         const [open] = await tx
           .update(importRun)
-          .set({ reason: waiting ? "scanner" : "failed" })
+          .set({
+            reason: waiting ? "scanner" : "failed",
+            failure: waiting || zendeskId !== null ? null : `${at.stage}:${failureOf(error)}`,
+          })
           .where(and(eq(importRun.id, runId), eq(importRun.state, "running")))
           .returning({ id: importRun.id })
         if (!open || waiting || zendeskId === null) return
@@ -191,7 +201,7 @@ export class ZendeskImport {
     }
   }
 
-  async #go(run: typeof importRun.$inferSelect, at: { ticket: number | null }): Promise<ImportOutcome> {
+  async #go(run: typeof importRun.$inferSelect, at: At): Promise<ImportOutcome> {
     const runId = run.id
     const reader = new ArchiveReader(this.#dir)
 
@@ -201,6 +211,7 @@ export class ZendeskImport {
     if (!config?.agentUserId) return this.#finish(runId, "refused", "no_agent")
 
     // The archive: its state, the strict check, its origin, and its state again before the first write.
+    at.stage = "archive"
     const info = await reader.info()
     if (!info) return this.#finish(runId, "refused", "no_archive")
     let mark = await reader.mark()
@@ -221,14 +232,16 @@ export class ZendeskImport {
     // A run that goes on after a crash imports the same archive state, or stops: the next start is a full pass.
     if (run.archiveRuns !== null && !sameRecorded(run, mark)) return this.#finish(runId, "stopped", "archive_changed")
     // Going on after an error: what stopped it no longer shows while the run works.
+    at.stage = "start"
     if (run.archiveRuns !== null)
       await this.#db.transaction(async (tx) => {
-        await tx.update(importRun).set({ reason: null }).where(eq(importRun.id, runId))
+        await tx.update(importRun).set({ reason: null, failure: null }).where(eq(importRun.id, runId))
         await tx
           .delete(importReport)
           .where(and(eq(importReport.runId, runId), eq(importReport.reason, "ticket_failed")))
       })
 
+    at.stage = "archive"
     const records = await reader.tickets()
     const order = [...records.keys()].map(Number).sort((a, b) => a - b)
     const highest = order.at(-1) ?? null
@@ -249,6 +262,7 @@ export class ZendeskImport {
     }
     const state = await reader.state()
 
+    at.stage = "start"
     if (run.archiveRuns === null) {
       await this.#db.transaction(async (tx) => {
         await tx
@@ -260,6 +274,7 @@ export class ZendeskImport {
             highestNumber: highest,
             total: order.length,
             reason: null,
+            failure: null,
           })
           .where(eq(importRun.id, runId))
         // The first import fixes the archive's origin; every later run must match it.
@@ -271,6 +286,7 @@ export class ZendeskImport {
     }
 
     const position = run.position ?? 0
+    at.stage = "archive"
     for (const zendeskId of order) {
       if (zendeskId <= position) continue
       const record = records.get(String(zendeskId)) as ZendeskTicketRecord
@@ -286,6 +302,7 @@ export class ZendeskImport {
     }
 
     // The links between imported tickets, once every ticket is in, and the numbers after the highest one.
+    at.stage = "links"
     const closed = await this.#db.transaction(async (tx) => {
       if (!(await importWindow(tx, true)).open) return true
       // Set, not added: a retry after a crash between this commit and the end computes the same links again.

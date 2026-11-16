@@ -4,14 +4,18 @@
 
 import {
   emptyImportCounts,
+  IMPORT_FAILURES,
   IMPORT_REPORT_PAGE_SIZE,
+  IMPORT_STAGES,
   type ImportArchiveView,
   type ImportCounts,
+  type ImportFailure,
   type ImportMappingInput,
   type ImportReportPage,
   type ImportReportReason,
   type ImportRunState,
   type ImportRunView,
+  type ImportStage,
   type ImportStopReason,
   type ImportView,
 } from "@maane/shared"
@@ -47,6 +51,17 @@ interface ArchiveSummary {
   archive: Omit<ImportArchiveView, "otherOrigin">
   brands: Map<string, { name: string; tickets: number }>
   tags: Map<string, number>
+}
+
+/** A run's stored `stage:kind[:constraint]`, read back only as the known words and a constraint's plain name. */
+function failureView(value: string | null): ImportRunView["failure"] {
+  const [stage = "", kind = "", constraint = ""] = (value ?? "").split(":")
+  if (!(IMPORT_STAGES as readonly string[]).includes(stage)) return null
+  return {
+    stage: stage as ImportStage,
+    kind: (IMPORT_FAILURES as readonly string[]).includes(kind) ? (kind as ImportFailure) : "other",
+    constraint: /^[a-z0-9_]{1,63}$/.test(constraint) ? constraint : null,
+  }
 }
 
 export class Imports {
@@ -178,6 +193,7 @@ export class Imports {
       state: run.state as ImportRunState,
       reason: run.reason as ImportStopReason | null,
       problems: Array.isArray(run.problems) ? run.problems.filter((p): p is string => typeof p === "string") : [],
+      failure: run.state === "running" ? failureView(run.failure) : null,
       createdAt: run.createdAt.toISOString(),
       finishedAt: run.finishedAt?.toISOString() ?? null,
       coveredUntil: run.coveredUntil?.toISOString() ?? null,
