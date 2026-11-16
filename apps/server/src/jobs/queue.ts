@@ -107,8 +107,11 @@ export interface JobQueue {
   ): Promise<string>
   /** A job's state and the output its handler returned, or null when no such job exists. */
   job(name: string, id: string): Promise<{ state: JobState; output: unknown } | null>
-  /** Whether a job of this queue whose data contains `data` is queued, waiting to retry, or working. */
-  pending(name: string, data: object): Promise<boolean>
+  /**
+   * The state of the job of this queue whose data contains `data` that matters most while it is not done: working
+   * (`active`), then queued (`created`), then waiting to be tried again after a failure (`retry`); null when none is.
+   */
+  pending(name: string, data: object): Promise<"active" | "created" | "retry" | null>
   stop(): Promise<void>
 }
 
@@ -149,8 +152,8 @@ export async function openJobQueue(connectionString: string): Promise<JobQueue> 
     },
     async pending(name, data) {
       // findJobs' `queued` covers only the states before `active`, so the states are read here.
-      const jobs = await boss.findJobs(name, { data })
-      return jobs.some((job) => job.state === "created" || job.state === "retry" || job.state === "active")
+      const states = new Set((await boss.findJobs(name, { data })).map((job) => job.state))
+      return (["active", "created", "retry"] as const).find((state) => states.has(state)) ?? null
     },
     stop: () => boss.stop({ graceful: false }),
   }

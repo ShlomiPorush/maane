@@ -443,7 +443,14 @@ function RunView({ run }: { run: ImportRunView }) {
         </Banner>
       ) : null}
       {run.state === "running" && !run.jobActive ? (
-        <p className="ui-hint ui-import-hint">{t("import.run.waiting")}</p>
+        <p className="ui-hint ui-import-hint" data-waiting="admin">
+          {t("import.run.waiting")}
+        </p>
+      ) : null}
+      {run.state === "running" && run.jobActive && run.retrying ? (
+        <p className="ui-hint ui-import-hint" data-waiting="retry">
+          {t("import.run.retrying")}
+        </p>
       ) : null}
       {run.problems.length > 0 ? (
         <ul className="ui-import-problems" aria-label={t("import.run.problems")}>

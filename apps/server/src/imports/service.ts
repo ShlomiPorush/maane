@@ -190,6 +190,7 @@ export class Imports {
   }
 
   async #runView(run: RunRow): Promise<ImportRunView> {
+    const job = run.state === "running" ? await this.jobs.pending(ZENDESK_IMPORT, { runId: run.id }) : null
     const [rows] = await this.db.select({ n: count() }).from(importReport).where(eq(importReport.runId, run.id))
     return {
       id: run.id,
@@ -205,8 +206,10 @@ export class Imports {
       done: run.done,
       counts: { ...emptyImportCounts(), ...((run.counts ?? {}) as Partial<ImportCounts>) },
       reportRows: rows?.n ?? 0,
-      // An open run without a job (its job used up its retries) waits for Continue.
-      jobActive: run.state === "running" && (await this.jobs.pending(ZENDESK_IMPORT, { runId: run.id })),
+      // An open run without a job (its job used up its retries) waits for Continue; with only a failed job that pg-boss
+      // tries again later, it waits for that retry.
+      jobActive: job !== null,
+      retrying: job === "retry",
     }
   }
 

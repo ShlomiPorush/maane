@@ -3506,6 +3506,7 @@ describe("import from Zendesk", () => {
     reportRows: 1,
     failure: null,
     jobActive: false,
+    retrying: false,
   }
 
   it("maps the brands and tags, saves, starts, and shows the run with its report", async () => {
@@ -3583,6 +3584,7 @@ describe("import from Zendesk", () => {
     expect(button(he("import.run.start"))).toBeUndefined()
     expect(text()).toContain(he("import.run.reason.failed"))
     expect(text()).toContain(he("import.run.waiting"))
+    expect(text()).not.toContain(he("import.run.retrying"))
     await vi.waitFor(() => expect(text()).toContain(he("import.report.failure.rule")))
     expect(text()).toContain(he("import.report.reason.ticket_failed"))
     expect(text()).toContain(he("import.zendeskNumber", { number: 3 }))
@@ -3616,6 +3618,30 @@ describe("import from Zendesk", () => {
     expect(text()).toContain(he("import.run.reason.failed"))
   })
 
+  it("says an automatic retry follows while pg-boss will try the stopped run again, not that the admin must act", async () => {
+    const retrying = {
+      ...run,
+      state: "running",
+      reason: "failed",
+      finishedAt: null,
+      done: 2,
+      jobActive: true,
+      retrying: true,
+    }
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": page({ agentUserId: "u1", run: retrying }),
+      "/api/v1/admin/import/run": ok({ run: retrying }),
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("import.run.retrying")))
+    expect(text()).toContain(he("import.run.reason.failed"))
+    expect(text()).not.toContain(he("import.run.waiting"))
+    expect(button(he("import.run.continue"))).toBeUndefined()
+    expect(button(he("import.run.start"))?.disabled).toBe(true)
+  })
+
   it("keeps Start off while a job works on the open run", async () => {
     const working = { ...run, state: "running", finishedAt: null, done: 2, jobActive: true }
     await renderAt("/import", {
@@ -3629,6 +3655,7 @@ describe("import from Zendesk", () => {
     expect(button(he("import.run.start"))?.disabled).toBe(true)
     expect(button(he("import.run.continue"))).toBeUndefined()
     expect(text()).not.toContain(he("import.run.waiting"))
+    expect(text()).not.toContain(he("import.run.retrying"))
   })
 
   it("cancels an open run after asking, and says what a cancelled run means", async () => {

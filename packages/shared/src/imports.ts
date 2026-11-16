@@ -124,6 +124,8 @@ export interface ImportRunView {
    * retries) waits for Continue.
    */
   jobActive: boolean
+  /** Whether the run's only job failed and pg-boss tries it again by itself later: nothing for the admin to do yet. */
+  retrying: boolean
 }
 
 export interface ImportReportRow {

@@ -301,6 +301,20 @@ describe("imported tickets", () => {
     await boss.start()
     const jobs = await boss.findJobs(ZENDESK_IMPORT, { data: { runId: id } })
     expect(jobs).toHaveLength(1)
+    // A worker took the job and it failed: pg-boss tries it again later by itself, and the page says so.
+    const taken = await boss.fetch(ZENDESK_IMPORT)
+    expect(taken.map((job) => job.id)).toEqual([jobs[0]?.id])
+    expect((await admin.b.call("GET", "/api/v1/admin/import/run")).json.run).toMatchObject({
+      jobActive: true,
+      retrying: false,
+    })
+    await boss.fail(ZENDESK_IMPORT, jobs[0]?.id ?? "")
+    expect((await admin.b.call("GET", "/api/v1/admin/import/run")).json.run).toMatchObject({
+      state: "running",
+      reason: "failed",
+      jobActive: true,
+      retrying: true,
+    })
     await boss.cancel(
       ZENDESK_IMPORT,
       jobs.map((job) => job.id),
@@ -311,6 +325,7 @@ describe("imported tickets", () => {
       state: "running",
       reason: "failed",
       jobActive: false,
+      retrying: false,
     })
     const report = await admin.b.call("GET", `/api/v1/admin/import/runs/${id}/report`)
     expect(report.json.rows.filter((row: { reason: string }) => row.reason === "ticket_failed")).toMatchObject([

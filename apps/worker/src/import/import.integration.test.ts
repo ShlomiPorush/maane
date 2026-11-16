@@ -151,7 +151,7 @@ const NO_QUEUE: JobQueue = {
   send: async () => "",
   sendIn: async () => "",
   job: async () => null,
-  pending: async () => false,
+  pending: async () => null,
   stop: async () => {},
 }
 const cancelOf = (h: Harness) => () =>
