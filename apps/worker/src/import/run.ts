@@ -22,17 +22,21 @@
 //
 // Files (plan 5.2): each file the manifest holds is read from the archive (never from Zendesk), scanned like an intake
 // part before the ticket's transaction, and stored in it with its part (`message_part.zendesk_attachment_id`, unique),
-// with the same statuses and block events as intake. A part that already holds the same content is kept as it is,
-// never scanned or stored again. A scan that answers `waiting` stops the run as a waiting text does: its job tries
-// again from the archive. An image of a comment's HTML whose address is one of the comment's own files becomes that
-// part's `cid:`, which the body route shows as it shows intake's inline parts. The copy matches the archive: a part
-// whose file the archive no longer holds for its comment is deleted.
+// with the same statuses and block events as intake. A part that already stores the same content is kept as it is,
+// never scanned or stored again; a part whose content was not stored (too large, infected, blocked) is decided again,
+// under the current limit and scanner. A file is read only up to its manifest's size, from a place inside the archive
+// (a link out of it is refused), and must match its hash. A scan that answers `waiting` stops the run as a waiting text
+// does: its job tries again from the archive. An image of a comment's HTML whose address is one of the comment's own
+// files becomes that part's `cid:`, which the body route shows as it shows intake's inline parts. The copy matches the
+// archive: a part whose file the archive no longer holds for its comment is deleted.
 //
 // An admin can cancel an open run (`Imports.cancel`, which sets its row to `stopped`/`cancelled`). Every transaction
 // of a run that writes locks the run's row first and goes on only while it is still `running` (`stillRunning`), so a
 // cancel waits for a ticket being written, and once it returned no handler of that run writes again.
 
-import { readFile } from "node:fs/promises"
+import { constants } from "node:fs"
+import { open, realpath } from "node:fs/promises"
+import { sep } from "node:path"
 import { SYSTEM, writeAudit } from "@maane/server/audit"
 import type { Db } from "@maane/server/db/client"
 import {
@@ -986,14 +990,34 @@ export function batches<T>(items: T[], size: number): T[][] {
 }
 
 /**
- * A file's content from the archive (`files/<first two>/<sha256>`), checked against its manifest entry: a mismatch
- * stops the run as an archive error, never a file to scan or store.
+ * A file's content from the archive (`files/<first two>/<sha256>`), checked against its manifest entry. Its real
+ * place must be inside the archive (a link that leads out of it is refused), and it is read only up to one byte more
+ * than the manifest's size, so a file replaced by a larger one is never read whole. A mismatch stops the run as an
+ * archive error, never a file to scan or store.
  */
 async function archivedBytes(reader: ArchiveReader, file: ArchivedFile): Promise<Buffer> {
-  const bytes = await readFile(reader.archive.filePath(file.sha256))
-  if (bytes.byteLength !== file.bytes || sha256Of(bytes) !== file.sha256)
-    throw new ArchivedFileError("an archived file does not match its manifest entry")
-  return bytes
+  if (!Number.isSafeInteger(file.bytes) || file.bytes < 0)
+    throw new ArchivedFileError("an archived file's size in the manifest is not a size")
+  const root = await realpath(reader.archive.root)
+  const path = await realpath(reader.archive.filePath(file.sha256))
+  if (!path.startsWith(root + sep)) throw new ArchivedFileError("an archived file leads out of the archive")
+  // The resolved path, not followed again at its last step.
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const buffer = Buffer.alloc(file.bytes + 1)
+    let length = 0
+    while (length < buffer.byteLength) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.byteLength - length, length)
+      if (bytesRead === 0) break
+      length += bytesRead
+    }
+    const bytes = buffer.subarray(0, length)
+    if (length !== file.bytes || sha256Of(bytes) !== file.sha256)
+      throw new ArchivedFileError("an archived file does not match its manifest entry")
+    return bytes
+  } finally {
+    await handle.close()
+  }
 }
 
 /**

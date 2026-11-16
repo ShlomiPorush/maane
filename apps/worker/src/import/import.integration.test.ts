@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto"
-import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, symlink, truncate, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SYSTEM } from "@maane/server/audit"
@@ -1107,6 +1107,43 @@ describe("the import's files", () => {
     expect(await runOf(h, id)).toMatchObject({ state: "running", reason: "failed", done: 0 })
     expect(await reportOf(h, id)).toEqual(["1:ticket_failed:archive"])
     expect(await h.db.select().from(messagePart)).toHaveLength(0)
+    await writeFile(path, invoice.content)
+    expect(await h.again(id)).toEqual(DONE)
+    expect(await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, "101"))).toHaveLength(1)
+  })
+
+  it("reads no more of an archived file than its manifest's size", async () => {
+    const h = await start()
+    const invoice = h.zendesk.allFiles().find((f) => f.id === 101)
+    if (!invoice) throw new Error("no invoice")
+    const sha = sha256Of(invoice.content)
+    const path = join(h.archive, "files", sha.slice(0, 2), sha)
+    const id = await newRun(h)
+    // Replaced after the check by one far larger than a whole read could hold (sparse, so it takes no room).
+    await expect(h.again(id, { afterCheck: () => truncate(path, 3 * 1024 ** 3) })).rejects.toThrow(ArchivedFileError)
+    expect(await reportOf(h, id)).toEqual(["1:ticket_failed:archive"])
+    expect(await h.db.select().from(messagePart)).toHaveLength(0)
+  })
+
+  it("refuses an archived file that is a link to a place outside the archive", async () => {
+    const h = await start()
+    const invoice = h.zendesk.allFiles().find((f) => f.id === 101)
+    if (!invoice) throw new Error("no invoice")
+    const sha = sha256Of(invoice.content)
+    const path = join(h.archive, "files", sha.slice(0, 2), sha)
+    // The same content, so only its place can refuse it.
+    const outside = join(h.archive, "..", `outside-${sha}`)
+    await writeFile(outside, invoice.content)
+    await rm(path)
+    await symlink(outside, path)
+    const id = await newRun(h)
+    await expect(h.again(id)).rejects.toThrow(ArchivedFileError)
+    expect(await runOf(h, id)).toMatchObject({ state: "running", reason: "failed", done: 0 })
+    expect(await reportOf(h, id)).toEqual(["1:ticket_failed:archive"])
+    expect(await h.db.select().from(messagePart)).toHaveLength(0)
+    expect(await h.db.select().from(storedFile)).toHaveLength(0)
+    // The file back in the archive: the run goes on.
+    await rm(path)
     await writeFile(path, invoice.content)
     expect(await h.again(id)).toEqual(DONE)
     expect(await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, "101"))).toHaveLength(1)
