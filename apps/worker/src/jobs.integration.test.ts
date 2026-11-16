@@ -3,15 +3,17 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SYSTEM } from "@maane/server/audit"
 import { scannerCheck } from "@maane/server/db/schema"
-import { FILES_SWEEP, openJobQueue, SCANNER_SELF_TEST } from "@maane/server/jobs/queue"
+import { FILES_SWEEP, openJobQueue, SCANNER_SELF_TEST, ZENDESK_IMPORT } from "@maane/server/jobs/queue"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
 import { createTestDatabase, testKey } from "@maane/server/testing/db"
 import { PgBoss } from "pg-boss"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { clamdScanner } from "./files/scanner.ts"
 import { FileService } from "./files/service.ts"
 import { FileStore } from "./files/store.ts"
+import type { ImportOutcome, ZendeskImport } from "./import/run.ts"
+import { runExclusive } from "./intake/jobs.ts"
 import { registerJobs } from "./jobs.ts"
 import { type StandInClamd, startStandInClamd } from "./testing/clamd.ts"
 
@@ -106,5 +108,54 @@ describe("worker jobs", () => {
     } finally {
       await stuck.close()
     }
+  }, 60_000)
+
+  it("tries an import job again later while another job holds the run lock, and runs it once the lock frees", async () => {
+    const settings = new Settings(database.db, createSettingsCipher([{ version: 1, value: testKey() }]), {})
+    await settings.update({ "scanner.address": clamd.address }, SYSTEM)
+    const store = new FileStore(join(dir, "files"))
+    await store.prepare()
+    const files = new FileService({ db: database.db, settings, scanner: clamdScanner, store })
+    const runs: string[] = []
+    const importer = {
+      run: async (runId: string): Promise<ImportOutcome> => {
+        runs.push(runId)
+        return { state: "done", reason: null }
+      },
+    } as unknown as ZendeskImport
+    await registerJobs(boss, {
+      heartbeatFile: join(dir, "heartbeat"),
+      files,
+      zendeskImport: { pool: database.pool, importer },
+    })
+    // Another job of the import (a cancelled run's, still finishing) holds the run lock.
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let holding = false
+    const holder = runExclusive(database.pool, ZENDESK_IMPORT, async () => {
+      holding = true
+      await held
+    })
+    await vi.waitFor(() => expect(holding).toBe(true))
+    // A new run's only job, with a short fixed delay between tries (pg-boss's per-job retry options).
+    const id = (await boss.send(
+      ZENDESK_IMPORT,
+      { runId: "new-run" },
+      { retryLimit: 20, retryDelay: 1, retryBackoff: false },
+    )) as string
+    await expect
+      .poll(async () => (await boss.getJobById(ZENDESK_IMPORT, id))?.retryCount ?? 0, { timeout: 20_000 })
+      .toBeGreaterThan(0)
+    expect(["retry", "active"]).toContain((await boss.getJobById(ZENDESK_IMPORT, id))?.state)
+    expect(runs).toEqual([])
+    // The lock frees: the job runs once and completes.
+    release()
+    await holder
+    await expect
+      .poll(async () => (await boss.getJobById(ZENDESK_IMPORT, id))?.state, { timeout: 20_000 })
+      .toBe("completed")
+    expect(runs).toEqual(["new-run"])
   }, 60_000)
 })

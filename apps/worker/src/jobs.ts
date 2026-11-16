@@ -176,12 +176,17 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
 
   const zendesk = options.zendeskImport
   if (zendesk) {
-    // One job works at a time (a session lock, also against a run pg-boss expired that still works); another skips.
+    // One job works at a time (a session lock, also against a run pg-boss expired that still works). Another one fails
+    // while the lock is held, so pg-boss tries it again later by its documented retry instead of completing it unrun:
+    // a new run's only job may meet the lock of a cancelled run's job that is still finishing.
     await boss.createQueue(ZENDESK_IMPORT, QUEUE_OPTIONS[ZENDESK_IMPORT])
     await boss.work<{ runId?: unknown }>(ZENDESK_IMPORT, async ([job]) => {
       const runId = job?.data.runId
-      if (typeof runId === "string")
-        return runExclusive(zendesk.pool, ZENDESK_IMPORT, () => importJob(zendesk.importer, runId))
+      if (typeof runId !== "string") return
+      const result = await runExclusive(zendesk.pool, ZENDESK_IMPORT, () => importJob(zendesk.importer, runId))
+      if ("skipped" in result && result.skipped === "running")
+        throw new Error("another import job holds the run lock; this one is tried again later")
+      return result
     })
   }
 

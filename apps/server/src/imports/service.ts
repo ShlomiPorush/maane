@@ -278,7 +278,8 @@ export class Imports {
       if (!config?.agentUserId) throw new Refusal("import_no_agent", 409)
       const [open] = await tx.select({ id: importRun.id }).from(importRun).where(eq(importRun.state, "running"))
       if (open) {
-        // Its job may be queued or active already: a second one waits for the worker's lock and then does nothing.
+        // Its job may be queued or active already: while the worker's lock is held, pg-boss tries a second one again
+        // later, and it then goes on from the last ticket or finds the run ended and does nothing.
         await this.jobs.sendIn(jobs, ZENDESK_IMPORT, { runId: open.id }, HEARTBEAT)
         return open.id
       }
