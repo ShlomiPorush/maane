@@ -165,7 +165,7 @@ export function standInAccount(): StandInZendesk {
 }
 
 /** One backup run of the stand-in into the archive folder, as the command line runs it (files up to 1 KiB). */
-export async function backupInto(zendesk: StandInZendesk, dir: string): Promise<void> {
+export async function backupInto(zendesk: StandInZendesk, dir: string, maxFileBytes = 1024): Promise<void> {
   const client = new ZendeskClient({
     apiOrigin: zendesk.apiOrigin,
     authorization: zendesk.authorization,
@@ -173,5 +173,5 @@ export async function backupInto(zendesk: StandInZendesk, dir: string): Promise<
     fileHostAllowed: (host) => host === "127.0.0.1",
     sleep: async () => {},
   })
-  await runBackup({ client, archive: new Archive(dir), maxFileBytes: 1024 })
+  await runBackup({ client, archive: new Archive(dir), maxFileBytes })
 }

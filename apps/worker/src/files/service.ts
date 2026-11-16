@@ -93,6 +93,11 @@ export class FileService {
     return this.#store.path(sha256)
   }
 
+  /** files.maxBytes in effect: a larger file is never scanned or stored (`scan` refuses it). */
+  async maxBytes(): Promise<number> {
+    return this.#settings.get("files.maxBytes")
+  }
+
   /** Runs the self-test against the address in effect and keeps the result as the scanner's status. */
   async selfTest(): Promise<SelfTestResult> {
     const address = await this.#settings.get("scanner.address")

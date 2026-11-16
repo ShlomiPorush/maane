@@ -635,6 +635,11 @@ export const messagePart = pgTable(
     storedSha256: text("stored_sha256").references(() => storedFile.sha256, { onDelete: "restrict" }),
     /** Why a waiting part became unavailable (Graph's status when it was fetched again). */
     unavailableReason: text("unavailable_reason"),
+    /**
+     * An imported file (plan 5.2): its source key, the Zendesk attachment ID, unique, so a run again updates the same
+     * row. Null for every part intake took in. Only a message with a `zendesk_key` has such parts.
+     */
+    zendeskAttachmentId: text("zendesk_attachment_id").unique(),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [

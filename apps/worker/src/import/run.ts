@@ -20,16 +20,30 @@
 // version, with its position, counts, and report rows. A ticket counts as imported only once that committed. Each
 // imported row keeps its source key (unique), so a run again updates the same rows.
 //
+// Files (plan 5.2): each file the manifest holds is read from the archive (never from Zendesk), scanned like an intake
+// part before the ticket's transaction, and stored in it with its part (`message_part.zendesk_attachment_id`, unique),
+// with the same statuses and block events as intake. A part that already stores the same content is kept as it is,
+// never scanned or stored again; a part whose content was not stored (too large, infected, blocked) is decided again,
+// under the current limit and scanner. A file is read only up to its manifest's size, from a place inside the archive
+// (a link out of it is refused), and must match its hash. A scan that answers `waiting` stops the run as a waiting text
+// does: its job tries again from the archive. An image of a comment's HTML whose address is one of the comment's own
+// files becomes that part's `cid:`, which the body route shows as it shows intake's inline parts. The copy matches the
+// archive: a part whose file the archive no longer holds for its comment is deleted.
+//
 // An admin can cancel an open run (`Imports.cancel`, which sets its row to `stopped`/`cancelled`). Every transaction
 // of a run that writes locks the run's row first and goes on only while it is still `running` (`stillRunning`), so a
 // cancel waits for a ticket being written, and once it returned no handler of that run writes again.
 
+import { constants } from "node:fs"
+import { open, realpath } from "node:fs/promises"
+import { sep } from "node:path"
 import { SYSTEM, writeAudit } from "@maane/server/audit"
 import type { Db } from "@maane/server/db/client"
 import {
   importReport,
   importRun,
   message,
+  messagePart,
   ticket,
   ticketCategory,
   ticketLink,
@@ -51,6 +65,9 @@ import {
   type ImportStage,
   type ImportStopReason,
   type MessageFlag,
+  type PartStatus,
+  STORED_STATUSES,
+  type StoredStatus,
   type TextField,
 } from "@maane/shared"
 import {
@@ -62,14 +79,15 @@ import {
   type ZendeskTicketRecord,
   type ZendeskUser,
 } from "@maane/zendesk"
-import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm"
-import type { FileService } from "../files/service.ts"
+import { and, eq, inArray, isNotNull, isNull, notInArray, or, sql } from "drizzle-orm"
+import { auditBlockedPart, type FileService, FileTooLargeError, type ScanOutcome, sha256Of } from "../files/service.ts"
 import type { Tx } from "../files/types.ts"
 import { auditBlockedFields, refused, scanFields, storable } from "../intake/content.ts"
 import { sanitizeMailHtml, textFromHtml } from "../intake/sanitize.ts"
 import { wellFormed } from "../intake/text.ts"
 import { newReferenceCode } from "../intake/threading.ts"
 import {
+  type ArchivedFile,
   addressOf,
   commentMessage,
   type FieldDefinition,
@@ -77,6 +95,8 @@ import {
   fieldDefinitions,
   fieldsOf,
   followersOf,
+  importedContentId,
+  inlineImages,
   linksOf,
   type PlannedMessage,
   participantsOf,
@@ -92,9 +112,14 @@ const PROBLEMS_KEPT = 20
 /** Link rows per insert: three parameters each, far below PostgreSQL's 65,535 parameters of one statement. */
 export const LINK_BATCH = 1000
 
-/** The scanner gave no answer for a text: the run stops here and goes on from this ticket when it answers. */
+/** The scanner gave no answer for a text or a file: the run stops here and goes on from this ticket when it answers. */
 export class ScannerWaitingError extends Error {
   override name = "ScannerWaitingError"
+}
+
+/** A file in the archive whose content is not what its manifest entry records. */
+export class ArchivedFileError extends Error {
+  override name = "ArchivedFileError"
 }
 
 export interface ImportHooks {
@@ -106,6 +131,8 @@ export interface ImportHooks {
   afterLinks?: () => Promise<void>
   /** Inside each ticket's transaction, once it holds the run's row and before it writes (a test cancels here). */
   inTicket?: (zendeskId: number) => Promise<void>
+  /** After a ticket's texts and files were read and scanned, before its transaction (a test cancels here). */
+  afterPlan?: (zendeskId: number) => Promise<void>
 }
 
 export interface ImportOptions {
@@ -123,12 +150,46 @@ export type ImportOutcome =
 /** What a job of a run an admin cancelled meanwhile returns: it stopped without writing again. */
 const CANCELLED: ImportOutcome = { state: "stopped", reason: "cancelled" }
 
+/** An imported part as stored: what a later run keeps when the archive still holds the same content. */
+type StoredPart = typeof messagePart.$inferSelect
+
+/**
+ * What becomes of one file the manifest holds, decided before the ticket's transaction: its part already holds the
+ * same content (`kept`, nothing scanned or stored again), it is over files.maxBytes, or the scanner decided.
+ */
+type FileDecision =
+  | { kind: "kept"; part: StoredPart }
+  | { kind: "too_large" }
+  | { kind: "scanned"; outcome: ScanOutcome }
+
+/** A file of a planned message: its place among the message's files, how its HTML uses it, and its decision. */
+interface PlannedFile extends ArchivedFile {
+  index: number
+  /** An image of the message's HTML shows it (its `cid:`). */
+  shown: boolean
+  decision: FileDecision
+  /** The part this attachment had before this run, on any message. */
+  before: StoredPart | null
+}
+
+const isStored = (status: string): status is StoredStatus => (STORED_STATUSES as readonly string[]).includes(status)
+
+/** A file's status once this run wrote it. */
+const fileStatus = (file: PlannedFile): PartStatus =>
+  file.decision.kind === "kept"
+    ? (file.decision.part.status as PartStatus)
+    : file.decision.kind === "too_large"
+      ? "too_large"
+      : (file.decision.outcome.status as PartStatus)
+
 /** A ticket ready to write: everything read and scanned before its transaction. */
 interface PlannedTicket {
   zendeskId: number
   record: ZendeskTicketRecord
   messages: (PlannedMessage & {
     failed: FileFacts["failed"]
+    unusable: FileFacts["unusable"]
+    files: PlannedFile[]
     scans: Partial<Record<TextField, FieldScan>>
     invalid: boolean
   })[]
@@ -310,7 +371,8 @@ export class ZendeskImport {
       at.ticket = zendeskId
       let planned: PlannedTicket | null = null
       if (!DELETED.has(record.status ?? "") && !gone) planned = await this.#plan(reader, zendeskId, record, context)
-      const written = await this.#write(runId, zendeskId, record, planned, context)
+      await this.#hooks.afterPlan?.(zendeskId)
+      const written = await this.#write(reader, runId, zendeskId, record, planned, context)
       at.ticket = null
       if (written === "closed") return this.#finish(runId, "stopped", "went_live")
       if (written === "cancelled") return CANCELLED
@@ -334,7 +396,7 @@ export class ZendeskImport {
     return this.#finish(runId, "done", null)
   }
 
-  /** Reads one ticket's newest version and scans its texts, outside any transaction. */
+  /** Reads one ticket's newest version and scans its texts and files, outside any transaction. */
   async #plan(
     reader: ArchiveReader,
     zendeskId: number,
@@ -350,11 +412,29 @@ export class ZendeskImport {
       ),
       ...sideMessages(zendeskId, version.sideConversations, context.manifest, fallback),
     ]
+    // The parts earlier runs stored for these files, by attachment: one query per ticket.
+    const attachmentIds = [...new Set(planned.flatMap((item) => item.archived.map((file) => file.id)))]
+    const stored = new Map(
+      attachmentIds.length === 0
+        ? []
+        : (
+            await this.#db.select().from(messagePart).where(inArray(messagePart.zendeskAttachmentId, attachmentIds))
+          ).map((part) => [part.zendeskAttachmentId as string, part]),
+    )
+    const maxBytes = await this.#files.maxBytes()
     const messages: PlannedTicket["messages"] = []
     for (const item of planned) {
       // The same policy intake applies: well-formed text, the sanitizer, and the scanner over every stored text field.
-      const fixed = wellFormed({ text: item.text, html: item.html, headers: item.headers, source: item.source })
-      const html = fixed.value.html ? sanitizeMailHtml(fixed.value.html) : null
+      const fixed = wellFormed({
+        text: item.text,
+        html: item.html,
+        headers: item.headers,
+        source: item.source,
+        archived: item.archived,
+      })
+      // An image that names one of the comment's own files shows that file, stored with the message (plan 5.2).
+      const images = inlineImages(fixed.value.archived)
+      const html = fixed.value.html ? sanitizeMailHtml(fixed.value.html, images.rewrite) : null
       const plain = fixed.value.text ?? (html ? textFromHtml(html) : null)
       const texts: Partial<Record<TextField, string>> = {}
       if (plain) texts.text = plain
@@ -363,12 +443,24 @@ export class ZendeskImport {
       if (block) texts.headers = block
       const scans = await scanFields(this.#files, texts)
       if (Object.values(scans).some((scan) => scan?.status === "waiting")) throw new ScannerWaitingError()
+      const files: PlannedFile[] = []
+      for (const [index, file] of fixed.value.archived.entries()) {
+        const before = stored.get(file.id) ?? null
+        files.push({
+          ...file,
+          index,
+          shown: images.used.has(file.id),
+          before,
+          decision: await this.#decide(reader, file, before, maxBytes),
+        })
+      }
       messages.push({
         ...item,
         text: plain,
         html,
         headers: fixed.value.headers,
         source: fixed.value.source,
+        files,
         scans,
         invalid: fixed.changed,
       })
@@ -379,18 +471,139 @@ export class ZendeskImport {
       zendeskId,
       record,
       messages,
-      files: planned.reduce((sum, item) => sum + item.source.files.length, 0),
+      files: planned.reduce((sum, item) => sum + item.source.files.length + item.unusable.length, 0),
       links: linksOf(record, version.audits),
       ticketScan,
     }
   }
 
   /**
+   * What becomes of one file the manifest holds. A part that already stores the same content keeps its status, with
+   * nothing scanned or stored again; a part whose content was not stored is decided again, so a file refused as too
+   * large is taken once the limit allows it. A file over files.maxBytes is `too_large`, decided from the manifest's
+   * size before it is read; any other file is read from the archive and scanned as intake scans a part. A scan that
+   * answers `waiting` stops the run (ScannerWaitingError): its job reads the file from the archive again.
+   */
+  async #decide(
+    reader: ArchiveReader,
+    file: ArchivedFile,
+    before: StoredPart | null,
+    maxBytes: number,
+  ): Promise<FileDecision> {
+    if (before && before.sha256 === file.sha256 && before.storedSha256 === file.sha256)
+      return { kind: "kept", part: before }
+    if (file.bytes > maxBytes) return { kind: "too_large" }
+    const bytes = await archivedBytes(reader, file)
+    try {
+      const outcome = await this.#files.scan(bytes, file.name)
+      if (outcome.status === "waiting") throw new ScannerWaitingError()
+      return { kind: "scanned", outcome }
+    } catch (error) {
+      // files.maxBytes changed while the run read the file.
+      if (error instanceof FileTooLargeError) return { kind: "too_large" }
+      throw error
+    }
+  }
+
+  /**
+   * A message's files, in its ticket's transaction (plan 5.2). Parts whose files the archive no longer holds for this
+   * comment are deleted; the others step aside from their places first, so no two parts hold one place while they move.
+   * Then each file is written by its attachment ID: a kept part keeps its content, a file the scan allows is stored
+   * (read from the archive again, under its hash's lock, `FileService.storeIn`), and a file that becomes infected or
+   * blocked gets its block event once, as intake's parts do. A file's name and declared type are kept only when the
+   * scanner allowed the comment's header block, which holds them.
+   */
+  async #writeFiles(
+    tx: Tx,
+    reader: ArchiveReader,
+    ticketId: string,
+    messageId: string,
+    files: PlannedFile[],
+    headersOk: boolean,
+  ): Promise<void> {
+    const held = files.map((file) => file.id)
+    await tx
+      .delete(messagePart)
+      .where(
+        and(
+          eq(messagePart.messageId, messageId),
+          held.length > 0
+            ? or(isNull(messagePart.zendeskAttachmentId), notInArray(messagePart.zendeskAttachmentId, held))
+            : undefined,
+        ),
+      )
+    if (files.length === 0) return
+    await tx
+      .update(messagePart)
+      .set({ index: sql`-1 - ${messagePart.index}` })
+      .where(eq(messagePart.messageId, messageId))
+    for (const file of files) {
+      const fileName = headersOk ? file.name : null
+      const place = {
+        messageId,
+        index: file.index,
+        kind: file.inline || file.shown ? "inline" : "attachment",
+        fileName,
+        declaredType: headersOk ? file.declaredType : null,
+        // The address the message's HTML names the file by (`cid:`), Maane's own: never the sender's text.
+        contentId: file.shown ? importedContentId(file.id) : null,
+        updatedAt: new Date(),
+      }
+      const { decision } = file
+      let content: Pick<
+        StoredPart,
+        "size" | "sha256" | "status" | "signature" | "blockedBy" | "storedSha256" | "unavailableReason"
+      >
+      if (decision.kind === "kept") {
+        const { size, sha256, status, signature, blockedBy, storedSha256, unavailableReason } = decision.part
+        content = { size, sha256, status, signature, blockedBy, storedSha256, unavailableReason }
+      } else if (decision.kind === "too_large") {
+        content = {
+          size: file.bytes,
+          sha256: file.sha256,
+          status: "too_large",
+          signature: null,
+          blockedBy: null,
+          storedSha256: null,
+          unavailableReason: null,
+        }
+      } else {
+        const { outcome } = decision
+        const stored = isStored(outcome.status)
+        if (stored) await this.#files.storeIn(tx, await archivedBytes(reader, file), outcome)
+        content = {
+          size: outcome.size,
+          sha256: outcome.sha256,
+          status: outcome.status,
+          signature: outcome.signature,
+          blockedBy: outcome.status === "blocked_type" ? outcome.blockedBy : null,
+          storedSha256: stored ? outcome.sha256 : null,
+          unavailableReason: null,
+        }
+      }
+      const [part] = await tx
+        .insert(messagePart)
+        .values({ ...place, ...content, zendeskAttachmentId: file.id })
+        .onConflictDoUpdate({ target: messagePart.zendeskAttachmentId, set: { ...place, ...content } })
+        .returning({ id: messagePart.id })
+      if (decision.kind === "scanned")
+        await auditBlockedPart(tx, (file.before?.status ?? null) as ScanOutcome["status"] | null, decision.outcome, {
+          ticketId,
+          messageId,
+          partId: part?.id ?? null,
+          fileName,
+        })
+    }
+  }
+
+  /**
    * One ticket's transaction: the window again under the mode row's lock, the run's row locked and still running, then
-   * the ticket and what belongs to it, the run's position, its counts, and its report rows. Returns "closed" when the
-   * window closed, and "cancelled" when an admin cancelled the run.
+   * the ticket and what belongs to it (its files stored under their hashes' locks, after the ticket's), the run's
+   * position, its counts, and its report rows. Returns "closed" when the window closed, and "cancelled" when an admin
+   * cancelled the run.
    */
   async #write(
+    reader: ArchiveReader,
     runId: string,
     zendeskId: number,
     record: ZendeskTicketRecord,
@@ -538,6 +751,7 @@ export class ZendeskImport {
       for (const item of planned.messages) {
         const flags: MessageFlag[] = []
         if (item.invalid) flags.push("invalid_characters")
+        if (item.files.some((file) => fileStatus(file) === "too_large")) flags.push("part_too_large")
         const blocked = Object.values(item.scans).some((scan) => refused(scan))
         if (blocked) flags.push("blocked_content")
         const headersOk = storable(item.scans.headers)
@@ -580,18 +794,33 @@ export class ZendeskImport {
           item.scans,
         )
         if (blocked) reports.push({ reason: "blocked_content", detail: item.key })
-        // A file the manifest marks failed, by its name; by its ID when the scanner blocked the names (P12).
-        for (const file of item.failed)
-          fileReports.push({ reason: "file_failed", detail: headersOk ? (file.name ?? file.id) : file.id })
+        await this.#writeFiles(tx, reader, ticketId, row.id, item.files, headersOk)
+        // A file the manifest marks failed, and one the scanner refused, by its name; by its ID when the scanner blocked
+        // the names (P12).
+        const fileDetail = (file: { id: string; name: string | null }) => (headersOk ? (file.name ?? file.id) : file.id)
+        for (const file of item.failed) fileReports.push({ reason: "file_failed", detail: fileDetail(file) })
+        // A file with no ID the import can use has only its name to name it.
+        for (const file of item.unusable)
+          fileReports.push({ reason: "file_unusable_id", detail: headersOk ? file.name : null })
+        for (const file of item.files) {
+          const status = fileStatus(file)
+          if (status === "infected") fileReports.push({ reason: "file_infected", detail: fileDetail(file) })
+          if (status === "blocked_type") fileReports.push({ reason: "file_blocked", detail: fileDetail(file) })
+        }
         if (item.direction === "note") {
           if (item.source.sideConversation) counts.sideConversations = (counts.sideConversations ?? 0) + 1
           else counts.notes = (counts.notes ?? 0) + 1
         } else counts.messages = (counts.messages ?? 0) + 1
       }
-      // A comment that left the source (Zendesk deleted it) leaves the copy too.
+      // A comment that left the source (Zendesk deleted it) leaves the copy too, with its files.
       const gone = [...before.keys()].filter((key) => !keys.includes(key))
-      if (gone.length > 0)
-        await tx.delete(message).where(and(eq(message.ticketId, ticketId), inArray(message.zendeskKey, gone)))
+      if (gone.length > 0) {
+        const left = and(eq(message.ticketId, ticketId), inArray(message.zendeskKey, gone))
+        await tx
+          .delete(messagePart)
+          .where(inArray(messagePart.messageId, tx.select({ id: message.id }).from(message).where(left)))
+        await tx.delete(message).where(left)
+      }
 
       reports.push(...fileReports)
       counts.tickets = 1
@@ -761,6 +990,37 @@ export function batches<T>(items: T[], size: number): T[][] {
 }
 
 /**
+ * A file's content from the archive (`files/<first two>/<sha256>`), checked against its manifest entry. Its real
+ * place must be inside the archive (a link that leads out of it is refused), and it is read only up to one byte more
+ * than the manifest's size, so a file replaced by a larger one is never read whole. A mismatch stops the run as an
+ * archive error, never a file to scan or store.
+ */
+async function archivedBytes(reader: ArchiveReader, file: ArchivedFile): Promise<Buffer> {
+  if (!Number.isSafeInteger(file.bytes) || file.bytes < 0)
+    throw new ArchivedFileError("an archived file's size in the manifest is not a size")
+  const root = await realpath(reader.archive.root)
+  const path = await realpath(reader.archive.filePath(file.sha256))
+  if (!path.startsWith(root + sep)) throw new ArchivedFileError("an archived file leads out of the archive")
+  // The resolved path, not followed again at its last step.
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const buffer = Buffer.alloc(file.bytes + 1)
+    let length = 0
+    while (length < buffer.byteLength) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.byteLength - length, length)
+      if (bytesRead === 0) break
+      length += bytesRead
+    }
+    const bytes = buffer.subarray(0, length)
+    if (length !== file.bytes || sha256Of(bytes) !== file.sha256)
+      throw new ArchivedFileError("an archived file does not match its manifest entry")
+    return bytes
+  } finally {
+    await handle.close()
+  }
+}
+
+/**
  * What kind of error stopped a ticket, for its report row: the database's (by its SQLSTATE, with the constraint's name
  * when it named one) or the archive's (a file-system error, which names its path, or JSON that does not parse). A
  * network error (the scanner's, the database's) is `other`. Never the error's text: it may hold the row's values.
@@ -786,7 +1046,8 @@ export function failureOf(error: unknown): string {
     }
     if (
       (typeof facts.code === "string" && /^E[A-Z]+$/.test(facts.code) && typeof facts.path === "string") ||
-      current instanceof SyntaxError
+      current instanceof SyntaxError ||
+      current instanceof ArchivedFileError
     )
       return "archive"
     current = facts.cause

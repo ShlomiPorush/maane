@@ -415,7 +415,9 @@ function MessageCard({
       ) : message.content === "parsed" && message.fields.length === 0 ? (
         <p className="ui-message-empty">{t("ticket.noBody")}</p>
       ) : null}
-      {message.attachments.length > 0 ? <Files files={message.attachments} onPreview={onPreview} /> : null}
+      {message.attachments.length > 0 ? (
+        <Files files={message.attachments} imported={Boolean(message.imported)} onPreview={onPreview} />
+      ) : null}
       {message.delivery ? (
         <Delivery messageId={message.id} ticketNumber={ticketNumber} delivery={message.delivery} />
       ) : null}
@@ -457,8 +459,23 @@ function MailFrame({ message }: { message: MessageView }) {
   )
 }
 
-function Files({ files, onPreview }: { files: AttachmentView[]; onPreview: (file: AttachmentView) => void }) {
+/** An imported file (plan 5.2) the scanner refused was never stored: its original is in the Zendesk archive, not the mailbox. */
+const IMPORTED_HINTS = new Set(["infected", "blocked_type"])
+
+function Files({
+  files,
+  imported,
+  onPreview,
+}: {
+  files: AttachmentView[]
+  imported: boolean
+  onPreview: (file: AttachmentView) => void
+}) {
   const { t } = useI18n()
+  const hint = (status: AttachmentView["status"]) =>
+    imported && IMPORTED_HINTS.has(status)
+      ? t(`scan.hintImported.${status as "infected" | "blocked_type"}`)
+      : t(`scan.hint.${status}`)
   return (
     <section className="ui-files" aria-label={t("ticket.files")}>
       <h3 className="ui-files-title">{t("ticket.files")}</h3>
@@ -491,7 +508,7 @@ function Files({ files, onPreview }: { files: AttachmentView[]; onPreview: (file
                   </span>
                 ) : null}
               </span>
-              {file.status === "clean" ? null : <span className="ui-file-hint">{t(`scan.hint.${file.status}`)}</span>}
+              {file.status === "clean" ? null : <span className="ui-file-hint">{hint(file.status)}</span>}
             </div>
             <div className="ui-file-acts">
               {file.preview ? (

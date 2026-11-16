@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto"
-import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises"
+import { randomBytes, randomUUID } from "node:crypto"
+import { mkdtemp, readFile, rm, symlink, truncate, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SYSTEM } from "@maane/server/audit"
@@ -11,8 +11,10 @@ import {
   importRun,
   intakeRecord,
   message,
+  messagePart,
   organization,
   outbox,
+  storedFile,
   supportAddress,
   ticket,
   ticketCategory,
@@ -32,15 +34,23 @@ import { Settings } from "@maane/server/settings/service"
 import { createTestDatabase, MIGRATIONS_DIR, testKey } from "@maane/server/testing/db"
 import { MEGABYTE } from "@maane/shared"
 import { Archive } from "@maane/zendesk"
-import type { StandInZendesk } from "@maane/zendesk/testing/stand-in"
+import type { StandInFile, StandInZendesk } from "@maane/zendesk/testing/stand-in"
 import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { clamdScanner } from "../files/scanner.ts"
-import { FileService } from "../files/service.ts"
+import { FileService, sha256Of } from "../files/service.ts"
 import { FileStore } from "../files/store.ts"
 import { MARKERS, type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
 import { AGENT, BRANDS, backupInto, HEBREW_BODY, HEBREW_SUBJECT, standInAccount } from "../testing/zendesk-archive.ts"
-import { batches, failureOf, type ImportHooks, LINK_BATCH, ZendeskImport } from "./run.ts"
+import {
+  ArchivedFileError,
+  batches,
+  failureOf,
+  type ImportHooks,
+  LINK_BATCH,
+  ScannerWaitingError,
+  ZendeskImport,
+} from "./run.ts"
 
 let clamd: StandInClamd
 beforeAll(async () => {
@@ -64,7 +74,8 @@ interface Harness {
   run(hooks?: ImportHooks): Promise<{ id: string; outcome: Awaited<ReturnType<ZendeskImport["run"]>> }>
   /** The job of an existing run again (a retry). */
   again(id: string, hooks?: ImportHooks): ReturnType<ZendeskImport["run"]>
-  backup(): Promise<void>
+  /** A backup run again; files up to `maxFileBytes` (1 KiB by default). */
+  backup(maxFileBytes?: number): Promise<void>
   close(): Promise<void>
 }
 
@@ -123,7 +134,7 @@ async function start(): Promise<Harness> {
       return { id: made.id, outcome: await importer(hooks).run(made.id) }
     },
     again: (id, hooks) => importer(hooks).run(id),
-    backup: () => backupInto(zendesk, archive),
+    backup: (maxFileBytes) => backupInto(zendesk, archive, maxFileBytes),
     async close() {
       await zendesk.stop()
       await database.drop()
@@ -773,6 +784,375 @@ describe("the import from the Zendesk archive", () => {
   })
 })
 
+const DONE = { state: "done", reason: null }
+const fileOf = (id: number, name: string, content: Buffer): StandInFile => ({ id, name, content, serve: "redirect" })
+const partsOf = (h: Harness) => h.db.select().from(messagePart).orderBy(asc(messagePart.zendeskAttachmentId))
+/** How many of these contents the stand-in clamd was given to scan since `from`. */
+const scansOf = (contents: Buffer[], from: number) =>
+  clamd.scanned.slice(from).filter((scanned) => contents.some((content) => content.equals(scanned))).length
+/** A new run row, as the page's Start makes it, without running its job. */
+const newRun = async (h: Harness) => {
+  const [made] = await h.db.insert(importRun).values({ startedBy: h.owner }).returning({ id: importRun.id })
+  return made?.id ?? ""
+}
+/**
+ * Runs a job while the stand-in clamd refuses streams longer than `limit` (as clamd past its StreamMaxLength), after a
+ * self-test it passed: a file that long gets no verdict and waits.
+ */
+async function withShortStreams<T>(h: Harness, limit: number, work: () => Promise<T>): Promise<T> {
+  expect(await h.files.trustedScanner()).toBe(clamd.address)
+  clamd.options.streamMaxLength = limit
+  try {
+    return await work()
+  } finally {
+    delete clamd.options.streamMaxLength
+  }
+}
+
+describe("the import's files", () => {
+  it("stores files through the scanner with intake's statuses and block events, reports refused ones, scans no stored file again, and takes a file once the limit allows it", async () => {
+    const h = await start()
+    await h.settings.update({ "files.maxBytes": MEGABYTE }, SYSTEM)
+    const infected = Buffer.from(`report ${MARKERS.infected}`)
+    const program = randomBytes(40)
+    const huge = Buffer.alloc(MEGABYTE + 1, 0x61)
+    h.zendesk.addComment(1, {
+      id: 14,
+      public: true,
+      body: "Three files",
+      files: [fileOf(141, "report.txt", infected), fileOf(142, "setup.exe", program), fileOf(143, "huge.log", huge)],
+      extra: { author_id: 2 },
+    })
+    await h.backup(2 * MEGABYTE)
+    const first = await h.run()
+    expect(first.outcome).toEqual(DONE)
+
+    // Each file of the archive is a part of its own comment, with intake's statuses.
+    const keyOf = new Map((await messagesOf(h, 1)).map((m) => [m.id, m.zendeskKey]))
+    const parts = (await partsOf(h)).filter((p) => keyOf.has(p.messageId))
+    expect(
+      parts.map((p) => [
+        p.zendeskAttachmentId,
+        keyOf.get(p.messageId),
+        p.index,
+        p.status,
+        p.storedSha256 !== null,
+        p.fileName,
+      ]),
+    ).toEqual([
+      ["101", "comment:11", 0, "clean", true, "invoice.pdf"],
+      ["102", "comment:11", 1, "clean", true, "a.png"],
+      ["141", "comment:14", 0, "infected", false, "report.txt"],
+      ["142", "comment:14", 1, "blocked_type", false, "setup.exe"],
+      ["143", "comment:14", 2, "too_large", false, "huge.log"],
+      ["401", "side:9001", 0, "clean", true, "side.txt"],
+    ])
+    const part = (id: string) => parts.find((p) => p.zendeskAttachmentId === id)
+    expect(part("102")?.kind).toBe("inline")
+    expect(part("141")?.signature).toBe("Eicar-Test-Signature")
+    expect(part("142")?.blockedBy).toBe("exe")
+    expect([part("143")?.size, part("143")?.sha256]).toEqual([MEGABYTE + 1, sha256Of(huge)])
+    // Stored content is the archive's file; refused content never reaches the store.
+    for (const row of parts.filter((p) => p.storedSha256 !== null)) {
+      const source = h.zendesk.allFiles().find((f) => String(f.id) === row.zendeskAttachmentId)
+      expect(await readFile(h.files.storedPath(row.storedSha256 as string))).toEqual(source?.content)
+    }
+    const stored = (await h.db.select({ sha256: storedFile.sha256 }).from(storedFile)).map((row) => row.sha256)
+    for (const refused of [infected, program, huge]) expect(stored).not.toContain(sha256Of(refused))
+    // A part over the limit flags its message, as intake's do.
+    expect((await messagesOf(h, 1)).find((m) => m.zendeskKey === "comment:14")?.reviewFlags).toEqual(["part_too_large"])
+    // The report lists the infected and the blocked file by name; one block event each.
+    expect((await reportOf(h, first.id)).filter((row) => row.startsWith("1:"))).toEqual([
+      "1:file_infected:report.txt",
+      "1:file_blocked:setup.exe",
+    ])
+    const events = async () =>
+      (await h.db.select({ details: auditLog.details }).from(auditLog).where(eq(auditLog.action, "file.blocked")))
+        .map((row) => row.details as { reason: string; fileName: string; part: string })
+        .map((details) => [details.reason, details.fileName, details.part])
+        .sort()
+    expect(await events()).toEqual([
+      ["blocked_type", "setup.exe", part("142")?.id],
+      ["infected", "report.txt", part("141")?.id],
+    ])
+
+    // Again: the same parts and stored rows, no stored file scanned or stored again, no second block event, the same
+    // report. A file whose content was not stored is decided again: the infected one goes to the scanner again (the
+    // blocked type is refused by its type, before the scanner), and the one still over the limit is not read.
+    const storedBefore = await h.db.select().from(storedFile).orderBy(asc(storedFile.sha256))
+    const kept = h.zendesk.allFiles().filter((f) => ![141, 142, 143].includes(Number(f.id)))
+    const from = clamd.scanned.length
+    const second = await h.run()
+    expect(second.outcome).toEqual(DONE)
+    expect((await partsOf(h)).filter((p) => keyOf.has(p.messageId))).toEqual(
+      parts.map((p) => ({ ...p, updatedAt: expect.any(Date) })),
+    )
+    expect(await h.db.select().from(storedFile).orderBy(asc(storedFile.sha256))).toEqual(storedBefore)
+    expect(scansOf([...kept.map((f) => f.content), program, huge], from)).toBe(0)
+    expect(scansOf([infected], from)).toBe(1)
+    expect(await events()).toHaveLength(2)
+    expect((await reportOf(h, second.id)).filter((row) => row.startsWith("1:"))).toEqual([
+      "1:file_infected:report.txt",
+      "1:file_blocked:setup.exe",
+    ])
+
+    // Once the admin raises the limit, the file refused as too large is scanned and stored by the next run.
+    await h.settings.update({ "files.maxBytes": 2 * MEGABYTE }, SYSTEM)
+    const third = await h.run()
+    expect(third.outcome).toEqual(DONE)
+    const [grown] = await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, "143"))
+    expect([grown?.id, grown?.status, grown?.storedSha256]).toEqual([part("143")?.id, "clean", sha256Of(huge)])
+    expect(await readFile(h.files.storedPath(sha256Of(huge)))).toEqual(huge)
+    expect((await messagesOf(h, 1)).find((m) => m.zendeskKey === "comment:14")?.reviewFlags).toEqual([])
+    expect(await events()).toHaveLength(2)
+  })
+
+  it("imports a side conversation file by its string ID, and reports a file with no ID it can use", async () => {
+    const h = await start()
+    // Before: ticket 1's side conversation carries one file.
+    const before = await h.run()
+    const filesBefore = ((await runOf(h, before.id)).counts as { files: number }).files
+    // Zendesk's side conversation attachments have string IDs (its Side Conversation Attachments reference).
+    const photo: StandInFile = {
+      id: "01M1BJQJ58GFNNX614V04CHXTS",
+      name: "photo.txt",
+      content: randomBytes(30),
+      serve: "redirect",
+    }
+    const url = (id: string) => `${h.zendesk.apiOrigin}/attachments/token/t${id}/?name=file`
+    h.zendesk.change(1, (t) => {
+      t.sides = [
+        {
+          id: "sc-2",
+          subject: "Asking the courier",
+          events: [
+            {
+              id: 9101,
+              type: "create",
+              message: {
+                subject: "Asking the courier",
+                body: "Two files",
+                attachments: [
+                  { id: photo.id, name: photo.name, content_url: url(String(photo.id)), size: photo.content.length },
+                  { name: "unnamed.txt", content_url: url("none"), size: 4 },
+                ],
+              },
+            },
+          ],
+          files: [photo],
+        },
+      ]
+    })
+    await h.backup()
+    const run = await h.run()
+    expect(run.outcome).toEqual(DONE)
+    const note = (await messagesOf(h, 1)).find((m) => m.zendeskKey === "side:9101")
+    const [part] = await h.db
+      .select()
+      .from(messagePart)
+      .where(eq(messagePart.zendeskAttachmentId, String(photo.id)))
+    expect([part?.messageId, part?.status, part?.fileName]).toEqual([note?.id, "clean", "photo.txt"])
+    expect(await readFile(h.files.storedPath(part?.storedSha256 ?? ""))).toEqual(photo.content)
+    // The file with no ID is never dropped silently: the report names it, and the count holds it.
+    expect((await reportOf(h, run.id)).filter((row) => row.startsWith("1:"))).toEqual([
+      "1:file_unusable_id:unnamed.txt",
+    ])
+    expect((await runOf(h, run.id)).counts).toMatchObject({ files: filesBefore + 1 })
+  })
+
+  it("tries a file the scanner did not answer again from the archive, never Zendesk, and keeps a comment of files only", async () => {
+    const h = await start()
+    const slow = randomBytes(900)
+    h.zendesk.addComment(1, {
+      id: 15,
+      public: true,
+      body: "",
+      files: [fileOf(151, "scan.bin", slow)],
+      extra: { author_id: 2 },
+    })
+    await h.backup()
+    const requests = h.zendesk.requests.length
+    const id = await newRun(h)
+    await withShortStreams(h, 600, () => expect(h.again(id)).rejects.toThrow(ScannerWaitingError))
+    // The run stopped at the ticket, open, and wrote nothing of it.
+    expect(await runOf(h, id)).toMatchObject({ state: "running", reason: "scanner", done: 0 })
+    expect(await h.db.select().from(message)).toHaveLength(0)
+    expect(await h.db.select().from(messagePart)).toHaveLength(0)
+    // Its job again: the file is read from the archive, scanned once, and stored with its comment.
+    const from = clamd.scanned.length
+    expect(await h.again(id)).toEqual(DONE)
+    expect(scansOf([slow], from)).toBe(1)
+    const comment = (await messagesOf(h, 1)).find((m) => m.zendeskKey === "comment:15")
+    expect([comment?.textBody, comment?.htmlBody]).toEqual([null, null])
+    const [part] = await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, "151"))
+    expect([part?.messageId, part?.status]).toEqual([comment?.id, "clean"])
+    expect(await readFile(h.files.storedPath(part?.storedSha256 ?? ""))).toEqual(slow)
+    expect(h.zendesk.requests.length).toBe(requests)
+  })
+
+  it("reports a file the manifest marks failed without asking Zendesk, and adds it once a later archive holds it", async () => {
+    const h = await start()
+    const requests = h.zendesk.requests.length
+    const first = await h.run()
+    expect((await reportOf(h, first.id)).filter((row) => row.startsWith("3:"))).toEqual([
+      `3:file_failed:lost${REPLACEMENT}.txt`,
+    ])
+    expect(await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, "301"))).toHaveLength(0)
+    expect(h.zendesk.requests.length).toBe(requests)
+    // The next backup downloads it.
+    const lost = h.zendesk.tickets.get(3)?.comments[0]?.files[0]
+    if (!lost) throw new Error("no lost file")
+    lost.serve = "redirect"
+    await h.backup()
+    const second = await h.run()
+    expect(second.outcome).toEqual(DONE)
+    expect((await reportOf(h, second.id)).filter((row) => row.startsWith("3:"))).toEqual([])
+    const [comment] = await messagesOf(h, 3)
+    const [part] = await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, "301"))
+    expect([part?.messageId, part?.status, part?.fileName]).toEqual([comment?.id, "clean", `lost${REPLACEMENT}.txt`])
+    expect(await readFile(h.files.storedPath(part?.storedSha256 ?? ""))).toEqual(lost.content)
+  })
+
+  it("follows a newer archive: files that change places, a comment that goes with its file, a file that leaves", async () => {
+    const h = await start()
+    h.zendesk.addComment(1, {
+      id: 16,
+      public: true,
+      body: "One more",
+      files: [fileOf(161, "more.txt", randomBytes(20))],
+      extra: { author_id: 2 },
+    })
+    await h.backup()
+    expect((await h.run()).outcome).toEqual(DONE)
+    const ids = new Map((await partsOf(h)).map((p) => [p.zendeskAttachmentId, p.id]))
+    const placesOf = async () => {
+      const keyOf = new Map((await messagesOf(h, 1)).map((m) => [m.id, m.zendeskKey]))
+      return (await partsOf(h)).map((p) => [
+        p.zendeskAttachmentId,
+        p.id === ids.get(p.zendeskAttachmentId),
+        keyOf.get(p.messageId),
+        p.index,
+      ])
+    }
+    expect(await placesOf()).toEqual([
+      ["101", true, "comment:11", 0],
+      ["102", true, "comment:11", 1],
+      ["161", true, "comment:16", 0],
+      ["401", true, "side:9001", 0],
+    ])
+    // The question's two files swap places, and the comment with the third leaves Zendesk.
+    h.zendesk.change(1, (t) => {
+      t.comments[0]?.files.reverse()
+      t.comments = t.comments.filter((c) => c.id !== 16)
+    })
+    await h.backup()
+    const from = clamd.scanned.length
+    expect((await h.run()).outcome).toEqual(DONE)
+    expect(await placesOf()).toEqual([
+      ["101", true, "comment:11", 1],
+      ["102", true, "comment:11", 0],
+      ["401", true, "side:9001", 0],
+    ])
+    expect(
+      scansOf(
+        h.zendesk.allFiles().map((f) => f.content),
+        from,
+      ),
+    ).toBe(0)
+    // A file that leaves its comment (Zendesk removed it) leaves the copy.
+    h.zendesk.change(1, (t) => {
+      const question = t.comments[0]
+      if (question) question.files = question.files.filter((f) => f.id !== 101)
+    })
+    await h.backup()
+    expect((await h.run()).outcome).toEqual(DONE)
+    expect(await placesOf()).toEqual([
+      ["102", true, "comment:11", 0],
+      ["401", true, "side:9001", 0],
+    ])
+  })
+
+  it("stores no file of a run cancelled while it scans, and a cancelled run's job never tries a waiting file again", async () => {
+    const h = await start()
+    const cancelled = await h.again(await newRun(h), {
+      afterPlan: async (zendeskId) => {
+        if (zendeskId === 1) await cancelOf(h)()
+      },
+    })
+    expect(cancelled).toEqual({ state: "stopped", reason: "cancelled" })
+    expect(await h.db.select().from(messagePart)).toHaveLength(0)
+    expect(await h.db.select().from(storedFile)).toHaveLength(0)
+
+    h.zendesk.addComment(1, {
+      id: 15,
+      public: true,
+      body: "",
+      files: [fileOf(151, "scan.bin", randomBytes(900))],
+      extra: { author_id: 2 },
+    })
+    await h.backup()
+    const id = await newRun(h)
+    await withShortStreams(h, 600, () => expect(h.again(id)).rejects.toThrow(ScannerWaitingError))
+    await cancelOf(h)()
+    expect(await h.again(id)).toEqual({ skipped: true })
+    expect(await h.db.select().from(messagePart)).toHaveLength(0)
+    expect(await runOf(h, id)).toMatchObject({ state: "stopped", reason: "cancelled" })
+  })
+
+  it("stops at a file whose archived content is not what the manifest records, and goes on once it is", async () => {
+    const h = await start()
+    const invoice = h.zendesk.allFiles().find((f) => f.id === 101)
+    if (!invoice) throw new Error("no invoice")
+    const sha = sha256Of(invoice.content)
+    const path = join(h.archive, "files", sha.slice(0, 2), sha)
+    const id = await newRun(h)
+    await expect(h.again(id, { afterCheck: () => writeFile(path, "changed") })).rejects.toThrow(ArchivedFileError)
+    expect(await runOf(h, id)).toMatchObject({ state: "running", reason: "failed", done: 0 })
+    expect(await reportOf(h, id)).toEqual(["1:ticket_failed:archive"])
+    expect(await h.db.select().from(messagePart)).toHaveLength(0)
+    await writeFile(path, invoice.content)
+    expect(await h.again(id)).toEqual(DONE)
+    expect(await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, "101"))).toHaveLength(1)
+  })
+
+  it("reads no more of an archived file than its manifest's size", async () => {
+    const h = await start()
+    const invoice = h.zendesk.allFiles().find((f) => f.id === 101)
+    if (!invoice) throw new Error("no invoice")
+    const sha = sha256Of(invoice.content)
+    const path = join(h.archive, "files", sha.slice(0, 2), sha)
+    const id = await newRun(h)
+    // Replaced after the check by one far larger than a whole read could hold (sparse, so it takes no room).
+    await expect(h.again(id, { afterCheck: () => truncate(path, 3 * 1024 ** 3) })).rejects.toThrow(ArchivedFileError)
+    expect(await reportOf(h, id)).toEqual(["1:ticket_failed:archive"])
+    expect(await h.db.select().from(messagePart)).toHaveLength(0)
+  })
+
+  it("refuses an archived file that is a link to a place outside the archive", async () => {
+    const h = await start()
+    const invoice = h.zendesk.allFiles().find((f) => f.id === 101)
+    if (!invoice) throw new Error("no invoice")
+    const sha = sha256Of(invoice.content)
+    const path = join(h.archive, "files", sha.slice(0, 2), sha)
+    // The same content, so only its place can refuse it.
+    const outside = join(h.archive, "..", `outside-${sha}`)
+    await writeFile(outside, invoice.content)
+    await rm(path)
+    await symlink(outside, path)
+    const id = await newRun(h)
+    await expect(h.again(id)).rejects.toThrow(ArchivedFileError)
+    expect(await runOf(h, id)).toMatchObject({ state: "running", reason: "failed", done: 0 })
+    expect(await reportOf(h, id)).toEqual(["1:ticket_failed:archive"])
+    expect(await h.db.select().from(messagePart)).toHaveLength(0)
+    expect(await h.db.select().from(storedFile)).toHaveLength(0)
+    // The file back in the archive: the run goes on.
+    await rm(path)
+    await writeFile(path, invoice.content)
+    expect(await h.again(id)).toEqual(DONE)
+    expect(await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, "101"))).toHaveLength(1)
+  })
+})
+
 describe("the import's batches", () => {
   it("splits a list in order into batches of at most the size", () => {
     expect(batches([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]])
@@ -793,6 +1173,7 @@ describe("the import's batches", () => {
     expect(failureOf(database("22001"))).toBe("value")
     expect(failureOf(database("57014"))).toBe("other")
     expect(failureOf(database("23514", "Not A Name"))).toBe("rule")
+    expect(failureOf(new ArchivedFileError("changed"))).toBe("archive")
     expect(failureOf(Object.assign(new Error("no file"), { code: "ENOENT", path: "/archive/raw/x.json" }))).toBe(
       "archive",
     )

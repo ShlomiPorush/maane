@@ -17,7 +17,15 @@ import { Settings } from "@maane/server/settings/service"
 import { createTestApp } from "@maane/server/testing/app"
 import { nextIp, TestBrowser, testPassword } from "@maane/server/testing/browser"
 import { createTestDatabase, testKey } from "@maane/server/testing/db"
-import { type ImportView, MEGABYTE, type TicketList, type TicketView, userEmail } from "@maane/shared"
+import { png } from "@maane/server/testing/files"
+import {
+  type ImportReportPage,
+  type ImportView,
+  MEGABYTE,
+  type TicketList,
+  type TicketView,
+  userEmail,
+} from "@maane/shared"
 import { ArchiveReader } from "@maane/zendesk"
 import type { StandInZendesk } from "@maane/zendesk/testing/stand-in"
 import { eq, sql } from "drizzle-orm"
@@ -27,12 +35,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { clamdScanner } from "../files/scanner.ts"
 import { FileService } from "../files/service.ts"
 import { FileStore } from "../files/store.ts"
-import { type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
+import { MARKERS, type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
 import { BRANDS, backupInto, HEBREW_BODY, standInAccount } from "../testing/zendesk-archive.ts"
 import { ZendeskImport } from "./run.ts"
 
 // Imported tickets through the API (plan 5.1): the import page (mapping, start, progress, report), imported tickets
 // read-only for every action until Maane goes live (deleting a category one carries too), their "From Zendesk" block,
+// their files and inline images (plan 5.2),
 // the organization scope of the list and search, and the quoted history of a later reply. The server app and the
 // import share one migrated database; the archive is an invented one, made by the phase 0 backup from its stand-in.
 
@@ -278,6 +287,68 @@ describe("imported tickets", () => {
     expect(mail.text).toContain("Answer")
     expect((await b.call("PUT", "/api/v1/tickets/1/status", { status: "solved" })).status).toBe(200)
     expect((await b.call("DELETE", `/api/v1/admin/categories/${vip}`)).status).toBe(200)
+  })
+
+  it("shows imported files as intake's (status, preview, download, the inline image from its own part), read-only too", async () => {
+    // A new inline image of the question, a real PNG its HTML names by Zendesk's address, beside a remote image and an
+    // infected file.
+    const shot = png(8, 8)
+    zendesk.change(1, (t) => {
+      const question = t.comments[0]
+      if (!question) return
+      question.files.push({ id: 104, name: "shot.png", content: shot, serve: "redirect", inline: true })
+      question.files.push({
+        id: 103,
+        name: "virus.txt",
+        content: Buffer.from(`virus ${MARKERS.infected}`),
+        serve: "redirect",
+      })
+      question.extra = {
+        ...question.extra,
+        html_body: `<p>${HEBREW_BODY}</p><p><img src="${zendesk.apiOrigin}/attachments/token/t104/?name=shot.png" alt="shot"><img src="https://images.example.com/logo.png" alt="logo"></p>`,
+      }
+    })
+    await backupInto(zendesk, join(root, "archive"))
+    const admin = await firstAdmin()
+    const runId = await imported(admin)
+    const b = admin.b
+
+    const view = (await b.call("GET", "/api/v1/tickets/1")).json as TicketView
+    const question = view.messages[0]
+    expect(question?.attachments.map((a) => [a.fileName, a.kind, a.status, a.preview, a.download])).toEqual([
+      ["invoice.pdf", "attachment", "clean", null, true],
+      ["a.png", "inline", "clean", null, true],
+      ["shot.png", "inline", "clean", "image", true],
+      ["virus.txt", "attachment", "infected", null, false],
+    ])
+    expect(question?.attachments[3]?.signature).toBe("Eicar-Test-Signature")
+    // A download is the archive's file; a preview only of a clean image; an infected file neither.
+    const [invoice, , image, virus] = question?.attachments ?? []
+    const download = await b.get(`/api/v1/files/${invoice?.id}`)
+    expect(download.status).toBe(200)
+    expect(Buffer.from(await download.arrayBuffer())).toEqual(zendesk.allFiles().find((f) => f.id === 101)?.content)
+    const preview = await b.get(`/api/v1/files/${image?.id}/preview`)
+    expect([preview.status, preview.headers.get("content-type")]).toEqual([200, "image/png"])
+    expect(Buffer.from(await preview.arrayBuffer())).toEqual(shot)
+    expect((await b.get(`/api/v1/files/${virus?.id}`)).status).toBe(404)
+    // The body shows the inline image from its own part, never Zendesk's address; the remote image only on request.
+    expect(question?.remoteImages).toBe(1)
+    const body = await (await b.get(`/api/v1/messages/${question?.id}/body`)).text()
+    expect(body).toContain(`data:image/png;base64,${shot.toString("base64")}`)
+    expect(body).not.toContain("attachments/token")
+    expect(body).not.toContain("images.example.com")
+    const shown = await (await b.get(`/api/v1/messages/${question?.id}/body?images=1`)).text()
+    expect(shown).toContain("https://images.example.com/logo.png")
+    // The report names the infected file.
+    const report = (await b.call("GET", `/api/v1/admin/import/runs/${runId}/report`)).json as ImportReportPage
+    expect(report.rows.map((row) => [row.zendeskId, row.reason, row.detail])).toContainEqual([
+      1,
+      "file_infected",
+      "virus.txt",
+    ])
+    // Read-only until Maane goes live: a reply with an imported file is refused like any other change.
+    const answer = await b.call("POST", "/api/v1/tickets/1/messages", reply({ parts: [image?.id] }))
+    expect([answer.status, answer.json.error]).toEqual([409, "ticket_imported"])
   })
 
   it("offers Continue for an open run whose job is gone, and the report says which ticket stopped it", async () => {

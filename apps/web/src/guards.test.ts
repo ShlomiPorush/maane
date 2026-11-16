@@ -325,6 +325,7 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "ticket.field.": TEXT_FIELDS,
   "scan.status.": PART_STATUSES,
   "scan.hint.": PART_STATUSES.filter((status) => status !== "clean"),
+  "scan.hintImported.": ["infected", "blocked_type"],
   "flag.": [...MESSAGE_FLAGS, ...TICKET_FLAGS],
   "intake.mode.": INTAKE_MODES,
   "intake.outcome.": INTAKE_OUTCOMES,
