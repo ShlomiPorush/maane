@@ -62,6 +62,15 @@ export type PushJob = { kind: PushKind; ticketId: string; messageId: string }
 export const ZENDESK_IMPORT = "zendesk-import"
 
 /**
+ * The heartbeat of an import job, through pg-boss's documented `heartbeatSeconds` send option: the worker's pg-boss
+ * refreshes it while the handler runs, and its supervisor fails a job whose heartbeat stopped this long ago (a worker
+ * that died), so the job is retried, or Continue shows once its retries are used up, within minutes instead of after
+ * `expireInSeconds`, which stays the longest a run may take. Far above the longest stretch the handler holds the event
+ * loop (parsing one archive file).
+ */
+export const ZENDESK_IMPORT_HEARTBEAT_SECONDS = 120
+
+/**
  * The options of the queues the server sends to in a transaction, the same on both sides: pg-boss keeps the options of
  * the first createQueue. A failed run is tried again; a reply's outbox state makes a retry safe (it never sends what
  * an earlier run may have sent).
@@ -90,7 +99,12 @@ export interface JobQueue {
    * Queues a job inside the caller's transaction (pg-boss's documented `db` option): the job exists exactly when the
    * transaction commits. Throws when the queue takes nothing, so the transaction rolls back.
    */
-  sendIn(db: QueueDb, name: string, data: object, options?: { startAfter?: Date }): Promise<string>
+  sendIn(
+    db: QueueDb,
+    name: string,
+    data: object,
+    options?: { startAfter?: Date; heartbeatSeconds?: number },
+  ): Promise<string>
   /** A job's state and the output its handler returned, or null when no such job exists. */
   job(name: string, id: string): Promise<{ state: JobState; output: unknown } | null>
   /** Whether a job of this queue whose data contains `data` is queued, waiting to retry, or working. */
@@ -121,7 +135,11 @@ export async function openJobQueue(connectionString: string): Promise<JobQueue> 
       return id
     },
     async sendIn(db, name, data, options = {}) {
-      const id = await boss.send(name, data, { db, ...(options.startAfter ? { startAfter: options.startAfter } : {}) })
+      const id = await boss.send(name, data, {
+        db,
+        ...(options.startAfter ? { startAfter: options.startAfter } : {}),
+        ...(options.heartbeatSeconds ? { heartbeatSeconds: options.heartbeatSeconds } : {}),
+      })
       if (!id) throw new Error(`the queue did not accept a ${name} job`)
       return id
     },

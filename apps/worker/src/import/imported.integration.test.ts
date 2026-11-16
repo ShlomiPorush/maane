@@ -4,7 +4,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SYSTEM } from "@maane/server/audit"
 import { auditLog, authUser, category, organization, outbox, supportAddress, ticket } from "@maane/server/db/schema"
-import { type JobQueue, openJobQueue, ZENDESK_IMPORT } from "@maane/server/jobs/queue"
+import {
+  type JobQueue,
+  openJobQueue,
+  QUEUE_OPTIONS,
+  ZENDESK_IMPORT,
+  ZENDESK_IMPORT_HEARTBEAT_SECONDS,
+} from "@maane/server/jobs/queue"
 import { Organizations } from "@maane/server/organizations/service"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
@@ -366,6 +372,57 @@ describe("imported tickets", () => {
     const agent = await newAgent(admin.b, "agent.one", [org])
     expect((await agent.call("POST", "/api/v1/admin/import/cancel")).status).toBe(403)
   })
+
+  it("queues a run's job with a heartbeat, so a worker that died is noticed long before the job expires", async () => {
+    const admin = await firstAdmin()
+    await mapped(admin)
+    const id = (await admin.b.call("POST", "/api/v1/admin/import/start")).json.run.id as string
+    // Continue queues its job the same way.
+    expect((await admin.b.call("POST", "/api/v1/admin/import/start")).json.run.id).toBe(id)
+    const boss = new PgBoss({
+      connectionString: database.url,
+      supervise: false,
+      schedule: false,
+      monitorIntervalSeconds: 1,
+    })
+    await boss.start()
+    try {
+      const queued = await boss.findJobs(ZENDESK_IMPORT, { data: { runId: id } })
+      expect(queued.map((job) => [job.heartbeatSeconds, job.expireInSeconds])).toEqual([
+        [ZENDESK_IMPORT_HEARTBEAT_SECONDS, QUEUE_OPTIONS[ZENDESK_IMPORT]?.expireInSeconds],
+        [ZENDESK_IMPORT_HEARTBEAT_SECONDS, QUEUE_OPTIONS[ZENDESK_IMPORT]?.expireInSeconds],
+      ])
+      await boss.cancel(
+        ZENDESK_IMPORT,
+        queued.map((job) => job.id),
+      )
+      // pg-boss's documented heartbeat as the import's job uses it, at its shortest interval: a job whose worker is
+      // gone goes back to wait for a retry at the next supervision, while a handler that still works keeps its job.
+      const lost = await boss.send(ZENDESK_IMPORT, { runId: "lost" }, { heartbeatSeconds: 10 })
+      expect((await boss.fetch(ZENDESK_IMPORT)).map((job) => job.id)).toEqual([lost])
+      const working = await boss.send(ZENDESK_IMPORT, { runId: "working" }, { heartbeatSeconds: 10 })
+      let release = () => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let started = false
+      await boss.work(ZENDESK_IMPORT, { pollingIntervalSeconds: 0.5 }, async () => {
+        started = true
+        await held
+      })
+      await vi.waitFor(() => expect(started).toBe(true), { timeout: 5_000 })
+      await new Promise((resolve) => setTimeout(resolve, 13_000))
+      await boss.supervise(ZENDESK_IMPORT)
+      expect((await boss.getJobById(ZENDESK_IMPORT, lost ?? ""))?.state).toBe("retry")
+      expect((await boss.getJobById(ZENDESK_IMPORT, working ?? ""))?.state).toBe("active")
+      release()
+      await vi.waitFor(async () =>
+        expect((await boss.getJobById(ZENDESK_IMPORT, working ?? ""))?.state).toBe("completed"),
+      )
+    } finally {
+      await boss.stop({ graceful: false })
+    }
+  }, 40_000)
 
   it("reads the archive's tickets for the page once per archive state", async () => {
     const admin = await firstAdmin()

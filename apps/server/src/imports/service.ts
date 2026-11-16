@@ -33,7 +33,7 @@ import {
   zendeskImport,
   zendeskTagMap,
 } from "../db/schema.ts"
-import { type JobQueue, transactionWithJobs, ZENDESK_IMPORT } from "../jobs/queue.ts"
+import { type JobQueue, transactionWithJobs, ZENDESK_IMPORT, ZENDESK_IMPORT_HEARTBEAT_SECONDS } from "../jobs/queue.ts"
 import { log } from "../log.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import type { Acting } from "../organizations/service.ts"
@@ -45,6 +45,9 @@ const TAG_MAX = 200
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 type RunRow = typeof importRun.$inferSelect
+
+/** A run's job beats, so a worker that died is noticed in minutes, not when the job expires (jobs/queue.ts). */
+const HEARTBEAT = { heartbeatSeconds: ZENDESK_IMPORT_HEARTBEAT_SECONDS }
 
 interface ArchiveSummary {
   /** Without `otherOrigin`, which depends on the earlier imports' origin, not on the archive. */
@@ -273,12 +276,12 @@ export class Imports {
       const [open] = await tx.select({ id: importRun.id }).from(importRun).where(eq(importRun.state, "running"))
       if (open) {
         // Its job may be queued or active already: a second one waits for the worker's lock and then does nothing.
-        await this.jobs.sendIn(jobs, ZENDESK_IMPORT, { runId: open.id })
+        await this.jobs.sendIn(jobs, ZENDESK_IMPORT, { runId: open.id }, HEARTBEAT)
         return open.id
       }
       const [made] = await tx.insert(importRun).values({ startedBy: userId }).returning({ id: importRun.id })
       if (!made) throw new Error("the run was not written")
-      await this.jobs.sendIn(jobs, ZENDESK_IMPORT, { runId: made.id })
+      await this.jobs.sendIn(jobs, ZENDESK_IMPORT, { runId: made.id }, HEARTBEAT)
       return made.id
     })
     const [run] = await this.db.select().from(importRun).where(eq(importRun.id, runId))
