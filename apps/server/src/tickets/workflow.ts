@@ -27,7 +27,11 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 export type WorkflowUser = { id: string; role: string; actor: Actor; ipAddress: string | null }
 
 /** The organizations the user may move a ticket of this organization to: every other one in their scope. */
-export async function moveTargets(db: Db, scope: OrganizationScope, organizationId: string): Promise<OrganizationRef[]> {
+export async function moveTargets(
+  db: Db,
+  scope: OrganizationScope,
+  organizationId: string,
+): Promise<OrganizationRef[]> {
   if (!inScope(scope, organizationId)) return []
   const rows = await db
     .select({ id: organization.id, name: organization.name })
