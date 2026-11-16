@@ -3631,6 +3631,40 @@ describe("import from Zendesk", () => {
     expect(text()).not.toContain(he("import.run.waiting"))
   })
 
+  it("cancels an open run after asking, and says what a cancelled run means", async () => {
+    const working = { ...run, state: "running", finishedAt: null, done: 2, jobActive: true }
+    const cancelled = { ...working, state: "stopped", reason: "cancelled", finishedAt: when, jobActive: false }
+    let done = false
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": () => page({ agentUserId: "u1", run: done ? cancelled : working }),
+      "/api/v1/admin/import/run": () => ok({ run: done ? cancelled : working }),
+      "/api/v1/admin/import/cancel": () => {
+        done = true
+        return ok({ run: cancelled })
+      },
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
+    })
+    await vi.waitFor(() => expect(button(he("import.run.cancel"))?.disabled).toBe(false))
+    await act(async () => button(he("import.run.cancel"))?.click())
+    const question = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[role=alertdialog]")
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(question.textContent).toContain(he("import.run.cancelMessage"))
+    const confirm = Array.from(question.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === he("import.run.cancel"),
+    )
+    await act(async () => confirm?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("import.run.reason.cancelled")))
+    expect(requests.filter((r) => r.method === "POST" && r.url === "/api/v1/admin/import/cancel")).toHaveLength(1)
+    expect(text()).toContain(he("import.run.state.stopped"))
+    expect(button(he("import.run.cancel"))).toBeUndefined()
+    expect(button(he("import.run.start"))?.disabled).toBe(false)
+  })
+
   it("says the import is closed for good once Maane went live", async () => {
     await renderAt("/import", {
       "/api/setup/status": status(),

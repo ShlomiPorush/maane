@@ -24,6 +24,8 @@ import {
   zendeskImport,
   zendeskTagMap,
 } from "@maane/server/db/schema"
+import { Imports } from "@maane/server/imports/service"
+import type { JobQueue } from "@maane/server/jobs/queue"
 import { Refusal } from "@maane/server/organizations/refusal"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
@@ -144,6 +146,27 @@ const reportOf = async (h: Harness, id: string) =>
       .where(eq(importReport.runId, id))
       .orderBy(asc(importReport.id))
   ).map((row) => `${row.zendeskId}:${row.reason}:${row.detail ?? ""}`)
+/** The import page's service, for a cancel; these tests queue no job. */
+const NO_QUEUE: JobQueue = {
+  send: async () => "",
+  sendIn: async () => "",
+  job: async () => null,
+  pending: async () => false,
+  stop: async () => {},
+}
+const cancelOf = (h: Harness) => () =>
+  new Imports(h.db, NO_QUEUE, h.archive).cancel({ actor: SYSTEM, ipAddress: null }).then(() => undefined)
+/** Waits until a session of this database waits for a lock (a cancel waiting for a ticket's transaction). */
+async function lockWaited(h: Harness): Promise<void> {
+  for (let tries = 0; tries < 400; tries++) {
+    const { rows } = await h.db.execute(
+      sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+    )
+    if ((rows[0] as { n: number } | undefined)?.n) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error("nothing waited for the ticket's transaction")
+}
 const ticketOf = async (h: Harness, number: number) => {
   const [row] = await h.db.select().from(ticket).where(eq(ticket.number, number))
   return row
@@ -351,6 +374,70 @@ describe("the import from the Zendesk archive", () => {
     expect(await h.db.select().from(ticket)).toHaveLength(4)
     // Each ticket's report rows were written once, with its transaction.
     expect((await reportOf(h, id)).filter((row) => row.startsWith("2:"))).toHaveLength(2)
+  })
+
+  it("cancelled mid-ticket, finishes that ticket and writes nothing after the cancel returned", async () => {
+    const h = await start()
+    const [made] = await h.db.insert(importRun).values({ startedBy: h.owner }).returning({ id: importRun.id })
+    const id = made?.id ?? ""
+    const snapshot = async () => ({
+      run: await runOf(h, id),
+      tickets: (await h.db.select({ id: ticket.id }).from(ticket)).length,
+      messages: (await h.db.select({ id: message.id }).from(message)).length,
+      report: await reportOf(h, id),
+      audit: (await h.db.select({ action: auditLog.action }).from(auditLog).orderBy(asc(auditLog.id))).map(
+        (row) => row.action,
+      ),
+    })
+    const pending: { cancel?: Promise<Awaited<ReturnType<typeof snapshot>>> } = {}
+    const outcome = await h.again(id, {
+      // Inside ticket 2's transaction: the cancel waits for it, then the handler goes on to ticket 3.
+      inTicket: async (zendeskId) => {
+        if (zendeskId !== 2) return
+        pending.cancel = cancelOf(h)().then(snapshot)
+        await lockWaited(h)
+      },
+    })
+    expect(outcome).toEqual({ state: "stopped", reason: "cancelled" })
+    const atCancel = await pending.cancel
+    expect(atCancel?.run).toMatchObject({ state: "stopped", reason: "cancelled", position: 2, done: 2 })
+    expect(atCancel?.tickets).toBe(2)
+    expect(await snapshot()).toEqual(atCancel)
+    // One audit row for the run: its cancel, never an end the worker wrote.
+    expect(atCancel?.audit.filter((action) => action.startsWith("import."))).toEqual(["import.cancel"])
+    // The next start is a full pass.
+    const next = await h.run()
+    expect(next.outcome).toEqual({ state: "done", reason: null })
+    expect(await runOf(h, next.id)).toMatchObject({ done: 7, position: 7 })
+  })
+
+  it("writes nothing for a run cancelled before its first write, new or going on after a crash", async () => {
+    const h = await start()
+    const cancel = cancelOf(h)
+    const fresh = await h.run({ afterCheck: cancel })
+    expect(fresh.outcome).toEqual({ state: "stopped", reason: "cancelled" })
+    expect(await runOf(h, fresh.id)).toMatchObject({
+      state: "stopped",
+      reason: "cancelled",
+      archiveRuns: null,
+      done: 0,
+    })
+    expect((await h.db.select().from(zendeskImport))[0]?.origin).toBeNull()
+    expect(await h.db.select().from(ticket)).toEqual([])
+
+    const [made] = await h.db.insert(importRun).values({ startedBy: h.owner }).returning({ id: importRun.id })
+    const id = made?.id ?? ""
+    const crash: ImportHooks = {
+      afterTicket: async (zendeskId) => {
+        if (zendeskId === 2) throw new Error("the worker stopped")
+      },
+    }
+    await expect(h.again(id, crash)).rejects.toThrow("the worker stopped")
+    expect(await h.again(id, { afterCheck: cancel })).toEqual({ state: "stopped", reason: "cancelled" })
+    expect(await runOf(h, id)).toMatchObject({ state: "stopped", reason: "cancelled", failure: null, position: 2 })
+    // A job left for it does nothing.
+    expect(await h.again(id)).toEqual({ skipped: true })
+    expect(await h.db.select().from(ticket)).toHaveLength(2)
   })
 
   it("counts the links once when it goes on after a crash between the links and the end", async () => {

@@ -286,6 +286,31 @@ export class Imports {
     return this.#runView(run)
   }
 
+  /**
+   * Cancels the open run, if any: it ends as stopped (`cancelled`), what it imported stays, and the next start is a
+   * full pass. Audited. The update waits for a transaction of the run that holds its row (each one locks it first and
+   * goes on only while it is running), so once this returns no job of the run writes again; a job still queued for it
+   * finds it ended and does nothing.
+   */
+  async cancel(acting: Acting): Promise<ImportRunView | null> {
+    await this.db.transaction(async (tx) => {
+      const [run] = await tx
+        .update(importRun)
+        .set({ state: "stopped", reason: "cancelled", failure: null, finishedAt: sql`now()` })
+        .where(eq(importRun.state, "running"))
+        .returning()
+      if (!run) return
+      await writeAudit(tx, acting.actor, {
+        action: "import.cancel",
+        entityType: "import_run",
+        entityId: run.id,
+        details: { tickets: run.done, total: run.total, counts: run.counts },
+        ipAddress: acting.ipAddress,
+      })
+    })
+    return this.latest()
+  }
+
   /** A run's report, by a cursor after the last row shown. */
   async report(runId: string, after: string | undefined): Promise<ImportReportPage> {
     if (!UUID.test(runId)) throw new Refusal("not_found", 404)

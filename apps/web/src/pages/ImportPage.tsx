@@ -3,7 +3,8 @@
 // the paged report of the newest run (GET /api/v1/admin/import). The import runs only before Maane first goes live;
 // after that the page says the import is closed for good. Imported tickets are read-only until then. A run that stopped
 // on an error stays open; once its job has used up its retries the page offers Continue (the same Start), and the
-// report names the ticket that stopped it and why.
+// report names the ticket that stopped it and why. An open run can be cancelled: what it imported stays, and the next
+// start is a full pass.
 
 import {
   IMPORT_FAILURES,
@@ -15,7 +16,7 @@ import {
   type ImportView,
 } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
-import { Play, Save } from "lucide-react"
+import { Play, Save, X } from "lucide-react"
 import { useEffect, useState } from "react"
 import { api, qk } from "../api/endpoints.ts"
 import { errorText } from "../api/errors.ts"
@@ -23,6 +24,7 @@ import { formatNumber } from "../format/number.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { PageHead } from "../shell/chrome.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"
+import { confirmDialog } from "../ui/confirm.tsx"
 import { EVERY, usePageInfiniteQuery, usePageQuery } from "../ui/refresh.ts"
 import { Banner, Empty, ErrorState, Loading, StaleNote } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
@@ -342,25 +344,36 @@ const TONES = { running: "info", done: "ok", stopped: "warn", refused: "fail" } 
 function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: boolean }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<"start" | "cancel" | null>(null)
   // An open run without a job (it used up its retries) goes on from its last ticket: Start is Continue then.
   const resumable = run?.state === "running" && !run.jobActive
   const working = run?.state === "running" && !resumable
 
-  const start = async () => {
-    setBusy(true)
+  const act = async (kind: "start" | "cancel", call: () => Promise<unknown>, done: string, failed: string) => {
+    setBusy(kind)
     try {
-      await api.startImport()
-      showToast(t("import.run.started"), "success")
+      await call()
+      showToast(t(done), "success")
     } catch (error) {
-      showToast(t("import.run.startFailed", { reason: errorText(t, error) }), "error")
+      showToast(t(failed, { reason: errorText(t, error) }), "error")
     } finally {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: qk.importPage }),
         queryClient.invalidateQueries({ queryKey: qk.importRun }),
       ])
-      setBusy(false)
+      setBusy(null)
     }
+  }
+  const start = () => act("start", api.startImport, "import.run.started", "import.run.startFailed")
+  const cancel = async () => {
+    const yes = await confirmDialog({
+      title: t("import.run.cancelTitle"),
+      message: t("import.run.cancelMessage"),
+      confirmText: t("import.run.cancel"),
+      cancelText: t("import.run.keep"),
+      danger: true,
+    })
+    if (yes) await act("cancel", api.cancelImport, "import.run.cancelled", "import.run.cancelFailed")
   }
 
   return (
@@ -370,12 +383,23 @@ function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: bool
         <button
           type="button"
           className="ui-btn ui-btn-primary ui-btn-sm"
-          disabled={!canStart || busy || working}
+          disabled={!canStart || busy !== null || working}
           onClick={() => void start()}
         >
           <Play aria-hidden="true" />
-          {busy ? t("import.run.starting") : resumable ? t("import.run.continue") : t("import.run.start")}
+          {busy === "start" ? t("import.run.starting") : resumable ? t("import.run.continue") : t("import.run.start")}
         </button>
+        {run?.state === "running" ? (
+          <button
+            type="button"
+            className="ui-btn ui-btn-danger ui-btn-sm"
+            disabled={busy !== null}
+            onClick={() => void cancel()}
+          >
+            <X aria-hidden="true" />
+            {busy === "cancel" ? t("import.run.cancelling") : t("import.run.cancel")}
+          </button>
+        ) : null}
       </div>
       {!run ? <Empty title={t("import.run.none")} hint={t("import.run.noneHint")} /> : <RunView run={run} />}
     </section>

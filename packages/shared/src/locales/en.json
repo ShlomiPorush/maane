@@ -1071,7 +1071,8 @@
       },
       "import": {
         "mapping": "Zendesk import mapping saved",
-        "run": "Zendesk import run ended"
+        "run": "Zendesk import run ended",
+        "cancel": "Zendesk import run cancelled"
       }
     },
     "change": "{from}, now {to}",
@@ -1546,7 +1547,8 @@
         "other_origin": "The archive comes from another Zendesk account than earlier imports.",
         "archive_changed": "A backup changed the archive. Start again for a full pass.",
         "scanner": "The scanner did not answer. The import goes on when it does.",
-        "failed": "The run stopped on an error. When a ticket caused it, the report names the ticket and why."
+        "failed": "The run stopped on an error. When a ticket caused it, the report names the ticket and why.",
+        "cancelled": "The run was cancelled. What it imported stays, and the next start goes over the whole archive again."
       },
       "stage": {
         "start": "It stopped while preparing the run.",
@@ -1569,6 +1571,13 @@
       },
       "filesNext": "Files are listed and counted here. The next step imports them.",
       "continue": "Continue import",
+      "cancel": "Cancel run",
+      "cancelling": "Cancelling",
+      "cancelTitle": "Cancel this import run?",
+      "cancelMessage": "What it imported stays. The next start goes over the whole archive again.",
+      "keep": "Keep it",
+      "cancelled": "The run is cancelled.",
+      "cancelFailed": "Could not cancel the run. {reason}",
       "waiting": "Nothing is working on this run now. Fix what stopped it, then press Continue import."
     },
     "report": {

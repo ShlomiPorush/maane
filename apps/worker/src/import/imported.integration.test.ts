@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SYSTEM } from "@maane/server/audit"
-import { authUser, category, organization, outbox, supportAddress, ticket } from "@maane/server/db/schema"
+import { auditLog, authUser, category, organization, outbox, supportAddress, ticket } from "@maane/server/db/schema"
 import { type JobQueue, openJobQueue, ZENDESK_IMPORT } from "@maane/server/jobs/queue"
 import { Organizations } from "@maane/server/organizations/service"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
@@ -324,6 +324,47 @@ describe("imported tickets", () => {
       jobActive: false,
       done: 7,
     })
+  })
+
+  it("cancels an open run whose job waits, and one stopped on an error; the next start is a full pass", async () => {
+    const admin = await firstAdmin()
+    await mapped(admin)
+    const started = await admin.b.call("POST", "/api/v1/admin/import/start")
+    const id = started.json.run.id as string
+    // Its job waits (no worker here). Cancel ends the run, audited; the job then does nothing.
+    const cancelled = await admin.b.call("POST", "/api/v1/admin/import/cancel")
+    expect(cancelled.status).toBe(200)
+    expect(cancelled.json.run).toMatchObject({ id, state: "stopped", reason: "cancelled", jobActive: false })
+    expect(await importer.run(id)).toEqual({ skipped: true })
+    expect(await database.db.select().from(ticket)).toEqual([])
+    const audit = await database.db.select().from(auditLog).where(eq(auditLog.action, "import.cancel"))
+    expect(audit).toMatchObject([{ entityId: id, actorUserId: admin.id }])
+    // The mapping can be saved again.
+    await mapped(admin)
+
+    // A run stopped on an error, waiting for the admin, is cancelled the same way.
+    await database.db.execute(
+      sql`alter table ticket add constraint test_refuses_three check (zendesk_id is distinct from 3)`,
+    )
+    const second = (await admin.b.call("POST", "/api/v1/admin/import/start")).json.run.id as string
+    await expect(importer.run(second)).rejects.toThrow()
+    expect((await admin.b.call("POST", "/api/v1/admin/import/cancel")).json.run).toMatchObject({
+      id: second,
+      state: "stopped",
+      reason: "cancelled",
+      done: 2,
+    })
+    await database.db.execute(sql`alter table ticket drop constraint test_refuses_three`)
+    // With nothing open, cancel changes nothing, and the next start is a new run over the whole archive.
+    expect((await admin.b.call("POST", "/api/v1/admin/import/cancel")).json.run).toMatchObject({ id: second })
+    const third = (await admin.b.call("POST", "/api/v1/admin/import/start")).json.run.id as string
+    expect(third).not.toBe(second)
+    expect(await importer.run(third)).toEqual({ state: "done", reason: null })
+    expect((await admin.b.call("GET", "/api/v1/admin/import/run")).json.run).toMatchObject({ id: third, done: 7 })
+    expect(await database.db.select().from(auditLog).where(eq(auditLog.action, "import.cancel"))).toHaveLength(2)
+    // Agents cannot cancel.
+    const agent = await newAgent(admin.b, "agent.one", [org])
+    expect((await agent.call("POST", "/api/v1/admin/import/cancel")).status).toBe(403)
   })
 
   it("reads the archive's tickets for the page once per archive state", async () => {

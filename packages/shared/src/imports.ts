@@ -7,7 +7,8 @@ import type { CategoryRef } from "./workflow.ts"
 
 /**
  * A run's state: `running` (started, its job active or waiting to go on after a crash), `done`, `stopped` (the archive
- * changed under it, or the window closed: the next start is a full pass), or `refused` (nothing was written).
+ * changed under it, the window closed, or an admin cancelled it: the next start is a full pass), or `refused` (nothing
+ * was written).
  */
 export const IMPORT_RUN_STATES = ["running", "done", "stopped", "refused"] as const
 export type ImportRunState = (typeof IMPORT_RUN_STATES)[number]
@@ -26,6 +27,7 @@ export type ImportRunState = (typeof IMPORT_RUN_STATES)[number]
  * - `failed`: the run stopped on an error and waits, open; when a ticket caused it, its `ticket_failed` report row
  *   names the ticket and why, and otherwise the run's `failure` names the stage and the kind of error. Continue goes on
  *   from the last committed ticket once the cause is fixed.
+ * - `cancelled`: an admin cancelled the open run. What it imported stays; the next start is a full pass.
  */
 export const IMPORT_STOP_REASONS = [
   "went_live",
@@ -38,6 +40,7 @@ export const IMPORT_STOP_REASONS = [
   "archive_changed",
   "scanner",
   "failed",
+  "cancelled",
 ] as const
 export type ImportStopReason = (typeof IMPORT_STOP_REASONS)[number]
 

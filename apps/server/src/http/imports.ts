@@ -56,6 +56,13 @@ export function importRoutes(imports: Imports): Hono<ApiEnv> {
     admins(async (c) => c.json({ run: await imports.start(c.get("user").id) }, 202)),
   )
 
+  routes.post(
+    "/cancel",
+    admins(async (c) =>
+      c.json({ run: await imports.cancel({ actor: c.get("actor"), ipAddress: clientIp(c.req.raw) }) }),
+    ),
+  )
+
   routes.get(
     "/runs/:id/report",
     admins(async (c) => c.json(await imports.report(c.req.param("id") ?? "", c.req.query("after")))),

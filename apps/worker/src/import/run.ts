@@ -19,6 +19,10 @@
 // writes the ticket and replaces its imported comments, notes, participants, categories, and fields from the newest
 // version, with its position, counts, and report rows. A ticket counts as imported only once that committed. Each
 // imported row keeps its source key (unique), so a run again updates the same rows.
+//
+// An admin can cancel an open run (`Imports.cancel`, which sets its row to `stopped`/`cancelled`). Every transaction
+// of a run that writes locks the run's row first and goes on only while it is still `running` (`stillRunning`), so a
+// cancel waits for a ticket being written, and once it returned no handler of that run writes again.
 
 import { SYSTEM, writeAudit } from "@maane/server/audit"
 import type { Db } from "@maane/server/db/client"
@@ -100,6 +104,8 @@ export interface ImportHooks {
   afterTicket?: (zendeskId: number) => Promise<void>
   /** After the links committed, before the run ends (a test crashes here). */
   afterLinks?: () => Promise<void>
+  /** Inside each ticket's transaction, once it holds the run's row and before it writes (a test cancels here). */
+  inTicket?: (zendeskId: number) => Promise<void>
 }
 
 export interface ImportOptions {
@@ -113,6 +119,9 @@ export interface ImportOptions {
 export type ImportOutcome =
   | { state: "done" | "stopped" | "refused"; reason: ImportStopReason | null }
   | { skipped: true }
+
+/** What a job of a run an admin cancelled meanwhile returns: it stopped without writing again. */
+const CANCELLED: ImportOutcome = { state: "stopped", reason: "cancelled" }
 
 /** A ticket ready to write: everything read and scanned before its transaction. */
 interface PlannedTicket {
@@ -233,13 +242,17 @@ export class ZendeskImport {
     if (run.archiveRuns !== null && !sameRecorded(run, mark)) return this.#finish(runId, "stopped", "archive_changed")
     // Going on after an error: what stopped it no longer shows while the run works.
     at.stage = "start"
-    if (run.archiveRuns !== null)
-      await this.#db.transaction(async (tx) => {
+    if (run.archiveRuns !== null) {
+      const going = await this.#db.transaction(async (tx) => {
+        if (!(await stillRunning(tx, runId))) return false
         await tx.update(importRun).set({ reason: null, failure: null }).where(eq(importRun.id, runId))
         await tx
           .delete(importReport)
           .where(and(eq(importReport.runId, runId), eq(importReport.reason, "ticket_failed")))
+        return true
       })
+      if (!going) return CANCELLED
+    }
 
     at.stage = "archive"
     const records = await reader.tickets()
@@ -264,7 +277,8 @@ export class ZendeskImport {
 
     at.stage = "start"
     if (run.archiveRuns === null) {
-      await this.#db.transaction(async (tx) => {
+      const going = await this.#db.transaction(async (tx) => {
+        if (!(await stillRunning(tx, runId))) return false
         await tx
           .update(importRun)
           .set({
@@ -282,7 +296,9 @@ export class ZendeskImport {
           .update(zendeskImport)
           .set({ origin: sql`coalesce(${zendeskImport.origin}, ${info.apiOrigin})`, updatedAt: new Date() })
           .where(eq(zendeskImport.id, 1))
+        return true
       })
+      if (!going) return CANCELLED
     }
 
     const position = run.position ?? 0
@@ -297,20 +313,23 @@ export class ZendeskImport {
       const written = await this.#write(runId, zendeskId, record, planned, context)
       at.ticket = null
       if (written === "closed") return this.#finish(runId, "stopped", "went_live")
+      if (written === "cancelled") return CANCELLED
       await this.#hooks.afterTicket?.(zendeskId)
       if (!sameMark(mark, await reader.mark())) return this.#finish(runId, "stopped", "archive_changed")
     }
 
     // The links between imported tickets, once every ticket is in, and the numbers after the highest one.
     at.stage = "links"
-    const closed = await this.#db.transaction(async (tx) => {
-      if (!(await importWindow(tx, true)).open) return true
+    const linked = await this.#db.transaction(async (tx) => {
+      if (!(await importWindow(tx, true)).open) return "closed"
+      if (!(await stillRunning(tx, runId))) return "cancelled"
       // Set, not added: a retry after a crash between this commit and the end computes the same links again.
       await addCounts(tx, runId, {}, { links: await this.#link(tx) })
       await continueNumbers(tx)
-      return false
+      return "linked"
     })
-    if (closed) return this.#finish(runId, "stopped", "went_live")
+    if (linked === "closed") return this.#finish(runId, "stopped", "went_live")
+    if (linked === "cancelled") return CANCELLED
     await this.#hooks.afterLinks?.()
     return this.#finish(runId, "done", null)
   }
@@ -367,8 +386,9 @@ export class ZendeskImport {
   }
 
   /**
-   * One ticket's transaction: the window again under the mode row's lock, then the ticket and what belongs to it, the
-   * run's position, its counts, and its report rows. Returns "closed" when the window closed.
+   * One ticket's transaction: the window again under the mode row's lock, the run's row locked and still running, then
+   * the ticket and what belongs to it, the run's position, its counts, and its report rows. Returns "closed" when the
+   * window closed, and "cancelled" when an admin cancelled the run.
    */
   async #write(
     runId: string,
@@ -376,9 +396,11 @@ export class ZendeskImport {
     record: ZendeskTicketRecord,
     planned: PlannedTicket | null,
     context: Context,
-  ): Promise<"written" | "skipped" | "closed"> {
+  ): Promise<"written" | "skipped" | "closed" | "cancelled"> {
     return this.#db.transaction(async (tx) => {
       if (!(await importWindow(tx, true)).open) return "closed"
+      if (!(await stillRunning(tx, runId))) return "cancelled"
+      await this.#hooks.inTicket?.(zendeskId)
       const reports: Report[] = []
       const counts: Partial<ImportCounts> = {}
       const done = async (outcome: "written" | "skipped") => {
@@ -690,6 +712,16 @@ function ticketTexts(record: ZendeskTicketRecord, context: Context): Partial<Rec
 function sameRecorded(run: { archiveRuns: number | null; coveredUntil: Date | null }, mark: ArchiveMark): boolean {
   const covered = mark.coveredUntil ? new Date(mark.coveredUntil).getTime() : null
   return run.archiveRuns === mark.runs && (run.coveredUntil?.getTime() ?? null) === covered
+}
+
+/**
+ * Locks a run's row and says whether it is still running. Every transaction of a run that writes calls it first (after
+ * the mode row's lock), so a cancel, which updates that row, waits for it, and a transaction after a cancel writes
+ * nothing.
+ */
+async function stillRunning(tx: Tx, runId: string): Promise<boolean> {
+  const [row] = await tx.select({ state: importRun.state }).from(importRun).where(eq(importRun.id, runId)).for("update")
+  return row?.state === "running"
 }
 
 /** Adds to a run's counts, and sets the ones in `set`, in the caller's transaction. */
