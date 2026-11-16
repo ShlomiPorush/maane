@@ -615,7 +615,8 @@ Decisions where the plan was silent (5.2, for the owner's review):
 - A file the manifest marks failed, and one the scanner refused, is named in the report by its file name when the scanner allowed its comment's names, otherwise by its Zendesk ID (5.1's rule, kept for the new reasons).
 - A file over `files.maxBytes` is not a report reason: it shows in the ticket view as too large and flags its message, as in intake. The plan named infected and blocked files for the report.
 - A part whose file the archive no longer holds for its comment (Zendesk removed or redacted it) is deleted, so the copy matches the archive.
-- A part with the same content is never scanned again, also after a signature update or a change of the blocked types or the size limit.
+- A part whose content is already stored is never scanned again, also after a signature update or a change of the blocked types; a part whose content was not stored is decided again on every run.
+- The check that a file is read from inside the archive is not atomic against a party that swaps the archive's directories on the host during a run (Node's documented `fs` has no `openat2` with `RESOLVE_BENEATH`). What holds is that every file's bytes match its manifest entry (size and SHA-256) and pass the normal scanning policy; a party that can write to the archive can change it anyway. Declined in review as minor (F4).
 
 Open for the owner after 5.2:
 
