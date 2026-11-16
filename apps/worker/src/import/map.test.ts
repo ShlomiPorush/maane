@@ -5,7 +5,9 @@ import {
   emailOf,
   fieldDefinitions,
   fieldsOf,
+  filesOf,
   followersOf,
+  inlineImages,
   linksOf,
   participantsOf,
   statusOf,
@@ -189,5 +191,45 @@ describe("the import's mapping", () => {
     const noAddress = as(3)
     expect(noAddress.from).toBeNull()
     expect(noAddress.source.author.name).toBe("No Address")
+  })
+
+  it("imports the files the manifest holds, reports the others, and turns an image naming one into its cid:", () => {
+    const url = (id: number) => `https://example.zendesk.com/attachments/token/t${id}/?name=f${id}.png`
+    const entry = (id: number, status: "ok" | "failed") => ({
+      attachmentId: String(id),
+      ticketId: "10",
+      commentId: "1",
+      fileName: `f${id}.png`,
+      contentType: "image/png",
+      inline: id === 1,
+      size: 4,
+      contentUrl: url(id),
+      status,
+      ...(status === "ok" ? { sha256: "a".repeat(64), bytes: 4 } : { error: "404" }),
+      attempts: 1,
+      updatedAt: "2025-05-01T09:00:00Z",
+    })
+    const manifest = { files: { "1": entry(1, "ok"), "2": entry(2, "failed"), "3": entry(3, "ok") } }
+    const facts = filesOf(
+      [1, 2, 3, 1, 4].map((id) => ({ id, file_name: `f${id}.png`, inline: id === 1 })),
+      manifest,
+    )
+    expect(facts.files.map((file) => [file.id, file.status])).toEqual([
+      ["1", "ok"],
+      ["2", "failed"],
+      ["3", "ok"],
+      ["4", "missing"],
+    ])
+    expect(facts.failed.map((file) => file.id)).toEqual(["2", "4"])
+    expect(facts.archived.map((file) => [file.id, file.inline, file.contentUrl])).toEqual([
+      ["1", true, url(1)],
+      ["3", false, url(3)],
+    ])
+    // Only an image whose address is one of these files is rewritten; a failed file's and any other image keep theirs.
+    const images = inlineImages(facts.archived)
+    expect(images.rewrite(url(1))).toBe("cid:zendesk-1")
+    expect(images.rewrite(url(2))).toBeNull()
+    expect(images.rewrite("https://images.example.com/logo.png")).toBeNull()
+    expect([...images.used]).toEqual(["1"])
   })
 })

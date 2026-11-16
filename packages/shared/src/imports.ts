@@ -49,7 +49,11 @@ export type ImportStopReason = (typeof IMPORT_STOP_REASONS)[number]
  * - `unmapped_brand`: the ticket's brand maps to no organization; it was not imported.
  * - `deleted_in_zendesk`: the archive marks the ticket deleted; it was not imported (owner's decision 3).
  * - `number_taken`: a ticket Maane opened already has this number; it was not imported.
- * - `file_failed`: the manifest marks a file of the ticket failed.
+ * - `file_failed`: the manifest marks a file of the ticket failed; it is not in Maane (the import never asks Zendesk).
+ * - `file_infected`: the scanner found a file of the ticket infected; it was not stored (plan 5.2).
+ * - `file_blocked`: a file of the ticket is of a blocked type; it was not stored (plan 5.2).
+ *   The detail of the three file reasons is the file's name, or its Zendesk ID when the scanner blocked the names of
+ *   its comment.
  * - `blocked_content`: the scanner blocked a text of a comment, which was kept without it.
  * - `ticket_failed`: the ticket could not be saved, so the run stopped there (the last such error of the run). Its
  *   detail is an IMPORT_FAILURES kind, then `:` and the database constraint's name when one was named; never the
@@ -60,6 +64,8 @@ export const IMPORT_REPORT_REASONS = [
   "deleted_in_zendesk",
   "number_taken",
   "file_failed",
+  "file_infected",
+  "file_blocked",
   "blocked_content",
   "ticket_failed",
 ] as const
@@ -76,7 +82,7 @@ export type ImportStage = (typeof IMPORT_STAGES)[number]
 export const IMPORT_FAILURES = ["duplicate", "rule", "reference", "value", "archive", "other"] as const
 export type ImportFailure = (typeof IMPORT_FAILURES)[number]
 
-/** What a run counted. Files are listed and counted only: they are imported by the next step (plan 5.2). */
+/** What a run counted. `files`: the files its comments list, whatever became of each (plan 5.2). */
 export interface ImportCounts {
   tickets: number
   messages: number

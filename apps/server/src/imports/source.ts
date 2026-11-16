@@ -43,7 +43,7 @@ export interface ImportedMessageSource {
   public: boolean
   channel: string | null
   email: EmailIdentifiers
-  /** The comment's files as Zendesk listed them, imported by the next step (plan 5.2). */
+  /** The comment's files as Zendesk listed them; those the manifest holds are its message's parts (plan 5.2). */
   files: { id: string; name: string | null; inline: boolean; status: "ok" | "failed" | "missing" }[]
 }
 

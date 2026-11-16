@@ -523,7 +523,6 @@ function RunView({ run }: { run: ImportRunView }) {
           </div>
         ))}
       </dl>
-      <p className="ui-hint ui-import-hint">{t("import.run.filesNext")}</p>
     </div>
   )
 }

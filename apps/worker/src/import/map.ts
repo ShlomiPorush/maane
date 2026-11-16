@@ -239,26 +239,79 @@ function channelOf(comment: ZendeskFullComment): string | null {
 /** Whether a Zendesk user is one of its agents (an agent or an admin). */
 const isAgent = (user: ZendeskUser | undefined) => user?.role === "agent" || user?.role === "admin"
 
+/** A file the manifest holds (status ok): what the import reads from the archive and stores (plan 5.2). */
+export interface ArchivedFile {
+  id: string
+  name: string | null
+  /** The type Zendesk declared, as the manifest keeps it. */
+  declaredType: string | null
+  inline: boolean
+  sha256: string
+  bytes: number
+  /** The address Zendesk gave the file, which an inline image in the comment's HTML names. */
+  contentUrl: string | null
+}
+
 export interface FileFacts {
   files: ImportedMessageSource["files"]
   failed: { id: string; name: string | null }[]
+  /** The files the manifest holds, in the comment's order, each once. */
+  archived: ArchivedFile[]
 }
 
-/** A comment's files as the manifest records them: imported by plan 5.2, counted and reported here. */
+/** A comment's files as the manifest records them: those it holds are imported (plan 5.2), the others reported. */
 export function filesOf(attachments: unknown, manifest: Manifest): FileFacts {
   const files: ImportedMessageSource["files"] = []
   const failed: FileFacts["failed"] = []
+  const archived: ArchivedFile[] = []
+  const seen = new Set<string>()
   for (const attachment of Array.isArray(attachments) ? attachments : []) {
     const entry = attachment as { id?: unknown; file_name?: unknown; name?: unknown; inline?: unknown }
     const fileId = id(entry?.id)
-    if (!fileId) continue
+    if (!fileId || seen.has(fileId)) continue
+    seen.add(fileId)
     const name = text(entry.file_name) ?? text(entry.name)
     const recorded = manifest.files[fileId]
-    const status = recorded?.status === "ok" ? "ok" : recorded ? "failed" : "missing"
+    const ok = recorded?.status === "ok" && typeof recorded.sha256 === "string" && typeof recorded.bytes === "number"
+    const status = ok ? "ok" : recorded ? "failed" : "missing"
     files.push({ id: fileId, name, inline: entry.inline === true, status })
-    if (status !== "ok") failed.push({ id: fileId, name })
+    if (!ok) failed.push({ id: fileId, name })
+    else
+      archived.push({
+        id: fileId,
+        name,
+        declaredType: text(recorded.contentType),
+        inline: entry.inline === true || recorded.inline === true,
+        sha256: recorded.sha256 as string,
+        bytes: recorded.bytes as number,
+        contentUrl: text(recorded.contentUrl),
+      })
   }
-  return { files, failed }
+  return { files, failed, archived }
+}
+
+/** The content ID an imported file gets, which a `cid:` image of its message's HTML names (plan 5.2). */
+export const importedContentId = (attachmentId: string) => `zendesk-${attachmentId}`
+
+/**
+ * The `cid:` address an image of a comment's HTML gets when its address is the Zendesk address of one of the comment's
+ * own files the manifest holds (plan 5.2): the image then shows the file stored with the message, and nothing is
+ * fetched. Any other image keeps its address (a remote image stays behind the remote-image rule). Matched on the exact
+ * address the manifest keeps (`content_url`); Zendesk's reference does not say how its HTML names inline images, so
+ * this stays unverified until a real archive.
+ */
+export function inlineImages(files: ArchivedFile[]): { rewrite: (src: string) => string | null; used: Set<string> } {
+  const byUrl = new Map(files.flatMap((file) => (file.contentUrl ? [[file.contentUrl, file.id] as const] : [])))
+  const used = new Set<string>()
+  return {
+    used,
+    rewrite: (src) => {
+      const fileId = byUrl.get(src.trim())
+      if (fileId === undefined) return null
+      used.add(fileId)
+      return `cid:${importedContentId(fileId)}`
+    },
+  }
 }
 
 /**
@@ -271,7 +324,7 @@ export function commentMessage(
   users: Map<string, ZendeskUser>,
   manifest: Manifest,
   fallback: Date,
-): PlannedMessage & { failed: FileFacts["failed"] } {
+): PlannedMessage & Pick<FileFacts, "failed" | "archived"> {
   const authorId = id(comment.author_id)
   const author = authorId ? users.get(authorId) : undefined
   const isPublic = comment.public !== false
@@ -291,7 +344,7 @@ export function commentMessage(
   const to: MailAddress[] =
     email.kind === "recorded" && email.to?.address ? [{ address: email.to.address, name: email.to.name }] : []
   const cc: MailAddress[] = email.kind === "recorded" ? email.cc.map((address) => ({ address, name: null })) : []
-  const { files, failed } = filesOf(comment.attachments, manifest)
+  const { files, failed, archived } = filesOf(comment.attachments, manifest)
   return {
     key: `comment:${String(comment.id)}`,
     direction,
@@ -307,6 +360,7 @@ export function commentMessage(
       ...to.map((entry) => entry.name),
       ...(email.kind === "recorded" ? [email.from?.name ?? null, email.to?.name ?? null] : []),
       ...files.map((file) => file.name),
+      ...archived.map((file) => file.declaredType),
     ].filter((value): value is string => value !== null),
     source: {
       zendeskTicketId: ticketId,
@@ -320,6 +374,7 @@ export function commentMessage(
       files,
     },
     failed,
+    archived,
   }
 }
 
@@ -329,7 +384,7 @@ export function sideMessages(
   sides: ZendeskSideConversation[],
   manifest: Manifest,
   fallback: Date,
-): (PlannedMessage & { failed: FileFacts["failed"] })[] {
+): (PlannedMessage & Pick<FileFacts, "failed" | "archived">)[] {
   return sides.flatMap((side) =>
     side.events.flatMap((event) => {
       const message = event.message
@@ -337,7 +392,7 @@ export function sideMessages(
       const name = text(message.from?.name) ?? text(event.actor?.name)
       const address = addressOf(message.from?.email) ?? addressOf(event.actor?.email)
       const subject = text(message.subject) ?? side.subject
-      const { files, failed } = filesOf(message.attachments, manifest)
+      const { files, failed, archived } = filesOf(message.attachments, manifest)
       return [
         {
           key: `side:${String(event.id)}`,
@@ -348,9 +403,12 @@ export function sideMessages(
           cc: [],
           text: text(message.body),
           html: text(message.html_body),
-          headers: [name, subject, ...files.map((file) => file.name)].filter(
-            (value): value is string => value !== null,
-          ),
+          headers: [
+            name,
+            subject,
+            ...files.map((file) => file.name),
+            ...archived.map((file) => file.declaredType),
+          ].filter((value): value is string => value !== null),
           source: {
             zendeskTicketId: ticketId,
             commentId: null,
@@ -363,6 +421,7 @@ export function sideMessages(
             files,
           },
           failed,
+          archived,
         },
       ]
     }),
