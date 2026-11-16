@@ -426,7 +426,10 @@ function RunView({ run }: { run: ImportRunView }) {
         <span style={{ inlineSize: `${share}%` }} />
       </div>
       {run.reason ? (
-        <Banner tone={run.state === "running" ? "warn" : "fail"} title={t(`import.run.reason.${run.reason}`)}>
+        <Banner
+          tone={run.state === "running" ? "warn" : run.reason === "cancelled" ? "info" : "fail"}
+          title={t(`import.run.reason.${run.reason}`)}
+        >
           {run.failure ? (
             <span data-failure={run.failure.stage}>
               {t(`import.run.stage.${run.failure.stage}`)} {t(`import.report.failure.${run.failure.kind}`)}

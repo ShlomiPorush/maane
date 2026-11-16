@@ -1604,7 +1604,7 @@
         "rule": "A value breaks one of the database's rules.",
         "reference": "It names a row that is not in Maane.",
         "value": "A value is too long, or of a form the database cannot store.",
-        "archive": "Its files in the archive could not be read.",
+        "archive": "A file in the archive could not be read.",
         "other": "An unexpected error."
       }
     }
