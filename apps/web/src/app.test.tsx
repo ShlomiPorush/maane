@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { noteAuthStatus } from "./api/auth.ts"
 import { setTransport, type TransportRequest, type TransportResponse } from "./api/client.ts"
 import { ERROR_VARS } from "./api/errors.ts"
-import { I18nProvider, translate, translateCount } from "./i18n/i18n.tsx"
+import { FSI, I18nProvider, PDI, translate, translateCount } from "./i18n/i18n.tsx"
 import { browserDevice, type DeviceSubscription, setPushDevice } from "./notifications/device.ts"
 import { ROUTES } from "./routes.tsx"
 
@@ -304,6 +304,28 @@ describe("account", () => {
     await vi.waitFor(() => expect(text()).not.toContain(codes[0] as string))
     expect(text()).not.toContain(he("account.codesLossTitle"))
   })
+
+  it("reads a session's device in the page's direction, so the Hebrew label keeps its order around English names", async () => {
+    const at = new Date().toISOString()
+    const linux =
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36"
+    auth.listSessions.mockResolvedValue({
+      data: [{ id: "current", token: "t-current", createdAt: at, expiresAt: at, userAgent: linux }],
+      error: null,
+    })
+    await renderAt("/account", { "/api/setup/status": status(), "/api/v1/me": admin })
+    const name = he("account.browserOn", { browser: "Chrome", system: "Linux" })
+    const label = await vi.waitFor(() => {
+      const found = Array.from(document.querySelectorAll<HTMLElement>("#account-sessions .ui-item-title *")).find(
+        (element) => element.textContent === name,
+      )
+      expect(found).toBeDefined()
+      return found as HTMLElement
+    })
+    // Not dir="auto" (nor a bdi, which is auto without dir): the browser's name comes first and would turn it left to right.
+    expect(label.tagName).not.toBe("BDI")
+    expect(label.closest("[dir]")?.getAttribute("dir")).toBe("rtl")
+  })
 })
 
 describe("setup", () => {
@@ -414,6 +436,17 @@ describe("settings", () => {
     await vi.waitFor(() => expect(document.querySelector(".ui-savebar")).not.toBeNull())
     expect(document.querySelector(".ui-savebar")?.textContent).toContain(he("savebar.save"))
     expect(document.querySelector("button[lang=he]")?.getAttribute("aria-pressed")).toBe("true")
+  })
+
+  it("isolates the bounce address example as one address, so it reads in order inside a Hebrew hint", async () => {
+    await renderAt("/settings", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/settings": ok({ settings: [view("general.defaultLocale", "he"), view("mail.bounceAddress", "")] }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("settings.sending.mail.bounceAddress.label")))
+    // Not bounces@ before an isolated domain: the isolate is neutral to the text around it, so the domain went first.
+    expect(text()).toContain(`${FSI}bounces@example.com${PDI}`)
   })
 
   it("keeps an edit made while the save is on its way", async () => {
@@ -952,6 +985,35 @@ describe("organization dialogs", () => {
     // What was loaded stays, and nothing more is offered.
     expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(51)
     expect(button(he("organization.members.showMore"), dialog() as HTMLElement)).toBeUndefined()
+  })
+
+  it("shows each line of the signature with its own direction, so an English line after a Hebrew one reads left to right", async () => {
+    const SHALOM = String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)
+    await renderAt(`/organizations/${ORG}`, {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      [`/api/v1/admin/organizations/${ORG}`]: ok({
+        organization: {
+          id: ORG,
+          name: "Example Support",
+          signature: `${SHALOM},\nThe support team.`,
+          reminderTemplate: "",
+          reminderDays: 3,
+          createdAt: when,
+        },
+        addresses: [],
+        members: [],
+      }),
+    })
+    const lines = await vi.waitFor(() => {
+      const found = document.querySelectorAll<HTMLElement>('[data-testid="organization-signature"] [dir]')
+      expect(found.length).toBe(2)
+      return Array.from(found)
+    })
+    expect(lines.map((line) => [line.getAttribute("dir"), line.textContent])).toEqual([
+      ["auto", `${SHALOM},`],
+      ["auto", "The support team."],
+    ])
   })
 
   it("shows the automatic reminder and edits its text and days, checking the days first (plan 4.3)", async () => {
@@ -1533,7 +1595,7 @@ describe("tickets", () => {
         defaultFrom: "help@example.com",
         to: [{ address: "dana@example.com", name: "Dana Customer" }],
         cc: [{ address: "ron@example.com", name: null }],
-        signature: "Alpha support",
+        signature: `Alpha support\n${SHALOM},\nThe Alpha team.`,
         senderName: "Agent Name (Alpha)",
         listening,
       },
@@ -2592,6 +2654,17 @@ describe("tickets", () => {
     expect(composer.textContent).toContain("Agent Name (Alpha)")
     expect(composer.textContent).toContain("Alpha support")
     expect(composer.querySelector(".ui-editor-text")?.getAttribute("dir")).toBe("auto")
+    // Each line of the signature takes its own direction, as the email gives it.
+    expect(
+      Array.from(composer.querySelectorAll(".ui-composer-signature [dir]")).map((line) => [
+        line.getAttribute("dir"),
+        line.textContent,
+      ]),
+    ).toEqual([
+      ["auto", "Alpha support"],
+      ["auto", `${SHALOM},`],
+      ["auto", "The Alpha team."],
+    ])
     if (mounted) {
       const { root, host } = mounted
       await act(async () => root.unmount())
