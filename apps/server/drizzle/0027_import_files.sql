@@ -1,0 +1,2 @@
+ALTER TABLE "message_part" ADD COLUMN "zendesk_attachment_id" text;--> statement-breakpoint
+ALTER TABLE "message_part" ADD CONSTRAINT "message_part_zendesk_attachment_id_unique" UNIQUE("zendesk_attachment_id");

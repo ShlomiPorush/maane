@@ -8,6 +8,22 @@ const DATA_PNG = "data:image/png;base64,iVBORw0KGgo="
 
 const none = () => null
 
+describe("sanitizeMailHtml", () => {
+  it("gives an image the address the import chose before the allow list, and keeps every other image's", () => {
+    const stored = sanitizeMailHtml(
+      '<img src="https://example.zendesk.com/attachments/token/t1/?name=a.png&amp;x=1"><img src="https://images.example.com/b.png"><img src="https://images.example.com/c.png">',
+      (src) =>
+        src === "https://example.zendesk.com/attachments/token/t1/?name=a.png&x=1"
+          ? "cid:zendesk-1"
+          : src.endsWith("c.png")
+            ? "data:image/png;base64,AAAA"
+            : null,
+    )
+    // The rewritten address still passes the allow list: a data: URL never does.
+    expect(stored).toBe('<img src="cid:zendesk-1" /><img src="https://images.example.com/b.png" /><img />')
+  })
+})
+
 describe("renderMailHtml", () => {
   it("embeds a cid: image of the message's clean parts, and removes an unknown one with its tag", () => {
     const stored = sanitizeMailHtml('<p>a<img src="cid:logo@example.com" alt="logo">b<img src="cid:other" alt="x"></p>')

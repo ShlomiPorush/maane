@@ -106,9 +106,22 @@ const OPTIONS: sanitizeHtml.IOptions = {
   enforceHtmlBoundary: true,
 }
 
-/** The sender's HTML through the allow list: the only HTML Maane stores. */
-export function sanitizeMailHtml(html: string): string {
-  return sanitizeHtml(html, OPTIONS)
+/**
+ * The sender's HTML through the allow list: the only HTML Maane stores. `image` may give an image another address
+ * before the allow list checks it (the import, plan 5.2: a Zendesk attachment's URL becomes the `cid:` of the message's
+ * own part); null keeps the address it has.
+ */
+export function sanitizeMailHtml(html: string, image?: (src: string) => string | null): string {
+  if (!image) return sanitizeHtml(html, OPTIONS)
+  return sanitizeHtml(html, {
+    ...OPTIONS,
+    transformTags: {
+      img: (tagName, attribs) => {
+        const src = attribs.src === undefined ? null : image(attribs.src)
+        return { tagName, attribs: src === null ? attribs : { ...attribs, src } }
+      },
+    },
+  })
 }
 
 export interface RenderOptions {
