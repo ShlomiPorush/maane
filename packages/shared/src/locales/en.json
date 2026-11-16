@@ -34,7 +34,8 @@
     "organizations": "Organizations",
     "intake": "Intake log",
     "more": "More",
-    "categories": "Categories"
+    "categories": "Categories",
+    "import": "Import"
   },
   "shell": {
     "tagline": "Email helpdesk",
@@ -177,7 +178,13 @@
       "scheduledNotOpen": "This scheduled reply is no longer waiting: it went out or was cancelled. The ticket shows where it is now.",
       "scheduledChanged": "This scheduled reply changed meanwhile. Open it again to change the newest version.",
       "scheduledNotAuthor": "Only the agent who wrote this scheduled reply can change it. You can still cancel it.",
-      "submissionReused": "Your earlier request from this composer went through. Check the ticket, then send this one again."
+      "submissionReused": "Your earlier request from this composer went through. Check the ticket, then send this one again.",
+      "ticketImported": "This ticket was imported from Zendesk. It is read-only until Maane goes live.",
+      "categoryImported": "An imported ticket carries this category. You can delete it after Maane goes live.",
+      "importRunning": "An import from Zendesk is running. Wait until it finishes, then try again.",
+      "importClosed": "Maane has gone live, so the import from Zendesk is closed.",
+      "importNoAgent": "Choose who Zendesk agents' comments are written by, save the mapping, then start.",
+      "importUserInvalid": "Choose an active admin or agent."
     }
   },
   "auth": {
@@ -400,7 +407,8 @@
     "link": {
       "sender_not_participant": "Sender not a participant",
       "ambiguous_original": "Original of several tickets",
-      "follow_up": "Follow-up of a closed ticket"
+      "follow_up": "Follow-up of a closed ticket",
+      "merged": "Merged in Zendesk"
     },
     "scheduledReply": "Scheduled",
     "reminder": "Automatic reminder",
@@ -419,6 +427,22 @@
       "ended": "The snooze ended.",
       "failed": "The snooze did not change: {reason}",
       "tag": "Snoozed until {time}"
+    },
+    "imported": {
+      "readOnly": "Imported from Zendesk: read-only until Maane goes live",
+      "readOnlyHint": "Its status, categories, organization, and replies can change only after Maane goes live.",
+      "composerLocked": "Replies and notes open when Maane goes live",
+      "title": "From Zendesk",
+      "number": "Zendesk number",
+      "zendeskNumber": "Zendesk #{number}",
+      "brand": "Brand",
+      "tags": "Tags",
+      "followers": "Followers",
+      "followersHint": "Followers were kept as they were in Zendesk. They never receive replies.",
+      "none": "None",
+      "tag": "From Zendesk",
+      "sideConversation": "Side conversation",
+      "author": "Written in Zendesk by {name}"
     }
   },
   "scan": {
@@ -1043,6 +1067,10 @@
         "create": "Category added",
         "rename": "Category renamed",
         "delete": "Category deleted"
+      },
+      "import": {
+        "mapping": "Zendesk import mapping saved",
+        "run": "Zendesk import run ended"
       }
     },
     "change": "{from}, now {to}",
@@ -1444,5 +1472,113 @@
     "cancelMessage": "It will not be sent. You can write a new reply.",
     "cancelDone": "The scheduled reply is cancelled.",
     "cancelFailed": "The scheduled reply was not cancelled: {reason}"
+  },
+  "import": {
+    "title": "Import from Zendesk",
+    "description": "Brings the Zendesk history in from the backup archive, before Maane goes live. Imported tickets stay read-only until then.",
+    "loading": "Loading the import",
+    "failed": "Could not load the import",
+    "closed": "The import is closed for good",
+    "wentLive": "Maane went live on",
+    "notListening": "Intake is live, so nothing can be imported.",
+    "zendeskNumber": "Zendesk #{number}",
+    "ticketCount": {
+      "one": "1 ticket",
+      "two": "2 tickets",
+      "other": "{count} tickets"
+    },
+    "archive": {
+      "title": "Archive",
+      "missing": "No archive at the mount",
+      "missingHint": "Mount the backup folder read-only at the path the deployment notes give, then open this page again.",
+      "origin": "Zendesk account",
+      "tickets": "Tickets",
+      "runs": "Backup runs",
+      "coveredUntil": "Covers changes until",
+      "unknown": "Unknown",
+      "backupRunning": "A backup is running on this archive. Start the import after it finishes.",
+      "otherOrigin": "This archive comes from another Zendesk account than earlier imports, so the import refuses it."
+    },
+    "mapping": {
+      "title": "Mapping",
+      "agent": "Comments of Zendesk agents are written by",
+      "chooseAgent": "Choose a user",
+      "agentHint": "Every comment and internal note a Zendesk agent wrote is attributed to this Maane user.",
+      "brands": "Brands",
+      "brandsHint": "Each brand's tickets go to an organization. A brand without one is not imported.",
+      "tags": "Tags",
+      "tagsHint": "A tag can give a category. Each ticket keeps its original tags too.",
+      "noOrganization": "Not imported",
+      "noCategory": "No category",
+      "brandFor": "Organization for {name}",
+      "tagFor": "Category for {tag}",
+      "noBrands": "The archive names no brands",
+      "noTags": "The archive's tickets have no tags",
+      "save": "Save mapping",
+      "saving": "Saving",
+      "saved": "The mapping is saved.",
+      "saveFailed": "Could not save the mapping. {reason}",
+      "unsaved": "Save the mapping before you start the import."
+    },
+    "run": {
+      "title": "Run",
+      "start": "Start import",
+      "starting": "Starting",
+      "started": "The import started.",
+      "startFailed": "Could not start the import. {reason}",
+      "none": "No run yet",
+      "noneHint": "Map the brands, choose the user, save, then start.",
+      "progress": "{done} of {total} tickets",
+      "state": {
+        "running": "Running",
+        "done": "Done",
+        "stopped": "Stopped",
+        "refused": "Refused"
+      },
+      "reason": {
+        "went_live": "Maane went live, so the import is closed.",
+        "not_listening": "Intake is live, so the import is closed.",
+        "no_agent": "No user was chosen for Zendesk agents' comments.",
+        "no_archive": "No archive was found at the mount.",
+        "backup_running": "A backup was running. Start again after it finishes.",
+        "archive_incomplete": "The archive check found problems. Run the backup again, then start.",
+        "other_origin": "The archive comes from another Zendesk account than earlier imports.",
+        "archive_changed": "A backup changed the archive. Start again for a full pass.",
+        "scanner": "The scanner did not answer. The import goes on when it does."
+      },
+      "problems": "What the archive check found",
+      "startedAt": "Started",
+      "finishedAt": "Finished",
+      "coveredUntil": "Archive covers until",
+      "highest": "Highest Zendesk number",
+      "counts": {
+        "tickets": "Tickets imported",
+        "messages": "Comments",
+        "notes": "Internal notes",
+        "sideConversations": "Side conversation messages",
+        "links": "Links between tickets",
+        "files": "Files listed",
+        "skipped": "Tickets not imported"
+      },
+      "filesNext": "Files are listed and counted here. The next step imports them."
+    },
+    "report": {
+      "title": "Report",
+      "hint": "What the newest run did not import, or imported only in part.",
+      "loading": "Loading the report",
+      "failed": "Could not load the report",
+      "empty": "Nothing to report",
+      "more": "Show more",
+      "loadingMore": "Loading more",
+      "moreFailed": "Could not load more.",
+      "end": "That is the whole report.",
+      "reason": {
+        "unmapped_brand": "Brand not mapped: not imported",
+        "deleted_in_zendesk": "Deleted in Zendesk: not imported",
+        "number_taken": "A Maane ticket has this number: not imported",
+        "file_failed": "A file failed in the backup",
+        "blocked_content": "The scanner blocked a text"
+      }
+    }
   }
 }

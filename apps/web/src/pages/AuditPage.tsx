@@ -72,6 +72,8 @@ export const AUDIT_ACTIONS = [
   "category.create",
   "category.rename",
   "category.delete",
+  "import.mapping",
+  "import.run",
 ] as const
 
 const KNOWN = new Set<string>(AUDIT_ACTIONS)
