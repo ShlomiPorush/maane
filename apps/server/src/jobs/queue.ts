@@ -54,9 +54,10 @@ export type PushKind = "new_ticket" | "customer_reply"
 export type PushJob = { kind: PushKind; ticketId: string; messageId: string }
 
 /**
- * One run of the import from the Zendesk archive (plan 5.1): `{ runId }`. One at a time: the queue holds one job queued
- * or active, and the worker's session lock covers a retry pg-boss starts while an expired run still works. A failed
- * run is tried again; it goes on from its last committed ticket.
+ * One run of the import from the Zendesk archive (plan 5.1): `{ runId }`. One at a time: at most one run is open (a
+ * unique index), and the worker's session lock lets one job work at a time, so a second job for the open run (Start
+ * again, or a retry pg-boss starts while an expired run still works) does nothing. A failed run is tried again; it
+ * goes on from its last committed ticket.
  */
 export const ZENDESK_IMPORT = "zendesk-import"
 
@@ -76,13 +77,7 @@ export const QUEUE_OPTIONS: Record<string, Omit<Queue, "name">> = {
   // a late run from acting twice. pg-boss keeps a job until its startAfter plus the retention, so a far time is kept.
   [TIMED_ACTION]: { retryLimit: 5, retryDelay: 30, retryBackoff: true, expireInSeconds: 5 * 60 },
   [SNOOZE_END]: { retryLimit: 5, retryDelay: 30, retryBackoff: true, expireInSeconds: 5 * 60 },
-  [ZENDESK_IMPORT]: {
-    policy: "exclusive",
-    retryLimit: 5,
-    retryDelay: 60,
-    retryBackoff: true,
-    expireInSeconds: 6 * 60 * 60,
-  },
+  [ZENDESK_IMPORT]: { retryLimit: 5, retryDelay: 60, retryBackoff: true, expireInSeconds: 6 * 60 * 60 },
 }
 
 /** pg-boss's states of a job, as the server reports them to the UI. */

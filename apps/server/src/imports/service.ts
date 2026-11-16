@@ -237,8 +237,7 @@ export class Imports {
   }
 
   /**
-   * Starts a run, or goes on with the open one (its job queued again; the queue keeps one, and the worker's lock one
-   * at a time). Under the mode row's lock, so a switch to live waits for it and then sees the run.
+   * Starts a run, or goes on with the open one (its job queued again; the worker's lock runs one job at a time). Under the mode row's lock, so a switch to live waits for it and then sees the run.
    */
   async start(userId: string): Promise<ImportRunView> {
     const runId = await transactionWithJobs(this.db, async (tx, jobs) => {
@@ -248,8 +247,8 @@ export class Imports {
       if (!config?.agentUserId) throw new Refusal("import_no_agent", 409)
       const [open] = await tx.select({ id: importRun.id }).from(importRun).where(eq(importRun.state, "running"))
       if (open) {
-        // Its job may be queued or active already: the exclusive queue then takes no second one.
-        await this.jobs.sendIn(jobs, ZENDESK_IMPORT, { runId: open.id }).catch(() => undefined)
+        // Its job may be queued or active already: a second one waits for the worker's lock and then does nothing.
+        await this.jobs.sendIn(jobs, ZENDESK_IMPORT, { runId: open.id })
         return open.id
       }
       const [made] = await tx.insert(importRun).values({ startedBy: userId }).returning({ id: importRun.id })

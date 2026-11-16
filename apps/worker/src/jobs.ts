@@ -176,7 +176,7 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
 
   const zendesk = options.zendeskImport
   if (zendesk) {
-    // One run at a time: one job queued or active, and a session lock against a run pg-boss expired that still works.
+    // One job works at a time (a session lock, also against a run pg-boss expired that still works); another skips.
     await boss.createQueue(ZENDESK_IMPORT, QUEUE_OPTIONS[ZENDESK_IMPORT])
     await boss.work<{ runId?: unknown }>(ZENDESK_IMPORT, async ([job]) => {
       const runId = job?.data.runId

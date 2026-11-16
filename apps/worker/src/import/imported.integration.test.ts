@@ -1,0 +1,285 @@
+import { randomUUID } from "node:crypto"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { SYSTEM } from "@maane/server/audit"
+import { authUser, category, organization, outbox, supportAddress, ticket } from "@maane/server/db/schema"
+import { type JobQueue, openJobQueue } from "@maane/server/jobs/queue"
+import { Organizations } from "@maane/server/organizations/service"
+import { createSettingsCipher } from "@maane/server/settings/crypto"
+import { Settings } from "@maane/server/settings/service"
+import { createTestApp } from "@maane/server/testing/app"
+import { nextIp, TestBrowser, testPassword } from "@maane/server/testing/browser"
+import { createTestDatabase, testKey } from "@maane/server/testing/db"
+import { type ImportView, MEGABYTE, type TicketList, type TicketView, userEmail } from "@maane/shared"
+import type { StandInZendesk } from "@maane/zendesk/testing/stand-in"
+import { eq } from "drizzle-orm"
+import { simpleParser } from "mailparser"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { clamdScanner } from "../files/scanner.ts"
+import { FileService } from "../files/service.ts"
+import { FileStore } from "../files/store.ts"
+import { type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
+import { BRANDS, backupInto, HEBREW_BODY, standInAccount } from "../testing/zendesk-archive.ts"
+import { ZendeskImport } from "./run.ts"
+
+// Imported tickets through the API (plan 5.1): the import page (mapping, start, progress, report), imported tickets
+// read-only for every action until Maane goes live (deleting a category one carries too), their "From Zendesk" block,
+// the organization scope of the list and search, and the quoted history of a later reply. The server app and the
+// import share one migrated database; the archive is an invented one, made by the phase 0 backup from its stand-in.
+
+const SUPPORT = "store@example.com"
+const password = testPassword()
+
+let clamd: StandInClamd
+let database: Awaited<ReturnType<typeof createTestDatabase>>
+let queue: JobQueue
+let app: ReturnType<typeof createTestApp>
+let zendesk: StandInZendesk
+let importer: ZendeskImport
+let root: string
+let org: string
+let outlet: string
+let vip: string
+
+beforeAll(async () => {
+  clamd = await startStandInClamd()
+})
+afterAll(async () => {
+  await clamd.close()
+})
+beforeEach(async () => {
+  database = await createTestDatabase()
+  root = await mkdtemp(join(tmpdir(), "maane-imported-"))
+  const store = new FileStore(join(root, "files"))
+  await store.prepare()
+  const settings = new Settings(database.db, createSettingsCipher([{ version: 1, value: testKey() }]), {})
+  await settings.update(
+    { "scanner.address": clamd.address, "scanner.unavailablePolicy": "block", "files.maxBytes": 5 * MEGABYTE },
+    SYSTEM,
+  )
+  const files = new FileService({ db: database.db, settings, scanner: clamdScanner, store })
+  zendesk = standInAccount()
+  await zendesk.start()
+  const archive = join(root, "archive")
+  await backupInto(zendesk, archive)
+  importer = new ZendeskImport({ db: database.db, files, archiveDir: archive })
+  queue = await openJobQueue(database.url)
+  app = createTestApp(database, {}, queue, join(root, "files"), {}, undefined, archive)
+  await app.ready
+  const [made] = await database.db.insert(organization).values({ name: "Example Store" }).returning()
+  const [second] = await database.db.insert(organization).values({ name: "Example Outlet" }).returning()
+  org = made?.id ?? ""
+  outlet = second?.id ?? ""
+  await database.db
+    .insert(supportAddress)
+    .values({ organizationId: org, kind: "exact", value: SUPPORT, isDefault: true })
+  await database.db
+    .insert(supportAddress)
+    .values({ organizationId: outlet, kind: "exact", value: "outlet@example.com" })
+  const [tag] = await database.db.insert(category).values({ name: "VIP" }).returning()
+  vip = tag?.id ?? ""
+})
+afterEach(async () => {
+  await queue.stop()
+  await app.close()
+  await zendesk.stop()
+  await database.drop()
+  await rm(root, { recursive: true, force: true })
+})
+
+const browser = () => new TestBrowser(app.fetch, nextIp())
+
+async function firstAdmin() {
+  const b = browser()
+  expect((await b.setup("first.admin", password)).status).toBe(200)
+  await b.enroll(password)
+  const [row] = await database.db.select({ id: authUser.id }).from(authUser).where(eq(authUser.username, "first.admin"))
+  return { b, id: row?.id ?? "" }
+}
+
+async function newAgent(admin: TestBrowser, name: string, organizations: string[]) {
+  const created = await admin.call("POST", "/api/auth/admin/create-user", {
+    email: userEmail(name),
+    password,
+    name,
+    role: "agent",
+    data: { username: name },
+  })
+  expect(created.status).toBe(200)
+  for (const organizationId of organizations)
+    await new Organizations(database.db).addMember(organizationId, created.json.user.id, {
+      actor: SYSTEM,
+      ipAddress: null,
+    })
+  const b = browser()
+  expect((await b.passwordSignIn(name, password)).status).toBe(200)
+  await b.enroll(password)
+  return b
+}
+
+/** The admin maps the store brand and the vip tag, chooses themself, starts a run, and the worker runs it. */
+async function imported(admin: { b: TestBrowser; id: string }) {
+  const mapped = await admin.b.call("PUT", "/api/v1/admin/import/mapping", {
+    brands: { [String(BRANDS.mapped)]: org, [String(BRANDS.other)]: null },
+    tags: { vip, billing: null },
+    agentUserId: admin.id,
+  })
+  expect(mapped.status, JSON.stringify(mapped.json)).toBe(200)
+  const started = await admin.b.call("POST", "/api/v1/admin/import/start")
+  expect(started.status).toBe(202)
+  expect(await importer.run(started.json.run.id)).toEqual({ state: "done", reason: null })
+  return started.json.run.id as string
+}
+
+const reply = (values: Record<string, unknown> = {}) => ({
+  submissionId: randomUUID(),
+  kind: "reply",
+  from: SUPPORT,
+  to: [{ address: "user2@example.com", name: "User 2" }],
+  cc: [],
+  html: "<p>We sent a new package.</p>",
+  uploads: [],
+  parts: [],
+  ...values,
+})
+
+describe("imported tickets", () => {
+  it("the import page maps, starts a run, shows its progress, and pages its report; admins only", async () => {
+    const admin = await firstAdmin()
+    const page = await admin.b.call("GET", "/api/v1/admin/import")
+    expect(page.status).toBe(200)
+    const view = page.json as ImportView
+    expect(view.window).toMatchObject({ open: true, mode: "listening", wentLiveAt: null })
+    expect(view.archive).toMatchObject({ present: true, backupRunning: false, otherOrigin: false, tickets: 6 })
+    expect(view.brands.map((brand) => [brand.id, brand.name, brand.tickets])).toEqual([
+      [String(BRANDS.mapped), "Example Store", 5],
+      [String(BRANDS.other), "Example Outlet", 1],
+    ])
+    expect(view.tags.map((tag) => [tag.tag, tag.tickets])).toEqual([
+      ["billing", 2],
+      ["vip", 1],
+    ])
+    expect(view.users.map((user) => user.id)).toEqual([admin.id])
+    // Starting needs the chosen user.
+    expect((await admin.b.call("POST", "/api/v1/admin/import/start")).json.error).toBe("import_no_agent")
+
+    const agent = await newAgent(admin.b, "agent.one", [org])
+    expect((await agent.call("GET", "/api/v1/admin/import")).status).toBe(403)
+    expect((await agent.call("POST", "/api/v1/admin/import/start")).status).toBe(403)
+
+    const run = await imported(admin)
+    const progress = await admin.b.call("GET", "/api/v1/admin/import/run")
+    expect(progress.json.run).toMatchObject({ id: run, state: "done", done: 7, total: 7, reportRows: 6 })
+    const report = await admin.b.call("GET", `/api/v1/admin/import/runs/${run}/report`)
+    expect(report.json.rows.map((row: { reason: string }) => row.reason)).toEqual([
+      "blocked_content",
+      "file_failed",
+      "file_failed",
+      "deleted_in_zendesk",
+      "deleted_in_zendesk",
+      "unmapped_brand",
+    ])
+    expect(report.json.next).toBeNull()
+    const after = await admin.b.call("GET", `/api/v1/admin/import/runs/${run}/report?after=${report.json.rows[3].id}`)
+    expect(after.json.rows).toHaveLength(2)
+
+    // A mapping while a run is open is refused; so is a second run beside it (Start goes on with the open one).
+    const [open] = await database.db.select().from(ticket).limit(1)
+    expect(open).toBeDefined()
+    const again = await admin.b.call("POST", "/api/v1/admin/import/start")
+    const second = again.json.run.id as string
+    expect((await admin.b.call("POST", "/api/v1/admin/import/start")).json.run.id).toBe(second)
+    const refused = await admin.b.call("PUT", "/api/v1/admin/import/mapping", {
+      brands: {},
+      tags: {},
+      agentUserId: admin.id,
+    })
+    expect(refused.json.error).toBe("import_running")
+    // Going live waits for the open run: refused.
+    expect((await admin.b.call("PUT", "/api/v1/settings", { "intake.mode": "live" })).json.error).toBe("import_running")
+    expect(await importer.run(second)).toEqual({ state: "done", reason: null })
+  })
+
+  it("keeps every imported ticket read-only until Maane goes live, then lets it be answered with its history", async () => {
+    const admin = await firstAdmin()
+    await imported(admin)
+    const b = admin.b
+    const refusedWith = async (method: string, path: string, body?: unknown) => {
+      const answer = await b.call(method, path, body)
+      return [answer.status, answer.json.error]
+    }
+    const read = [409, "ticket_imported"]
+    expect(await refusedWith("PUT", "/api/v1/tickets/1/status", { status: "solved" })).toEqual(read)
+    expect(await refusedWith("PUT", "/api/v1/tickets/1/categories", { categories: [] })).toEqual(read)
+    expect(await refusedWith("PUT", "/api/v1/tickets/1/organization", { organizationId: outlet })).toEqual(read)
+    const until = new Date(Date.now() + 3_600_000).toISOString()
+    expect(await refusedWith("PUT", "/api/v1/tickets/1/snooze", { until })).toEqual(read)
+    expect(await refusedWith("DELETE", "/api/v1/tickets/1/snooze")).toEqual(read)
+    expect(
+      await refusedWith("POST", "/api/v1/tickets/1/messages", reply({ kind: "note", from: null, to: [] })),
+    ).toEqual(read)
+    expect(await refusedWith("POST", "/api/v1/tickets/1/messages", reply())).toEqual(read)
+    expect(await refusedWith("POST", "/api/v1/tickets/1/messages", reply({ sendAt: until }))).toEqual(read)
+    // Deleting a category an imported ticket carries would change it: refused; another category may go.
+    expect(await refusedWith("DELETE", `/api/v1/admin/categories/${vip}`)).toEqual([409, "category_imported"])
+    const [spare] = await database.db.insert(category).values({ name: "Spare" }).returning()
+    expect((await b.call("DELETE", `/api/v1/admin/categories/${spare?.id}`)).status).toBe(200)
+
+    // The ticket view says so, and shows the "From Zendesk" block and each comment's Zendesk author.
+    const view = (await b.call("GET", "/api/v1/tickets/1")).json as TicketView
+    expect(view.ticket.imported).toMatchObject({
+      zendeskId: 1,
+      readOnly: true,
+      brand: "Example Store",
+      tags: ["vip", "billing"],
+      fields: [
+        { name: "Order number", value: "A-17" },
+        { name: "Plan", value: "Gold plan" },
+      ],
+    })
+    expect(view.ticket.categories.map((c) => c.name)).toEqual(["VIP"])
+    expect(view.messages.map((m) => [m.direction, m.imported?.authorName, m.imported?.sideConversation])).toEqual([
+      ["in", "User 2", false],
+      ["note", "Dana Agent", false],
+      ["out", "Dana Agent", false],
+      ["note", null, true],
+    ])
+    expect(view.links.map((link) => [link.number, link.reason])).toEqual([
+      [3, "merged"],
+      [7, "follow_up"],
+    ])
+
+    // Going live opens it for good.
+    expect((await b.call("PUT", "/api/v1/settings", { "intake.mode": "live" })).status).toBe(200)
+    expect(((await b.call("GET", "/api/v1/tickets/1")).json as TicketView).ticket.imported?.readOnly).toBe(false)
+    const sent = await b.call("POST", "/api/v1/tickets/1/messages", reply())
+    expect(sent.status, JSON.stringify(sent.json)).toBe(201)
+    // The email quotes the imported history: the customer's comment and the agent's public reply, without any outbox
+    // or delivery state of their own, and never the internal note.
+    const [row] = await database.db.select().from(outbox).where(eq(outbox.messageId, sent.json.id))
+    const mail = await simpleParser(row?.mime ?? Buffer.alloc(0))
+    expect(mail.html).toContain(HEBREW_BODY)
+    expect(mail.html).toContain("Answer")
+    expect(mail.html).not.toContain("Internal note")
+    expect(mail.text).toContain("Answer")
+    expect((await b.call("PUT", "/api/v1/tickets/1/status", { status: "solved" })).status).toBe(200)
+    expect((await b.call("DELETE", `/api/v1/admin/categories/${vip}`)).status).toBe(200)
+  })
+
+  it("shows imported tickets only within the organization scope, in the list and in search", async () => {
+    const admin = await firstAdmin()
+    await imported(admin)
+    const member = await newAgent(admin.b, "agent.store", [org])
+    const stranger = await newAgent(admin.b, "agent.outlet", [outlet])
+    const numbers = async (b: TestBrowser, query: string) =>
+      ((await b.call("GET", `/api/v1/tickets?${query}`)).json as TicketList).tickets.map((t) => t.number).sort()
+    expect(await numbers(member, "status=all")).toEqual([1, 2, 3, 7])
+    expect(await numbers(stranger, "status=all")).toEqual([])
+    // Search covers imported history: the customer's address, and a word of an imported comment.
+    expect(await numbers(member, `q=${encodeURIComponent("user3@example.com")}`)).toEqual([1, 2])
+    expect(await numbers(member, `q=${encodeURIComponent(HEBREW_BODY.slice(0, 6))}`)).toEqual([1])
+    expect(await numbers(stranger, `q=${encodeURIComponent("user3@example.com")}`)).toEqual([])
+    expect((await stranger.call("GET", "/api/v1/tickets/1")).status).toBe(404)
+  })
+})
