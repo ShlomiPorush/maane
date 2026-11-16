@@ -3516,6 +3516,7 @@ describe("import from Zendesk", () => {
         saved = true
         return ok({ ok: true })
       },
+      "/api/v1/admin/import/run": () => ok({ run: saved ? run : null }),
       "/api/v1/admin/import/start": { status: 202, body: { run } },
       [`/api/v1/admin/import/runs/${RUN}/report`]: ok({
         rows: [{ id: 1, zendeskId: 4, reason: "deleted_in_zendesk", detail: null }],

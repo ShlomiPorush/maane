@@ -49,14 +49,9 @@ const same = (a: Mapping, b: Mapping) => JSON.stringify(a) === JSON.stringify(b)
 function Import() {
   const { t } = useI18n()
   usePageMeta(t("import.title"))
-  const [running, setRunning] = useState(false)
-  const query = usePageQuery({
-    queryKey: qk.importPage,
-    queryFn: api.importPage,
-    every: running ? WHILE_RUNNING : EVERY.live,
-  })
+  // The page reads the archive's summary at the usual pace; a run's progress has its own, faster read (RunPanel).
+  const query = usePageQuery({ queryKey: qk.importPage, queryFn: api.importPage, every: EVERY.live })
   const view = query.data
-  useEffect(() => setRunning(view?.run?.state === "running"), [view?.run?.state])
 
   return (
     <div className="ui-page">
@@ -79,6 +74,20 @@ function Import() {
 
 function ImportBody({ view }: { view: ImportView }) {
   const { t } = useI18n()
+  const queryClient = useQueryClient()
+  // While a run works, only the run is read again, every few seconds: the page's summary reads the whole archive.
+  const [running, setRunning] = useState(view.run?.state === "running")
+  const progress = usePageQuery({
+    queryKey: qk.importRun,
+    queryFn: api.importRun,
+    every: running ? WHILE_RUNNING : EVERY.live,
+  })
+  const run = progress.data ? progress.data.run : view.run
+  useEffect(() => {
+    const now = run?.state === "running"
+    if (running && !now) void queryClient.invalidateQueries({ queryKey: qk.importPage })
+    setRunning(now)
+  }, [run?.state, running, queryClient])
   const saved = mappingOf(view)
   const [mapping, setMapping] = useState<Mapping>(saved)
   const [base, setBase] = useState<Mapping>(saved)
@@ -92,7 +101,7 @@ function ImportBody({ view }: { view: ImportView }) {
   }, [view, base])
   const dirty = !same(mapping, base)
   const open = view.window.open
-  const runOpen = view.run?.state === "running"
+  const runOpen = run?.state === "running"
 
   return (
     <>
@@ -116,8 +125,8 @@ function ImportBody({ view }: { view: ImportView }) {
         onChange={setMapping}
         onSaved={() => setBase(mapping)}
       />
-      <RunPanel view={view} canStart={open && !dirty && view.archive.present} />
-      {view.run ? <ReportPanel run={view.run} /> : null}
+      <RunPanel run={run} canStart={open && !dirty && view.archive.present} />
+      {run ? <ReportPanel run={run} /> : null}
     </>
   )
 }
@@ -320,11 +329,10 @@ const COUNTS: (keyof ImportCounts)[] = [
 
 const TONES = { running: "info", done: "ok", stopped: "warn", refused: "fail" } as const
 
-function RunPanel({ view, canStart }: { view: ImportView; canStart: boolean }) {
+function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: boolean }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
-  const run = view.run
   const running = run?.state === "running"
 
   const start = async () => {
@@ -335,7 +343,10 @@ function RunPanel({ view, canStart }: { view: ImportView; canStart: boolean }) {
     } catch (error) {
       showToast(t("import.run.startFailed", { reason: errorText(t, error) }), "error")
     } finally {
-      await queryClient.invalidateQueries({ queryKey: qk.importPage })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: qk.importPage }),
+        queryClient.invalidateQueries({ queryKey: qk.importRun }),
+      ])
       setBusy(false)
     }
   }

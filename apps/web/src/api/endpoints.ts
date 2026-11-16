@@ -123,6 +123,7 @@ export const qk = {
   ticket: (number: number) => ["ticket", number] as const,
   intake: (filters: IntakeFilters) => ["intake", filters.mode ?? "", filters.flagged ? 1 : 0] as const,
   importPage: ["import"] as const,
+  importRun: ["import", "run"] as const,
   importReport: (runId: string) => ["import", "report", runId] as const,
 }
 
@@ -211,6 +212,7 @@ export const api = {
   deleteCategory: (id: string) => request<{ ok: true }>("DELETE", `/admin/categories/${encodeURIComponent(id)}`),
   importPage: () => request<ImportView>("GET", "/admin/import"),
   saveImportMapping: (input: ImportMappingInput) => request<{ ok: true }>("PUT", "/admin/import/mapping", input),
+  importRun: () => request<{ run: ImportRunView | null }>("GET", "/admin/import/run"),
   startImport: () => request<{ run: ImportRunView }>("POST", "/admin/import/start"),
   importReport: (runId: string, after: string | null) =>
     request<ImportReportPage>(
