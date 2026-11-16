@@ -1,6 +1,7 @@
 // The reminder of a ticket's waiting period that has not gone yet (plan 4.3), above the composer: when it goes (Israel
 // time) and what stops it. Once it went, it is a message in the conversation, marked as an automatic reminder; a
-// reminder that a customer reply, a new reply, a status change, a move, or a bounce stopped is simply no longer shown.
+// reminder that a customer reply, a new reply, a status change, or a bounce stopped is simply no longer shown; after a
+// move, the new organization's reminder shows instead, if it has one.
 
 import type { ReminderView } from "@maane/shared"
 import { BellRing } from "lucide-react"

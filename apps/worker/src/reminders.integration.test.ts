@@ -395,14 +395,6 @@ describe("the end of a waiting period stops its reminder", () => {
       "agent_reply",
     ],
     [
-      "a move to another organization",
-      async ({ agent, t }) => {
-        const moved = await agent.call("PUT", `/api/v1/tickets/${t.number}/organization`, { organizationId: other })
-        expect(moved.status).toBe(200)
-      },
-      "move",
-    ],
-    [
       "a bounce on the reply that started the period",
       async ({ started }) => {
         await db().transaction((tx) =>
@@ -490,6 +482,94 @@ describe("the end of a waiting period stops its reminder", () => {
     expect(oldest?.action).toMatchObject({ id: first.id, state: "cancelled", reason: "agent_reply" })
     expect(newest?.action.state).toBe("scheduled")
     expect(newest?.periodId).toBe(periods[1]?.id)
+  })
+})
+
+describe("a move to another organization during a waiting period", () => {
+  const OTHER_TEMPLATE = "We are still waiting for your answer about the invoice."
+
+  async function move(agent: TestBrowser, number: number) {
+    const moved = await agent.call("PUT", `/api/v1/tickets/${number}/organization`, { organizationId: other })
+    expect(moved.status, JSON.stringify(moved.json)).toBe(200)
+  }
+
+  /** The old reminder, cancelled by the move, and its job at its time does nothing. */
+  async function oldEnded(actionId: string) {
+    const [after] = await db().select().from(timedAction).where(eq(timedAction.id, actionId))
+    expect(after).toMatchObject({ state: "cancelled", reason: "move" })
+    const before = smtp2go.received.length
+    expect(await actions().run(actionId, 1)).toBe("stale")
+    expect(await outboxOfAction(actionId)).toEqual([])
+    expect(smtp2go.received.length).toBe(before)
+  }
+
+  it("ends the old reminder and starts a new one with the new organization's days and template", async () => {
+    const { admin, agent, t, started } = await waiting()
+    await setReminder(admin, OTHER_TEMPLATE, 5, other)
+    const old = await onlyReminder(t.id)
+    await move(agent, t.number)
+
+    // In the move's transaction: the old period ends, and a new one goes on at once for the same reply.
+    const periods = await periodsOf(t.id)
+    expect(periods).toMatchObject([
+      { endReason: "move", messageId: started },
+      { origin: "maane", messageId: started, endedAt: null, endReason: null },
+    ])
+    const [newest] = await remindersOf(t.id)
+    const fresh = newest?.action
+    expect(newest?.periodId).toBe(periods[1]?.id)
+    expect(fresh).toMatchObject({ kind: "reminder", state: "scheduled", version: 1 })
+    // The new organization's days, counted from the move, with its job queued for that same time.
+    expect(Math.abs((fresh?.dueAt.getTime() ?? 0) - (Date.now() + 5 * DAY))).toBeLessThan(60_000)
+    expect(await timedJobs(fresh?.id ?? "")).toEqual([{ version: 1, startAfter: fresh?.dueAt }])
+    expect((await view(agent, t.number)).reminder?.id).toBe(fresh?.id)
+    // The audit counts the scheduled replies the move cancelled, never the reminder.
+    const [audit] = await db()
+      .select({ details: auditLog.details })
+      .from(auditLog)
+      .where(and(eq(auditLog.action, "ticket.move"), eq(auditLog.entityId, t.id)))
+    expect(audit?.details).not.toHaveProperty("scheduledCancelled")
+    await oldEnded(old.id)
+
+    // At its time it goes as the new organization: its template, read then, from its address, under its name.
+    await setReminder(admin, `${OTHER_TEMPLATE} Thank you.`, 5, other)
+    expect(await actions().run(fresh?.id ?? "", 1)).toBe("handed")
+    const [made] = await outboxOfAction(fresh?.id ?? "")
+    expect(await sender().send(made?.messageId ?? "")).toBe("accepted")
+    const raw = smtp2go.received.map((entry) => entry.raw).find((entry) => entry.includes(made?.messageIdHeader ?? "-"))
+    const parsed = await simpleParser(raw ?? Buffer.alloc(0))
+    expect(parsed.from?.value).toEqual([{ address: OTHER, name: "Example Other" }])
+    expect(parsed.text).toContain(`${OTHER_TEMPLATE} Thank you.`)
+    expect(parsed.headers.get("auto-submitted")).toBe("auto-generated")
+  })
+
+  it("to an organization without a template: the old reminder ends and none is scheduled", async () => {
+    const { agent, t, started } = await waiting()
+    const old = await onlyReminder(t.id)
+    await move(agent, t.number)
+    // The waiting goes on under the new organization, with no reminder.
+    expect(await periodsOf(t.id)).toMatchObject([
+      { endReason: "move" },
+      { origin: "maane", messageId: started, endedAt: null },
+    ])
+    expect((await remindersOf(t.id)).map((row) => row.action.id)).toEqual([old.id])
+    expect((await view(agent, t.number)).reminder).toBeNull()
+    const jobs = await db().execute<{ n: number }>(
+      sql`select count(*)::int as n from pgboss.job where name = ${TIMED_ACTION}`,
+    )
+    expect(jobs.rows[0]?.n).toBe(1)
+    await oldEnded(old.id)
+  })
+
+  it("of an imported period: it only ends, and nothing is scheduled", async () => {
+    const { admin, agent, t, started } = await waiting()
+    await setReminder(admin, OTHER_TEMPLATE, 5, other)
+    const old = await onlyReminder(t.id)
+    await db().update(waitingPeriod).set({ origin: "import" }).where(eq(waitingPeriod.messageId, started))
+    await move(agent, t.number)
+    expect(await periodsOf(t.id)).toMatchObject([{ origin: "import", endReason: "move" }])
+    expect((await remindersOf(t.id)).map((row) => row.action.id)).toEqual([old.id])
+    await oldEnded(old.id)
   })
 })
 

@@ -64,7 +64,7 @@ import { linkViews } from "../links/service.ts"
 import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
 import { renderMailHtml } from "../mail/html.ts"
 import type { OrganizationScope } from "../organizations/scope.ts"
-import { Workflow } from "./workflow.ts"
+import { categoriesOf, moveTargets } from "./workflow.ts"
 
 /** The image types an inline part may be embedded as, by the type read from its content. */
 const INLINE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
@@ -422,7 +422,6 @@ export class Tickets {
       .where(and(eq(ticket.number, number), inScope(scope, ticket.organizationId)))
     if (!row) return null
     const t = row.ticket
-    const workflow = new Workflow(this.db)
 
     const messages = await this.db
       .select()
@@ -629,14 +628,14 @@ export class Tickets {
         supportAddress: t.supportAddress,
         createdAt: t.createdAt.toISOString(),
         lastActivityAt: t.lastActivityAt.toISOString(),
-        categories: await workflow.categoriesOf(t.id),
+        categories: await categoriesOf(this.db, t.id),
         snoozedUntil: snoozedUntil(t.snoozedUntil),
         snoozeOverdue: t.snoozedUntil !== null && t.snoozedUntil.getTime() <= Date.now(),
       },
       participants,
       links: links.map((link) => ({ number: link.number, reason: link.reason as LinkReason })),
       categories: await new Categories(this.db).refs(),
-      moveTargets: await workflow.moveTargets(scope, t.organizationId),
+      moveTargets: await moveTargets(this.db, scope, t.organizationId),
       messages: views,
       reminder: pending
         ? { id: pending.id, dueAt: pending.dueAt.toISOString(), state: pending.state as ActionState }

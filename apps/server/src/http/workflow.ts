@@ -55,7 +55,7 @@ function numberOf(c: Context<ApiEnv>): number {
 
 export function workflowRoutes(db: Db, jobs: JobQueue): Hono<ApiEnv> {
   const routes = new Hono<ApiEnv>()
-  const workflow = new Workflow(db)
+  const workflow = new Workflow(db, jobs)
   const snoozes = new Snoozes(db, jobs)
   const categories = new Categories(db)
   const scopeOf = (c: Context<ApiEnv>) => visibleOrganizations(db, c.get("user"))

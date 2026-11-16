@@ -10,6 +10,10 @@
 // holds the ticket locked: its reminder, if it has not gone to the send point, is cancelled with the same reason. The
 // reminder's job and the send point's claim check every ending again (checks.ts), after they locked the action.
 //
+// A move to another organization (plan 4.1) ends the period and, when Maane started it, starts a new one for the same
+// reply at once: its reminder is the new organization's, due its number of days from the move, its template read at
+// send time; none when the new organization has no template. An imported period only ends.
+//
 // Lock order: the ticket, then the reminder's action, then the period row. Kept free of sharp: the worker loads it.
 
 import type { PeriodEndReason } from "@maane/shared"
@@ -72,6 +76,39 @@ export async function startWaitingPeriod(
   queue: QueueReminder,
 ): Promise<{ periodId: string; actionId: string | null }> {
   await endWaitingPeriod(tx, ticketId, "agent_reply")
+  return openWaitingPeriod(tx, ticketId, messageId, queue)
+}
+
+/**
+ * Ends the ticket's open waiting period for a move, in the move's transaction, which holds the ticket locked: its
+ * reminder was the old organization's. Returns the reply that started it when Maane started it, for which the move
+ * then opens a new period (openWaitingPeriod) once it set the new organization; null for no period or an imported
+ * one, which never sends.
+ */
+export async function endWaitingPeriodForMove(
+  tx: Pick<Tx, "select" | "update">,
+  ticketId: string,
+): Promise<string | null> {
+  const [open] = await tx
+    .select({ origin: waitingPeriod.origin, messageId: waitingPeriod.messageId })
+    .from(waitingPeriod)
+    .where(and(eq(waitingPeriod.ticketId, ticketId), isNull(waitingPeriod.endedAt)))
+  if (!open) return null
+  await endWaitingPeriod(tx, ticketId, "move")
+  return open.origin === "maane" ? open.messageId : null
+}
+
+/**
+ * A new open period for the reply `messageId`, in the caller's transaction, which holds the ticket locked and has no
+ * open period: when the ticket's organization has a reminder template, its reminder is made, due its number of days
+ * from now by the database's clock, and its job queued for that same time.
+ */
+export async function openWaitingPeriod(
+  tx: Pick<Tx, "select" | "insert">,
+  ticketId: string,
+  messageId: string,
+  queue: QueueReminder,
+): Promise<{ periodId: string; actionId: string | null }> {
   const [settings] = await tx
     .select({ template: organization.reminderTemplate, days: organization.reminderDays })
     .from(ticket)
