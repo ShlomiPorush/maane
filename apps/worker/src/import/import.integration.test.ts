@@ -38,7 +38,7 @@ import { FileService } from "../files/service.ts"
 import { FileStore } from "../files/store.ts"
 import { MARKERS, type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
 import { AGENT, BRANDS, backupInto, HEBREW_BODY, HEBREW_SUBJECT, standInAccount } from "../testing/zendesk-archive.ts"
-import { batches, type ImportHooks, LINK_BATCH, ZendeskImport } from "./run.ts"
+import { batches, failureOf, type ImportHooks, LINK_BATCH, ZendeskImport } from "./run.ts"
 
 let clamd: StandInClamd
 beforeAll(async () => {
@@ -634,5 +634,27 @@ describe("the import's batches", () => {
     expect(batches([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]])
     expect(batches([], 2)).toEqual([])
     expect(LINK_BATCH * 3).toBeLessThan(65_535)
+  })
+
+  it("names the kind of error that stopped a ticket, never its text", () => {
+    const database = (code: string, constraint?: string) =>
+      Object.assign(new Error("Failed query"), {
+        cause: Object.assign(new Error("value (secret)"), { code, constraint }),
+      })
+    expect(failureOf(database("23505", "message_zendesk_key_unique"))).toBe("duplicate:message_zendesk_key_unique")
+    expect(failureOf(database("23503", "ticket_organization_id_organization_id_fk"))).toBe(
+      "reference:ticket_organization_id_organization_id_fk",
+    )
+    expect(failureOf(database("23514", "test_rule"))).toBe("rule:test_rule")
+    expect(failureOf(database("22001"))).toBe("value")
+    expect(failureOf(database("57014"))).toBe("other")
+    expect(failureOf(database("23514", "Not A Name"))).toBe("rule")
+    expect(failureOf(Object.assign(new Error("no file"), { code: "ENOENT", path: "/archive/raw/x.json" }))).toBe(
+      "archive",
+    )
+    expect(failureOf(new SyntaxError("Unexpected token"))).toBe("archive")
+    // A network error is not the archive's.
+    expect(failureOf(Object.assign(new Error("reset"), { code: "ECONNRESET" }))).toBe("other")
+    expect(failureOf(new Error("something else"))).toBe("other")
   })
 })

@@ -155,7 +155,15 @@ describe("the import's mapping", () => {
           source: { from: { address: "second@example.com" }, to: { address: "help@example.com" } },
         },
       }),
-    ).toMatchObject({ from: { address: "first@example.com" }, to: { address: "help@example.com" } })
+    ).toMatchObject({ from: { address: "first@example.com", name: null }, to: { address: "help@example.com" } })
+    // A sender is one pair: a name from metadata.via is never joined to an address from via.
+    expect(
+      emailOf({
+        id: 4,
+        metadata: { via: { channel: "email", source: { from: { name: "Only A Name" } } } },
+        via: { channel: "email", source: { from: { address: "other@example.com", name: "Other" } } },
+      }),
+    ).toEqual({ kind: "none" })
     // The example's web comment (empty from and to) recorded no identifiers in either place.
     expect(
       emailOf({

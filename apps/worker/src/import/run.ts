@@ -704,12 +704,13 @@ export function batches<T>(items: T[], size: number): T[][] {
 
 /**
  * What kind of error stopped a ticket, for its report row: the database's (by its SQLSTATE, with the constraint's name
- * when it named one) or the archive's. Never the error's text: it may hold the row's values.
+ * when it named one) or the archive's (a file-system error, which names its path, or JSON that does not parse). A
+ * network error (the scanner's, the database's) is `other`. Never the error's text: it may hold the row's values.
  */
 export function failureOf(error: unknown): string {
   let current: unknown = error
   for (let depth = 0; current && depth < 5; depth++) {
-    const facts = current as { code?: unknown; constraint?: unknown; cause?: unknown }
+    const facts = current as { code?: unknown; constraint?: unknown; path?: unknown; cause?: unknown }
     if (typeof facts.code === "string" && /^[0-9A-Z]{5}$/.test(facts.code)) {
       const code = facts.code
       const kind: ImportFailure =
@@ -725,7 +726,10 @@ export function failureOf(error: unknown): string {
       const constraint = typeof facts.constraint === "string" ? facts.constraint : ""
       return /^[a-z0-9_]{1,63}$/.test(constraint) ? `${kind}:${constraint}` : kind
     }
-    if ((typeof facts.code === "string" && /^E[A-Z]+$/.test(facts.code)) || current instanceof SyntaxError)
+    if (
+      (typeof facts.code === "string" && /^E[A-Z]+$/.test(facts.code) && typeof facts.path === "string") ||
+      current instanceof SyntaxError
+    )
       return "archive"
     current = facts.cause
   }

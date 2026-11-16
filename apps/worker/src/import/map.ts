@@ -171,8 +171,8 @@ const strings = (value: unknown): string[] =>
 
 /**
  * A comment's via objects, in the order the import reads them: `metadata.via` (where Zendesk's example response of
- * the comments keeps it), then the comment's own `via` (the field the reference lists). Each value is taken from the
- * first one that has it.
+ * the comments keeps it), then the comment's own `via` (the field the reference lists). The sender, the recipient,
+ * each list, and the channel are each taken whole from the first one that has them.
  */
 const viasOf = (comment: ZendeskFullComment): ZendeskVia[] =>
   [comment.metadata?.via, comment.via].filter((via): via is ZendeskVia => typeof via === "object" && via !== null)
@@ -209,16 +209,21 @@ export function emailOf(comment: ZendeskFullComment): EmailIdentifiers {
     strings(via.source?.from?.original_recipients).flatMap((value) => addressOf(value) ?? []),
   )
   const cc = firstList(vias, (via) => strings(via.source?.to?.email_ccs).flatMap((value) => addressOf(value) ?? []))
-  const fromAddress = first(vias, (via) => addressOf(via.source?.from?.address))
-  const fromName = first(vias, (via) => text(via.source?.from?.name))
-  const toAddress = first(vias, (via) => addressOf(via.source?.to?.address))
-  const toName = first(vias, (via) => text(via.source?.to?.name))
-  if (!messageId && !fromAddress && !toAddress && original.length === 0 && cc.length === 0) return { kind: "none" }
+  // A sender or a recipient as one pair (its address and name from the same via object), never mixed.
+  const party = (side: "from" | "to") =>
+    first(vias, (via) => {
+      const address = addressOf(via.source?.[side]?.address)
+      const name = text(via.source?.[side]?.name)
+      return address || name ? { address, name } : null
+    })
+  const from = party("from")
+  const to = party("to")
+  if (!messageId && !from?.address && !to?.address && original.length === 0 && cc.length === 0) return { kind: "none" }
   return {
     kind: "recorded",
     messageId,
-    from: fromAddress || fromName ? { address: fromAddress, name: fromName } : null,
-    to: toAddress || toName ? { address: toAddress, name: toName } : null,
+    from,
+    to,
     cc,
     originalRecipients: original,
   }
