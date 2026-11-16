@@ -1406,7 +1406,7 @@
     "title": "Automatic reminder",
     "goesAt": "Goes at",
     "going": "Going out",
-    "hint": "Maane sends the organization's reminder to the customer once if no answer comes by then. A customer reply, a new reply, a status change, a move, or a bounce stops it."
+    "hint": "Maane sends the organization's reminder to the customer once if no answer comes by then. A customer reply, a new reply, a status change, or a bounce stops it. A move to another organization starts it again with that organization's settings."
   },
   "scheduled": {
     "title": "Scheduled replies",
