@@ -17,7 +17,7 @@ const MappingBody = z.object({
 /** Cancel names the run the admin confirmed, so a stale dialog cannot cancel a newer run. */
 const CancelBody = z.object({ runId: z.string().max(100) })
 
-type Handler = (c:Context<ApiEnv>) => Promise<Response>
+type Handler = (c: Context<ApiEnv>) => Promise<Response>
 
 const admins =
   (handler: Handler): Handler =>
