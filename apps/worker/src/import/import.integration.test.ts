@@ -947,7 +947,10 @@ describe("the import's files", () => {
     const run = await h.run()
     expect(run.outcome).toEqual(DONE)
     const note = (await messagesOf(h, 1)).find((m) => m.zendeskKey === "side:9101")
-    const [part] = await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, String(photo.id)))
+    const [part] = await h.db
+      .select()
+      .from(messagePart)
+      .where(eq(messagePart.zendeskAttachmentId, String(photo.id)))
     expect([part?.messageId, part?.status, part?.fileName]).toEqual([note?.id, "clean", "photo.txt"])
     expect(await readFile(h.files.storedPath(part?.storedSha256 ?? ""))).toEqual(photo.content)
     // The file with no ID is never dropped silently: the report names it, and the count holds it.
