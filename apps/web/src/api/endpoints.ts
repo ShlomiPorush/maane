@@ -214,7 +214,8 @@ export const api = {
   saveImportMapping: (input: ImportMappingInput) => request<{ ok: true }>("PUT", "/admin/import/mapping", input),
   importRun: () => request<{ run: ImportRunView | null }>("GET", "/admin/import/run"),
   startImport: () => request<{ run: ImportRunView }>("POST", "/admin/import/start"),
-  cancelImport: () => request<{ run: ImportRunView | null }>("POST", "/admin/import/cancel"),
+  cancelImport: (runId: string) =>
+    request<{ run: ImportRunView | null; cancelled: boolean }>("POST", "/admin/import/cancel", { runId }),
   importReport: (runId: string, after: string | null) =>
     request<ImportReportPage>(
       "GET",

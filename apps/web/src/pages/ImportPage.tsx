@@ -349,11 +349,12 @@ function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: bool
   const resumable = run?.state === "running" && !run.jobActive
   const working = run?.state === "running" && !resumable
 
-  const act = async (kind: "start" | "cancel", call: () => Promise<unknown>, done: string, failed: string) => {
+  // `call` answers false when there was nothing to act on (the confirmed run had already ended).
+  const act = async (kind: "start" | "cancel", call: () => Promise<boolean>, done: string, failed: string) => {
     setBusy(kind)
     try {
-      await call()
-      showToast(t(done), "success")
+      if (await call()) showToast(t(done), "success")
+      else showToast(t("import.run.alreadyEnded"), "info")
     } catch (error) {
       showToast(t(failed, { reason: errorText(t, error) }), "error")
     } finally {
@@ -364,8 +365,20 @@ function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: bool
       setBusy(null)
     }
   }
-  const start = () => act("start", api.startImport, "import.run.started", "import.run.startFailed")
+  const start = () =>
+    act(
+      "start",
+      async () => {
+        await api.startImport()
+        return true
+      },
+      "import.run.started",
+      "import.run.startFailed",
+    )
   const cancel = async () => {
+    // The run the dialog asks about: a newer run started meanwhile is not cancelled by this answer.
+    const runId = run?.id
+    if (!runId) return
     const yes = await confirmDialog({
       title: t("import.run.cancelTitle"),
       message: t("import.run.cancelMessage"),
@@ -373,7 +386,13 @@ function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: bool
       cancelText: t("import.run.keep"),
       danger: true,
     })
-    if (yes) await act("cancel", api.cancelImport, "import.run.cancelled", "import.run.cancelFailed")
+    if (yes)
+      await act(
+        "cancel",
+        async () => (await api.cancelImport(runId)).cancelled,
+        "import.run.cancelled",
+        "import.run.cancelFailed",
+      )
   }
 
   return (

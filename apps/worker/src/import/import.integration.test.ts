@@ -154,8 +154,11 @@ const NO_QUEUE: JobQueue = {
   pending: async () => null,
   stop: async () => {},
 }
-const cancelOf = (h: Harness) => () =>
-  new Imports(h.db, NO_QUEUE, h.archive).cancel({ actor: SYSTEM, ipAddress: null }).then(() => undefined)
+/** Cancels the open run, by its id as the page sends it. */
+const cancelOf = (h: Harness) => async () => {
+  const [open] = await h.db.select({ id: importRun.id }).from(importRun).where(eq(importRun.state, "running"))
+  await new Imports(h.db, NO_QUEUE, h.archive).cancel(open?.id ?? "", { actor: SYSTEM, ipAddress: null })
+}
 /** Waits until a session of this database waits for a lock (a cancel waiting for a ticket's transaction). */
 async function lockWaited(h: Harness): Promise<void> {
   for (let tries = 0; tries < 400; tries++) {

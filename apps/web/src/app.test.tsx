@@ -3669,7 +3669,7 @@ describe("import from Zendesk", () => {
       "/api/v1/admin/import/run": () => ok({ run: done ? cancelled : working }),
       "/api/v1/admin/import/cancel": () => {
         done = true
-        return ok({ run: cancelled })
+        return ok({ run: cancelled, cancelled: true })
       },
       [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
     })
@@ -3686,10 +3686,50 @@ describe("import from Zendesk", () => {
     )
     await act(async () => confirm?.click())
     await vi.waitFor(() => expect(text()).toContain(he("import.run.reason.cancelled")))
-    expect(requests.filter((r) => r.method === "POST" && r.url === "/api/v1/admin/import/cancel")).toHaveLength(1)
+    const sent = requests.filter((r) => r.method === "POST" && r.url === "/api/v1/admin/import/cancel")
+    expect(sent.map((r) => JSON.parse(r.body ?? "{}"))).toEqual([{ runId: RUN }])
+    await vi.waitFor(() =>
+      expect(document.querySelector(".ui-toast-success")?.textContent).toContain(he("import.run.cancelled")),
+    )
+    expect(text()).not.toContain(he("import.run.alreadyEnded"))
     expect(text()).toContain(he("import.run.state.stopped"))
     expect(button(he("import.run.cancel"))).toBeUndefined()
     expect(button(he("import.run.start"))?.disabled).toBe(false)
+  })
+
+  it("says the run had already ended when a cancel finds it over, without claiming it cancelled anything", async () => {
+    const working = { ...run, state: "running", finishedAt: null, done: 2, jobActive: true }
+    const ended = { ...working, state: "done", reason: null, finishedAt: when, jobActive: false }
+    let done = false
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": () => page({ agentUserId: "u1", run: done ? ended : working }),
+      "/api/v1/admin/import/run": () => ok({ run: done ? ended : working }),
+      "/api/v1/admin/import/cancel": () => {
+        done = true
+        return ok({ run: ended, cancelled: false })
+      },
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
+    })
+    await vi.waitFor(() => expect(button(he("import.run.cancel"))?.disabled).toBe(false))
+    await act(async () => button(he("import.run.cancel"))?.click())
+    const question = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[role=alertdialog]")
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    const confirm = Array.from(question.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === he("import.run.cancel"),
+    )
+    await act(async () => confirm?.click())
+    await vi.waitFor(() =>
+      expect(document.querySelector(".ui-toast-info")?.textContent).toContain(he("import.run.alreadyEnded")),
+    )
+    expect(document.querySelector(".ui-toast-success")).toBeNull()
+    expect(text()).not.toContain(he("import.run.cancelled"))
+    expect(requests.filter((r) => r.method === "POST" && r.url === "/api/v1/admin/import/cancel")).toHaveLength(1)
+    expect(text()).toContain(he("import.run.state.done"))
   })
 
   it("says the import is closed for good once Maane went live", async () => {

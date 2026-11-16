@@ -14,7 +14,10 @@ const MappingBody = z.object({
   agentUserId: z.string().min(1).max(200).nullable(),
 })
 
-type Handler = (c: Context<ApiEnv>) => Promise<Response>
+/** Cancel names the run the admin confirmed, so a stale dialog cannot cancel a newer run. */
+const CancelBody = z.object({ runId: z.string().max(100) })
+
+type Handler =(c: Context<ApiEnv>) => Promise<Response>
 
 const admins =
   (handler: Handler): Handler =>
@@ -58,9 +61,12 @@ export function importRoutes(imports: Imports): Hono<ApiEnv> {
 
   routes.post(
     "/cancel",
-    admins(async (c) =>
-      c.json({ run: await imports.cancel({ actor: c.get("actor"), ipAddress: clientIp(c.req.raw) }) }),
-    ),
+    admins(async (c) => {
+      const parsed = CancelBody.safeParse(await c.req.json().catch(() => null))
+      if (!parsed.success) throw new Refusal("request_invalid", 400)
+      const acting = { actor: c.get("actor"), ipAddress: clientIp(c.req.raw) }
+      return c.json(await imports.cancel(parsed.data.runId, acting))
+    }),
   )
 
   routes.get(

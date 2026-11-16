@@ -353,8 +353,14 @@ describe("imported tickets", () => {
     const started = await admin.b.call("POST", "/api/v1/admin/import/start")
     const id = started.json.run.id as string
     // Its job waits (no worker here). Cancel ends the run, audited; the job then does nothing.
-    const cancelled = await admin.b.call("POST", "/api/v1/admin/import/cancel")
+    // Cancel names the run it means; without one, it is refused.
+    expect((await admin.b.call("POST", "/api/v1/admin/import/cancel")).json.error).toBe("request_invalid")
+    expect((await admin.b.call("POST", "/api/v1/admin/import/cancel", { runId: "x" })).json.error).toBe(
+      "request_invalid",
+    )
+    const cancelled = await admin.b.call("POST", "/api/v1/admin/import/cancel", { runId: id })
     expect(cancelled.status).toBe(200)
+    expect(cancelled.json.cancelled).toBe(true)
     expect(cancelled.json.run).toMatchObject({ id, state: "stopped", reason: "cancelled", jobActive: false })
     expect(await importer.run(id)).toEqual({ skipped: true })
     expect(await database.db.select().from(ticket)).toEqual([])
@@ -369,17 +375,28 @@ describe("imported tickets", () => {
     )
     const second = (await admin.b.call("POST", "/api/v1/admin/import/start")).json.run.id as string
     await expect(importer.run(second)).rejects.toThrow()
-    expect((await admin.b.call("POST", "/api/v1/admin/import/cancel")).json.run).toMatchObject({
-      id: second,
-      state: "stopped",
-      reason: "cancelled",
-      done: 2,
+    // A stale dialog for the first run, answered now, leaves the open second run alone.
+    expect((await admin.b.call("POST", "/api/v1/admin/import/cancel", { runId: id })).json).toMatchObject({
+      cancelled: false,
+      run: { id: second, state: "running" },
+    })
+    expect((await admin.b.call("POST", "/api/v1/admin/import/cancel", { runId: second })).json).toMatchObject({
+      cancelled: true,
+      run: { id: second, state: "stopped", reason: "cancelled", done: 2 },
     })
     await database.db.execute(sql`alter table ticket drop constraint test_refuses_three`)
     // With nothing open, cancel changes nothing, and the next start is a new run over the whole archive.
-    expect((await admin.b.call("POST", "/api/v1/admin/import/cancel")).json.run).toMatchObject({ id: second })
+    expect((await admin.b.call("POST", "/api/v1/admin/import/cancel", { runId: second })).json).toMatchObject({
+      cancelled: false,
+      run: { id: second },
+    })
     const third = (await admin.b.call("POST", "/api/v1/admin/import/start")).json.run.id as string
     expect(third).not.toBe(second)
+    // A stale dialog for the second run does not cancel the third.
+    expect((await admin.b.call("POST", "/api/v1/admin/import/cancel", { runId: second })).json).toMatchObject({
+      cancelled: false,
+      run: { id: third, state: "running" },
+    })
     expect(await importer.run(third)).toEqual({ state: "done", reason: null })
     expect((await admin.b.call("GET", "/api/v1/admin/import/run")).json.run).toMatchObject({ id: third, done: 7 })
     expect(await database.db.select().from(auditLog).where(eq(auditLog.action, "import.cancel"))).toHaveLength(2)

@@ -293,19 +293,21 @@ export class Imports {
   }
 
   /**
-   * Cancels the open run, if any: it ends as stopped (`cancelled`), what it imported stays, and the next start is a
-   * full pass. Audited. The update waits for a transaction of the run that holds its row (each one locks it first and
-   * goes on only while it is running), so once this returns no job of the run writes again; a job still queued for it
-   * finds it ended and does nothing.
+   * Cancels the run the admin confirmed, if it is still open: it ends as stopped (`cancelled`), what it imported stays,
+   * and the next start is a full pass. Audited. `cancelled` is false when that run had already ended (a newer run is
+   * left alone). The update waits for a transaction of the run that holds its row (each one locks it first and goes on
+   * only while it is running), so once this returns no job of the run writes again; a job still queued for it finds
+   * it ended and does nothing.
    */
-  async cancel(acting: Acting): Promise<ImportRunView | null> {
-    await this.db.transaction(async (tx) => {
+  async cancel(runId: string, acting: Acting): Promise<{ run: ImportRunView | null; cancelled: boolean }> {
+    if (!UUID.test(runId)) throw new Refusal("request_invalid", 400)
+    const cancelled = await this.db.transaction(async (tx) => {
       const [run] = await tx
         .update(importRun)
         .set({ state: "stopped", reason: "cancelled", failure: null, finishedAt: sql`now()` })
-        .where(eq(importRun.state, "running"))
+        .where(and(eq(importRun.id, runId), eq(importRun.state, "running")))
         .returning()
-      if (!run) return
+      if (!run) return false
       await writeAudit(tx, acting.actor, {
         action: "import.cancel",
         entityType: "import_run",
@@ -313,8 +315,9 @@ export class Imports {
         details: { tickets: run.done, total: run.total, counts: run.counts },
         ipAddress: acting.ipAddress,
       })
+      return true
     })
-    return this.latest()
+    return { run: await this.latest(), cancelled }
   }
 
   /** A run's report, by a cursor after the last row shown. */
