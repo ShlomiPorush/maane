@@ -125,6 +125,15 @@ export function standInAccount(): StandInZendesk {
   })
   if (ticket2?.comments[0]) ticket2.comments[0].extra = { author_id: 3, created_at: at(11) }
   record(3, { brand_id: BRANDS.mapped, requester_id: 2, tags: ["billing"], created_at: at(20) })
+  // A walk-in customer without an address, whose name holds a NUL character, and a file name with one.
+  zendesk.users.push({ id: 4, name: `Walk-in${String.fromCharCode(0)} Customer`, email: null, role: "end-user" })
+  const ticket3 = zendesk.tickets.get(3)
+  const lost = ticket3?.comments[0]
+  if (lost) {
+    lost.extra = { author_id: 4, created_at: at(21) }
+    const file = lost.files[0]
+    if (file) file.name = `lost${String.fromCharCode(0)}.txt`
+  }
   record(4, { brand_id: BRANDS.mapped, requester_id: 2 })
   record(5, { brand_id: BRANDS.mapped, requester_id: 2 })
   zendesk.addTicket(6, "open", [{ id: 61, public: true, body: "Outlet question", files: [] }], false, {

@@ -36,7 +36,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { clamdScanner } from "../files/scanner.ts"
 import { FileService } from "../files/service.ts"
 import { FileStore } from "../files/store.ts"
-import { type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
+import { MARKERS, type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
 import { AGENT, BRANDS, backupInto, HEBREW_BODY, HEBREW_SUBJECT, standInAccount } from "../testing/zendesk-archive.ts"
 import { type ImportHooks, ZendeskImport } from "./run.ts"
 
@@ -160,6 +160,8 @@ const participantsOf = async (h: Harness, number: number) => {
     .map((row) => row.address)
     .sort()
 }
+const REPLACEMENT = String.fromCodePoint(0xfffd)
+
 const nextNumber = async (h: Harness) => {
   const result = await h.db.execute(sql`select nextval('ticket_number_seq') as n`)
   return Number((result.rows[0] as { n: string }).n)
@@ -244,6 +246,11 @@ describe("the import from the Zendesk archive", () => {
     const follow = (await messagesOf(h, 7))[0]
     expect(follow?.textBody).toBe(`Follow-up${String.fromCodePoint(0xfffd)} question`)
     expect(follow?.reviewFlags).toEqual(["invalid_characters"])
+    // An author without an address keeps the name (its NUL replaced, and flagged) and gets no address.
+    const walkIn = (await messagesOf(h, 3))[0]
+    expect(walkIn?.fromAddress).toBeNull()
+    expect(walkIn?.fromName).toBe(`Walk-in${REPLACEMENT} Customer`)
+    expect(walkIn?.reviewFlags).toContain("invalid_characters")
 
     // Merged and follow-up tickets are links between the imported tickets.
     const links = await h.db.select().from(ticketLink)
@@ -259,7 +266,7 @@ describe("the import from the Zendesk archive", () => {
     expect(await reportOf(h, first.id)).toEqual([
       "2:blocked_content:comment:22",
       "2:file_failed:big.zip",
-      "3:file_failed:lost.txt",
+      `3:file_failed:lost${REPLACEMENT}.txt`,
       "4:deleted_in_zendesk:",
       "5:deleted_in_zendesk:",
       "6:unmapped_brand:Example Outlet",
@@ -447,6 +454,28 @@ describe("the import from the Zendesk archive", () => {
     const second = await h.run()
     expect(await reportOf(h, second.id)).not.toContain("6:unmapped_brand:Example Outlet")
     expect((await ticketOf(h, 6))?.organizationId).toBe(h.org)
+  })
+
+  it("keeps a ticket's own text out when the scanner blocks it, with one block event", async () => {
+    const h = await start()
+    h.zendesk.change(7, (t) => {
+      t.record = { ...t.record, subject: `Help ${MARKERS.infected}`, tags: ["vip"] }
+    })
+    await h.backup()
+    const first = await h.run()
+    expect(await reportOf(h, first.id)).toContain("7:blocked_content:ticket")
+    const seven = await ticketOf(h, 7)
+    expect(seven?.subject).toBeNull()
+    expect(seven?.zendesk).toMatchObject({ blocked: true, tags: [], fields: [] })
+    // Its participants keep their addresses, not their names.
+    const people = await h.db
+      .select()
+      .from(ticketParticipant)
+      .where(eq(ticketParticipant.ticketId, seven?.id ?? ""))
+    expect(people.map((person) => [person.address, person.name])).toEqual([["user2@example.com", null]])
+    await h.run()
+    const events = await h.db.select().from(auditLog).where(eq(auditLog.action, "ticket.content_blocked"))
+    expect(events).toHaveLength(1)
   })
 
   it("leaves a ticket Maane already numbered and reports it", async () => {

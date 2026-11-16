@@ -69,6 +69,7 @@ export const AUDIT_ACTIONS = [
   "ticket.move",
   "ticket.snooze",
   "ticket.unsnooze",
+  "ticket.content_blocked",
   "category.create",
   "category.rename",
   "category.delete",

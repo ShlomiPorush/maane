@@ -1061,7 +1061,8 @@
         "categories": "Ticket categories changed",
         "move": "Ticket moved to another organization",
         "snooze": "Ticket snoozed",
-        "unsnooze": "Snooze ended"
+        "unsnooze": "Snooze ended",
+        "content_blocked": "Imported ticket text blocked"
       },
       "category": {
         "create": "Category added",

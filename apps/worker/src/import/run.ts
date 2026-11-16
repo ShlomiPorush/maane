@@ -31,7 +31,7 @@ import {
   zendeskImport,
   zendeskTagMap,
 } from "@maane/server/db/schema"
-import type { ImportedTicketSource } from "@maane/server/imports/source"
+import type { ImportedMessageSource, ImportedTicketSource } from "@maane/server/imports/source"
 import { importWindow } from "@maane/server/imports/window"
 import { errorFacts, log } from "@maane/server/log"
 import {
@@ -316,7 +316,9 @@ export class ZendeskImport {
       const counts: Partial<ImportCounts> = {}
       const done = async (outcome: "written" | "skipped") => {
         if (reports.length > 0)
-          await tx.insert(importReport).values(reports.map((report) => ({ runId, zendeskId, ...report })))
+          await tx
+            .insert(importReport)
+            .values(wellFormed(reports).value.map((report) => ({ runId, zendeskId, ...report })))
         if (outcome === "skipped") counts.skipped = 1
         await addCounts(tx, runId, counts)
         await tx
@@ -338,7 +340,7 @@ export class ZendeskImport {
         return done("skipped")
       }
       const [existing] = await tx
-        .select({ id: ticket.id })
+        .select({ id: ticket.id, zendesk: ticket.zendesk })
         .from(ticket)
         .where(eq(ticket.zendeskId, zendeskId))
         .for("update")
@@ -363,9 +365,13 @@ export class ZendeskImport {
       }
       // The ticket's own texts are stored only when their scan allows it (the header block's rule).
       const ticketOk = storable(planned.ticketScan)
+      let people = participantsOf(record, context.users)
       if (!ticketOk) {
         source.fields = []
         source.tags = []
+        source.followers = source.followers.map((follower) => ({ ...follower, name: null }))
+        source.blocked = true
+        people = people.map((person) => ({ ...person, name: null }))
         reports.push({ reason: "blocked_content", detail: "ticket" })
       }
       const fixed = wellFormed({ subject: ticketOk ? (record.subject ?? null) : null, source }).value
@@ -380,6 +386,7 @@ export class ZendeskImport {
         zendesk: fixed.source,
       }
       let ticketId: string
+      const blockedBefore = (existing?.zendesk as ImportedTicketSource | null | undefined)?.blocked === true
       if (existing) {
         await tx.update(ticket).set(columns).where(eq(ticket.id, existing.id))
         ticketId = existing.id
@@ -391,10 +398,18 @@ export class ZendeskImport {
         if (!made) throw new Error("the ticket was not written")
         ticketId = made.id
       }
+      // The block event of the ticket's own texts, once (as a message's fields have theirs).
+      if (!ticketOk && !blockedBefore)
+        await writeAudit(tx, SYSTEM, {
+          action: "ticket.content_blocked",
+          entityType: "ticket",
+          entityId: ticketId,
+          details: { ticket: zendeskId, reason: planned.ticketScan?.status, signature: planned.ticketScan?.signature },
+        })
 
       // Participants (the requester and the CCs) and categories (from the tag mapping) are the source's.
       await tx.delete(ticketParticipant).where(eq(ticketParticipant.ticketId, ticketId))
-      const people = wellFormed(participantsOf(record, context.users)).value
+      people = wellFormed(people).value
       if (people.length > 0)
         await tx.insert(ticketParticipant).values(people.map((person) => ({ ticketId, ...person })))
       await tx.delete(ticketCategory).where(eq(ticketCategory.ticketId, ticketId))
@@ -431,7 +446,7 @@ export class ZendeskImport {
         const blocked = Object.values(item.scans).some((scan) => refused(scan))
         if (blocked) flags.push("blocked_content")
         const headersOk = storable(item.scans.headers)
-        const values = {
+        const raw = {
           direction: item.direction,
           ticketId,
           receivedAt: item.at,
@@ -440,7 +455,8 @@ export class ZendeskImport {
           processedAt: new Date(),
           content: "parsed",
           fromAddress: item.from?.address ?? null,
-          fromName: headersOk ? (item.from?.name ?? null) : null,
+          // An author without an address keeps the name, and nothing is invented for the address.
+          fromName: headersOk ? (item.from?.name ?? (item.direction === "in" ? item.source.author.name : null)) : null,
           toAddresses: item.to.map((entry) => ({ address: entry.address, name: headersOk ? entry.name : null })),
           ccAddresses: item.cc,
           subject: headersOk ? (item.source.sideConversation?.subject ?? null) : null,
@@ -449,8 +465,12 @@ export class ZendeskImport {
           fieldScans: item.scans,
           reviewFlags: flags,
           authorUserId: item.direction === "in" ? null : context.agentUserId,
-          zendesk: headersOk ? item.source : { ...item.source, author: { ...item.source.author, name: null } },
+          zendesk: headersOk ? item.source : withoutNames(item.source),
         }
+        // Every string of the row well formed, as intake's: a name or an address may hold U+0000 too.
+        const clean = wellFormed(raw)
+        if (clean.changed && !flags.includes("invalid_characters")) flags.push("invalid_characters")
+        const values = { ...clean.value, reviewFlags: flags }
         const [row] = await tx
           .insert(message)
           .values({ ...values, zendeskKey: item.key })
@@ -551,12 +571,38 @@ export class ZendeskImport {
   }
 }
 
-/** The ticket's own texts the scanner reads: its subject, its fields' values, and its tags, one per line. */
+/**
+ * An imported comment's source without the names the header block holds, when its scan refused that block: the
+ * author's, the files', the side conversation's subject, and the email's names.
+ */
+function withoutNames(source: ImportedMessageSource): ImportedMessageSource {
+  return {
+    ...source,
+    author: { ...source.author, name: null },
+    sideConversation: source.sideConversation ? { ...source.sideConversation, subject: null } : null,
+    files: source.files.map((file) => ({ ...file, name: null })),
+    email:
+      source.email.kind === "recorded"
+        ? {
+            ...source.email,
+            from: source.email.from ? { ...source.email.from, name: null } : null,
+            to: source.email.to ? { ...source.email.to, name: null } : null,
+          }
+        : source.email,
+  }
+}
+
+/**
+ * The ticket's own texts the scanner reads, one per line: its subject, its fields' names and values, its tags, and the
+ * names of its participants and followers.
+ */
 function ticketTexts(record: ZendeskTicketRecord, context: Context): Partial<Record<TextField, string>> {
   const values = [
     record.subject ?? "",
     ...fieldsOf(record, context.fields).flatMap((field) => [field.name, field.value]),
     ...tagsOf(record),
+    ...participantsOf(record, context.users).map((person) => person.name ?? ""),
+    ...followersOf(record, context.users).map((follower) => follower.name ?? ""),
   ]
   const block = wellFormed(values.filter((value) => value !== "").join("\n")).value
   return block ? { headers: block } : {}

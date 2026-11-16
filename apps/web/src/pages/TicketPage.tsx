@@ -345,10 +345,14 @@ function MessageCard({
             <span className="ui-muted">{t("ticket.imported.author", { name: message.imported.authorName })}</span>
           ) : null}
           {message.reminder && organizationName ? <bdi dir="auto">{organizationName}</bdi> : null}
-          {/* An agent's reply imported from Zendesk has no sender address Zendesk recorded: its author is shown. */}
+          {/* An imported comment without a recorded address shows its Zendesk author's name, never an unknown sender. */}
           {message.direction === "note" ? null : message.from ? (
             <AddressLine value={message.from} />
-          ) : message.imported && message.direction === "out" ? null : (
+          ) : message.imported ? (
+            message.direction === "in" && message.imported.authorName ? (
+              <bdi dir="auto">{message.imported.authorName}</bdi>
+            ) : null
+          ) : (
             <Sender sender={null} />
           )}
           {message.reviewFlags.map((flag) => (

@@ -261,9 +261,13 @@ export function commentMessage(
     cc,
     text: text(comment.plain_body) ?? text(comment.body),
     html: text(comment.html_body),
-    headers: [authorName, from?.name ?? null, ...files.map((file) => file.name)].filter(
-      (value): value is string => value !== null,
-    ),
+    headers: [
+      authorName,
+      from?.name ?? null,
+      ...to.map((entry) => entry.name),
+      ...(email.kind === "recorded" ? [email.from?.name ?? null, email.to?.name ?? null] : []),
+      ...files.map((file) => file.name),
+    ].filter((value): value is string => value !== null),
     source: {
       zendeskTicketId: ticketId,
       commentId: String(comment.id),

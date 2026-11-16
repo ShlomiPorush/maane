@@ -17,6 +17,8 @@ export interface ImportedTicketSource {
   /** The Zendesk status as recorded. */
   status: string
   updatedAt: string
+  /** The scanner refused the ticket's own texts: its subject, fields, tags, and names were not stored. */
+  blocked?: boolean
 }
 
 /** The email identifiers Zendesk recorded for a comment, or the explicit mark that it recorded none. */
