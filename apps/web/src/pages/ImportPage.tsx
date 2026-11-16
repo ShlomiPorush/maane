@@ -404,7 +404,9 @@ function RunView({ run }: { run: ImportRunView }) {
       {run.reason ? (
         <Banner tone={run.state === "running" ? "warn" : "fail"} title={t(`import.run.reason.${run.reason}`)} />
       ) : null}
-      {run.state === "running" && !run.jobActive ? <p className="ui-hint">{t("import.run.waiting")}</p> : null}
+      {run.state === "running" && !run.jobActive ? (
+        <p className="ui-hint ui-import-hint">{t("import.run.waiting")}</p>
+      ) : null}
       {run.problems.length > 0 ? (
         <ul className="ui-import-problems" aria-label={t("import.run.problems")}>
           {run.problems.map((problem) => (
