@@ -6,6 +6,7 @@ All notable changes to Maane. The format follows [Keep a Changelog](https://keep
 
 ### Added
 
+- Import from Zendesk (phase 5.1): an admin page that reads the phase 0 archive from a read-only mount (`ZENDESK_ARCHIVE_DIR`), maps each brand to an organization and each tag to a category, attributes Zendesk agents' comments to a chosen Maane user, runs the import as one worker job, and pages its report. Tickets keep their Zendesk numbers, and new tickets continue right after the highest one. Comments, internal notes, side conversations, participants, merged and follow-up links, custom fields, and tags are imported through intake's content policy, with no notification, reopen, or reminder. Imported tickets are read-only until Maane first goes live, which closes the import for good. Files follow in the next step.
 - Sign-in: local accounts with a username, a password, and mandatory two-factor authentication. The first admin is created on a setup screen that stays open for 5 minutes after the server starts, while no user exists. Admins create users and set their role (admin or agent).
 - Settings the admin manages, stored encrypted where secret; an environment variable can set and lock a field.
 - An audit log of sign-ins, setting changes, and user administration.

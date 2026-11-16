@@ -97,7 +97,7 @@ Three files sit beside `docker-compose.yml`:
 
 | File | Read by | Holds |
 |---|---|---|
-| `.env` | Compose only, to fill in `docker-compose.yml`; no container receives it | `VERSION`, `DOMAIN`, and optionally `LINK_DOMAIN` and `GEOIP_DIR`. No secret. |
+| `.env` | Compose only, to fill in `docker-compose.yml`; no container receives it | `VERSION`, `DOMAIN`, and optionally `LINK_DOMAIN`, `GEOIP_DIR`, and `ZENDESK_ARCHIVE_DIR`. No secret. |
 | `postgres.env` | The `postgres` service only | The database user, name, and password |
 | `app.env` | `server` and `worker` | `DATABASE_URL` with the same password, `MAANE_AUTH_SECRETS`, `MAANE_SETTINGS_KEYS`, `MAANE_TRUSTED_PROXIES`, and the VAPID key pair of browser notifications ([its own block](#browser-notification-keys-once)) |
 
@@ -107,7 +107,7 @@ The block fills in:
 
 - `POSTGRES_PASSWORD` in `postgres.env`, and the same value in `app.env`'s `DATABASE_URL`: 32 random bytes as hex. Hex keeps the URL valid, and the server refuses a password that is not random hex.
 - `MAANE_AUTH_SECRETS` and `MAANE_SETTINGS_KEYS`: `1:` and 32 random bytes as hex each, different from each other and from the password.
-- `VERSION` and `DOMAIN` in `.env`. `LINK_DOMAIN` and `GEOIP_DIR` stay empty; set them as [Link tracking](#link-tracking) describes.
+- `VERSION` and `DOMAIN` in `.env`. `LINK_DOMAIN`, `GEOIP_DIR`, and `ZENDESK_ARCHIVE_DIR` stay empty; set them as [Link tracking](#link-tracking) and [Import from Zendesk](#import-from-zendesk) describe.
 - `MAANE_TRUSTED_PROXIES`: the subnets of the `traefik` network.
 
 It refuses, and leaves no file of its own, when any of the three files exists, when a contract is missing or not as expected, when a value cannot be generated or read, or when `DOMAIN` is still the example. The files are readable by you only (mode 600). It prints no secret. It publishes the three files only when none exists; if another run published one meanwhile, it removes the ones it published itself and stops.
@@ -363,6 +363,24 @@ cd "$HOME/maane" && docker compose exec -T server ls -l /geoip
 
 **The client address** of a click and of the rate limits (60 requests a minute per address over both routes) comes from `X-Forwarded-For` only when the request came from one of `MAANE_TRUSTED_PROXIES`; set it to the subnets of the `traefik` network as section 3 does. Without it every click records Traefik's own address.
 
+### Import from Zendesk
+
+Admin, Import brings the history of the phase 0 archive ([zendesk-backup.md](zendesk-backup.md)) into Maane, before Maane first goes live. It reads the archive and never calls Zendesk, so it needs no token. `docker-compose.yml` mounts the folder `ZENDESK_ARCHIVE_DIR` from `.env` (default `./zendesk-archive` next to it) read only at `/zendesk-archive` in `server` (the page shows the archive's brands, tags, and state) and in `worker` (the import reads it). Maane never writes to it. Set the folder:
+
+```bash
+cd "$HOME/maane" && grep -E '^ZENDESK_ARCHIVE_DIR=' .env
+```
+
+When it prints nothing or `ZENDESK_ARCHIVE_DIR=`, add the archive's folder to `.env` (for example `ZENDESK_ARCHIVE_DIR=/srv/zendesk-archive`, the folder that holds `archive.json`), then `docker compose up -d`. The folder must be readable by UID 1000. Check what the worker sees:
+
+```bash
+cd "$HOME/maane" && docker compose exec -T worker ls -l /zendesk-archive/archive.json /zendesk-archive/state.json
+```
+
+Then, on the Import page: map each brand to an organization (a brand without one is not imported), map the tags you want to categories (each ticket keeps its tags as they are), choose the Maane user that Zendesk agents' comments are written by, save, and start. A run refuses, and says why, while a backup holds the archive's lock, when the archive fails the strict check of `zendesk-backup check`, or when it comes from another Zendesk account than earlier imports. A backup that runs during an import stops it; start again afterwards, and the run goes over every ticket. Run the import again after each new backup: it updates the same tickets and adds no duplicate.
+
+The import is open only while intake listens and Maane has never gone live. The first switch of the intake mode to live closes it for good, and that switch is refused while a run is open. Until then imported tickets are read-only. After each run, new Maane tickets continue right after the highest imported number.
+
 ## 5. Back up
 
 Your backup must hold:
@@ -371,7 +389,7 @@ Your backup must hold:
 |---|---|---|
 | The database | `./postgres-data`, copied while the stack is stopped, or a dump (below) | All of Maane's data: users, settings, the audit log, the job queue, and each device's notification subscription |
 | `app.env` and `postgres.env` | `~/maane/app.env`, `~/maane/postgres.env` | `MAANE_AUTH_SECRETS` decrypts every user's two-factor secret and backup codes: without it nobody can sign in after a restore. `MAANE_SETTINGS_KEYS` decrypts the secrets stored in Settings. The database password opens the database. Keep every key version you ever used. |
-| `.env` | `~/maane/.env` | `VERSION`, `DOMAIN`, `LINK_DOMAIN`, and `GEOIP_DIR`; no secret |
+| `.env` | `~/maane/.env` | `VERSION`, `DOMAIN`, `LINK_DOMAIN`, `GEOIP_DIR`, and `ZENDESK_ARCHIVE_DIR`; no secret |
 | `docker-compose.yml` | `~/maane/docker-compose.yml` | Your copy, with any label you changed |
 | Attachments | `./data` | Attachments and inline images are stored as files, named by their SHA-256, not in the database. Copy it after the dump: a dump taken after the copy of `./data` can name a file the copy lacks. |
 | The VAPID key pair | `app.env` (`MAANE_VAPID_PUBLIC_KEY`, `MAANE_VAPID_PRIVATE_KEY`) | Every device subscribed with it. A restore without it starts only with a new pair, and then every user must turn notifications on again on each device. |

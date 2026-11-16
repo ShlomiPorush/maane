@@ -1,7 +1,8 @@
 # Production deployment. Runs the image the release workflow publishes to GHCR and ClamAV's published image; nothing is
 # built here. Behind Traefik on the external "traefik" network, so no port is published. Three files sit next to this
 # one, as docs/deployment.md describes; none is ever committed:
-#   .env          VERSION, DOMAIN, LINK_DOMAIN, and GEOIP_DIR, the only values Compose interpolates; none is a secret
+#   .env          VERSION, DOMAIN, LINK_DOMAIN, GEOIP_DIR, and ZENDESK_ARCHIVE_DIR, the only values Compose
+#                 interpolates; none is a secret
 #                 (contract: .env.example).
 #   postgres.env  PostgreSQL's own variables, read only by postgres (contract: docker/env/postgres.env.example).
 #   app.env       the server's and the worker's secrets and overrides (contract: docker/env/app.env.example).
@@ -45,6 +46,8 @@ services:
       - ./data:/data
       # Your updater's folder of GeoLite2-City.mmdb and GeoLite2-ASN.mmdb (GEOIP_DIR in .env), never written by Maane.
       - ${GEOIP_DIR:-./geoip}:/geoip:ro
+      # The Zendesk backup archive (ZENDESK_ARCHIVE_DIR in .env), read only: the import page shows it (plan 5.1).
+      - ${ZENDESK_ARCHIVE_DIR:-./zendesk-archive}:/zendesk-archive:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,6 +80,10 @@ services:
   worker:
     <<: *app
     command: ["node", "dist/worker/index.js"]
+    volumes:
+      - ./data:/data
+      # The Zendesk backup archive, read only: the import reads it (plan 5.1); nothing writes it.
+      - ${ZENDESK_ARCHIVE_DIR:-./zendesk-archive}:/zendesk-archive:ro
     # The server runs the migrations; the worker starts once the server is healthy.
     depends_on:
       server:
