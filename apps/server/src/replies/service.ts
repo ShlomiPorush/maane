@@ -61,6 +61,7 @@ import { linkBase, ReplyLinks } from "../links/service.ts"
 import { contentIdsIn, sanitizeMailHtml } from "../mail/html.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
+import { reminderMayGoAgain } from "../reminders/checks.ts"
 import { endWaitingPeriod, startWaitingPeriod } from "../reminders/periods.ts"
 import type { Settings } from "../settings/service.ts"
 import { wellFormedText } from "../text.ts"
@@ -862,12 +863,12 @@ export class Replies {
       .for("update", { of: outbox })
     if (!row || !inScope(scope, row.organizationId)) throw new Refusal("not_found", 404)
     const [held] = await tx
-      .select({ organizationId: ticket.organizationId })
+      .select({ organizationId: ticket.organizationId, status: ticket.status })
       .from(ticket)
       .where(eq(ticket.id, row.ticketId))
       .for("key share")
     if (!held || !inScope(scope, held.organizationId)) throw new Refusal("not_found", 404)
-    return { ...row, organizationId: held.organizationId }
+    return { ...row, organizationId: held.organizationId, status: held.status as TicketStatus }
   }
 
   /**
@@ -881,11 +882,15 @@ export class Replies {
       if (row.state !== "unknown" && row.state !== "failed") throw new Refusal("reply_not_retryable", 409)
       // A scheduled reply's message goes again only once its action passed the send point's check (plan 4.2): one that
       // a customer reply, a move, or a failed check ended before it went out is never sent by Send again.
-      // An automatic reminder (plan 4.3) never goes again: its waiting period may have ended since.
+      // An automatic reminder (plan 4.3) goes again only when no provider accepted it (never with an unknown fate) and
+      // its waiting period still holds, as the claim checks it (the claim of the new attempt checks it once more).
       if (row.actionId) {
         const action = await lockAction(tx, row.actionId)
-        if (action?.kind !== "reply" || !actionPassed(action, row.actionVersion))
-          throw new Refusal("reply_not_retryable", 409)
+        const allowed =
+          action?.kind === "reminder"
+            ? await reminderMayGoAgain(tx, row, action, { id: row.ticketId, status: row.status })
+            : action?.kind === "reply" && actionPassed(action, row.actionVersion)
+        if (!allowed) throw new Refusal("reply_not_retryable", 409)
       }
       await tx
         .update(outboxRecipient)

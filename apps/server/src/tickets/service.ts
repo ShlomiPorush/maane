@@ -64,6 +64,7 @@ import { linkViews } from "../links/service.ts"
 import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
 import { renderMailHtml } from "../mail/html.ts"
 import type { OrganizationScope } from "../organizations/scope.ts"
+import { reminderMayGoAgain } from "../reminders/checks.ts"
 import { categoriesOf, moveTargets } from "./workflow.ts"
 
 /** The image types an inline part may be embedded as, by the type read from its content. */
@@ -518,6 +519,22 @@ export class Tickets {
       replyIds.map((id) => ({ id, since: sentAt(id) })),
     )
     const authorOf = new Map(authors.map((a) => [a.id, { id: a.id, name: a.name || a.username || a.id }]))
+    // The reminders Send again may send again, by the rule it checks itself (plan 4.3).
+    const reminderResend = new Set<string>()
+    for (const sent of outboxes)
+      if (
+        sent.actionKind === "reminder" &&
+        sent.actionId !== null &&
+        sent.actionState !== null &&
+        sent.actionCurrent !== null &&
+        (await reminderMayGoAgain(
+          this.db,
+          sent,
+          { id: sent.actionId, state: sent.actionState, version: sent.actionCurrent },
+          { id: t.id, status: t.status as TicketStatus },
+        ))
+      )
+        reminderResend.add(sent.messageId)
     const deliveryOf = (id: string): MessageView["delivery"] => {
       const sent = outboxes.find((o) => o.messageId === id)
       if (!sent) return null
@@ -549,8 +566,9 @@ export class Tickets {
               : { state: sent.actionState, version: sent.actionCurrent },
             sent.actionVersion,
           ),
-        // An automatic reminder (plan 4.3) is never sent again: Send again refuses it.
+        // An automatic reminder (plan 4.3) goes again only by the rule Send again checks.
         reminder: sent.actionKind === "reminder",
+        reminderResend: reminderResend.has(id),
       }
     }
     const views: MessageView[] = messages.map((m) => {

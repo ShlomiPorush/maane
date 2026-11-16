@@ -105,8 +105,8 @@ export function Delivery({
           tone="fail"
           title={delivery.problem ? t(`delivery.problem.${delivery.problem}`) : t("delivery.refusedAll")}
           // A scheduled reply ended before it went out never goes again (plan 4.2), nor does an automatic reminder (plan
-          // 4.3): the server refuses Send again.
-          action={delivery.scheduledEnded || delivery.reminder ? undefined : actions}
+          // 4.3) unless no provider accepted it and its waiting period still holds: the server refuses Send again.
+          action={delivery.scheduledEnded || (delivery.reminder && !delivery.reminderResend) ? undefined : actions}
         />
       ) : null}
       {delivery.unmatchedDelivery ? (

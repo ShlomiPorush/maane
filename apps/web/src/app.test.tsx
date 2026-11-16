@@ -2276,6 +2276,7 @@ describe("tickets", () => {
         unmatchedDelivery: null,
         scheduledEnded: false,
         reminder: true,
+        reminderResend: false,
         recipients: [
           { address: "dana@example.com", name: null, kind: "to", state: "unknown", provider: "smtp2go", marked: false },
         ],
@@ -2309,6 +2310,40 @@ describe("tickets", () => {
     const labels = Array.from(message.querySelectorAll("button")).map((b) => b.textContent?.trim())
     expect(labels).not.toContain(he("delivery.resend"))
     expect(labels).toContain(he("delivery.markSent"))
+  })
+
+  it("offers Send again for a failed reminder only while the server says it may go again (plan 4.3)", async () => {
+    const refused = { address: "dana@example.com", name: null, kind: "to", state: "refused", marked: false }
+    const failed = (id: string, reminderResend: boolean) =>
+      reply({
+        id,
+        author: null,
+        reminder: true,
+        delivery: {
+          state: "failed",
+          problem: null,
+          unmatchedDelivery: null,
+          scheduledEnded: false,
+          reminder: true,
+          reminderResend,
+          recipients: [{ ...refused, provider: "smtp2go" }],
+        },
+      })
+    const OPEN = "00000000-0000-4000-8000-0000000000c1"
+    const ENDED = "00000000-0000-4000-8000-0000000000c2"
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [failed(OPEN, true), failed(ENDED, false)], false, { status: "pending" }),
+    })
+    const card = (id: string) => document.querySelector<HTMLElement>(`[data-message="${id}"]`)
+    await vi.waitFor(() => expect(card(ENDED)).not.toBeNull())
+    const resend = (id: string) =>
+      Array.from(card(id)?.querySelectorAll("button") ?? []).filter(
+        (b) => b.textContent?.trim() === he("delivery.resend"),
+      )
+    expect(resend(OPEN)).toHaveLength(1)
+    expect(resend(ENDED)).toHaveLength(0)
   })
 
   it("shows a scheduled reply still waiting minutes after its time as late, with the way out (plan 4.2)", async () => {

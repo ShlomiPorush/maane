@@ -162,8 +162,13 @@ export interface DeliveryView {
    * point. It is never sent again; the agent can write a new reply.
    */
   scheduledEnded: boolean
-  /** An automatic reminder (plan 4.3): it is never sent again (Send again refuses it). */
+  /** An automatic reminder (plan 4.3). */
   reminder: boolean
+  /**
+   * An automatic reminder that Send again may send again: no provider accepted it (never one with an unknown fate), and
+   * its waiting period still holds. Any other reminder is never sent again.
+   */
+  reminderResend: boolean
 }
 
 /** What the composer of a ticket starts from. */

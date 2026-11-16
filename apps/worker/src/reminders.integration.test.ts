@@ -87,7 +87,10 @@ const db = () => h.database.db
 const browser = () => new TestBrowser(app.fetch, nextIp())
 const settings = () => new Settings(h.database.db, createSettingsCipher([{ version: 1, value: h.cipherKey }]), {})
 
-function sender(options: { afterClaim?: (id: string) => Promise<void> } = {}) {
+function sender(
+  options: { afterClaim?: (id: string) => Promise<void>; values?: Partial<Record<SettingKey, string>> } = {},
+) {
+  const { values: overrides, ...hooks } = options
   const values: Partial<Record<SettingKey, string>> = {
     "smtp2go.host": smtp2go.host,
     "smtp2go.port": String(smtp2go.port),
@@ -99,6 +102,7 @@ function sender(options: { afterClaim?: (id: string) => Promise<void> } = {}) {
     "failover.user": failover.user,
     "failover.password": failover.password,
     "mail.bounceAddress": BOUNCE,
+    ...overrides,
   }
   const own = new Settings(h.database.db, createSettingsCipher([{ version: 1, value: h.cipherKey }]), values)
   return new ReplySender({
@@ -106,9 +110,12 @@ function sender(options: { afterClaim?: (id: string) => Promise<void> } = {}) {
     settings: own,
     queue: (jobs, name, data, startAfter) => queue.sendIn(jobs, name, data, { startAfter }),
     timeouts: QUICK,
-    ...options,
+    ...hooks,
   })
 }
+
+/** A send point no provider takes anything from: SMTP2GO cannot be logged in to, and no failover is set up. */
+const refusing = () => sender({ values: { "smtp2go.password": `${smtp2go.password}x`, "failover.host": "" } })
 
 /** The worker's timed-action job, queueing its send-reply job through pg-boss in the job's own transaction. */
 const actions = () =>
@@ -709,12 +716,72 @@ describe("a crash and a rerun", () => {
     expect(await sender().send(messageId)).toBe("unknown")
     expect(smtp2go.received.filter((entry) => entry.raw.includes(made?.messageIdHeader ?? "-"))).toHaveLength(0)
     expect(await repliesOf(t.id)).toBe(2)
-    // A reminder is never sent again: the view offers no Send again, and the server refuses it.
+    // A reminder whose fate is unknown may have reached the customer: the view offers no Send again (its period is still
+    // open), and the server refuses it.
     const shown = (await view(agent, t.number)).messages.find((m) => m.id === messageId)
-    expect(shown?.delivery).toMatchObject({ state: "unknown", reminder: true })
+    expect(shown?.delivery).toMatchObject({ state: "unknown", reminder: true, reminderResend: false })
+    expect((await periodsOf(t.id)).at(-1)?.endedAt).toBeNull()
     expect((await agent.call("POST", `/api/v1/messages/${messageId}/resend`)).json).toEqual({
       error: "reply_not_retryable",
     })
+  })
+})
+
+describe("Send again of a reminder that no provider took", () => {
+  /** A reminder that passed its checks at the send point, and then failed for certain: nothing reached the customer. */
+  async function failedReminder() {
+    const c = await waiting()
+    const due = await onlyReminder(c.t.id)
+    expect(await actions().run(due.id, 1)).toBe("handed")
+    const [made] = await outboxOfAction(due.id)
+    const id = made?.messageId ?? ""
+    expect(await refusing().send(id)).toBe("failed")
+    expect((await db().select().from(timedAction).where(eq(timedAction.id, due.id)))[0]?.state).toBe("done")
+    return { ...c, due, header: made?.messageIdHeader ?? "-", id }
+  }
+  const resend = (b: TestBrowser, id: string) => b.call("POST", `/api/v1/messages/${id}/resend`)
+  const delivered = (header: string) => smtp2go.received.filter((entry) => entry.raw.includes(header))
+  const deliveryShown = async (b: TestBrowser, number: number, id: string) =>
+    (await view(b, number)).messages.find((m) => m.id === id)?.delivery
+
+  it("sends it again, once, while its waiting period is still open", async () => {
+    const { agent, t, header, id } = await failedReminder()
+    expect(await deliveryShown(agent, t.number, id)).toMatchObject({
+      state: "failed",
+      problem: "unreachable",
+      reminder: true,
+      reminderResend: true,
+    })
+    expect((await resend(agent, id)).status).toBe(200)
+    expect(await sender().send(id)).toBe("accepted")
+    expect(delivered(header)).toHaveLength(1)
+    // Accepted now: never again, and still one reminder and one period.
+    expect((await resend(agent, id)).json).toEqual({ error: "reply_not_retryable" })
+    expect(await remindersOf(t.id)).toHaveLength(1)
+    expect(await periodsOf(t.id)).toHaveLength(1)
+    expect(await statusOf(t.id)).toBe("pending")
+  })
+
+  it("refuses it once its waiting period ended", async () => {
+    const { agent, t, header, id } = await failedReminder()
+    await customerAnswers(t)
+    expect(await deliveryShown(agent, t.number, id)).toMatchObject({ state: "failed", reminderResend: false })
+    expect((await resend(agent, id)).json).toEqual({ error: "reply_not_retryable" })
+    expect(await sender().send(id)).toBe("failed")
+    expect(delivered(header)).toHaveLength(0)
+  })
+
+  it("is checked again by the claim: the period ending after Send again was accepted sends nothing", async () => {
+    const { agent, t, due, header, id } = await failedReminder()
+    expect((await resend(agent, id)).status).toBe(200)
+    const changed = await agent.call("PUT", `/api/v1/tickets/${t.number}/status`, { status: "on_hold" })
+    expect(changed.status).toBe(200)
+    expect(await sender().send(id)).toBe("failed")
+    expect((await outboxOfAction(due.id))[0]?.problem).toBe("reminder_ended")
+    expect(delivered(header)).toHaveLength(0)
+    // The action went to the send point once; only its row failed.
+    expect((await db().select().from(timedAction).where(eq(timedAction.id, due.id)))[0]?.state).toBe("done")
+    expect(await deliveryShown(agent, t.number, id)).toMatchObject({ problem: "reminder_ended", reminderResend: false })
   })
 })
 

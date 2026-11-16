@@ -202,10 +202,12 @@ export class ReplySender {
         .for("key share")
       if (!held) return null
       // A timed action's row (plan 4.2): its action, locked after the ticket as every path takes them. Its first claim
-      // (the action `handed`) checks it once more; a later one (Send again after it passed) is an ordinary reply's.
+      // (the action `handed`) checks it once more; a later one (Send again after it passed) is an ordinary reply's,
+      // except a reminder's.
       const action = row.actionId ? await lockAction(tx, row.actionId) : null
       const handoff = action?.state === "handed" && action.version === row.actionVersion
-      // An automatic reminder (plan 4.3): no author, and its waiting period's checks.
+      // An automatic reminder (plan 4.3): no author, and its waiting period's checks at every claim, Send again's too
+      // (its action stays `done` then; only the row fails).
       const automated = action?.kind === "reminder"
       let problem: SendProblem | null = null
       let ended: ActionReason | null = null
@@ -213,7 +215,7 @@ export class ReplySender {
       // never does.
       if (row.actionId && !handoff && !actionPassed(action, row.actionVersion))
         problem = automated ? "reminder_ended" : action?.reason === "customer_reply" ? "customer_reply" : "action_ended"
-      else if (handoff && row.actionId && automated) {
+      else if (row.actionId && automated) {
         ended = await reminderProblem(tx, row.actionId, {
           id: row.ticketId,
           status: held.status as TicketStatus,
