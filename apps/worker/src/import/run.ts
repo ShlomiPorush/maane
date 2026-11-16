@@ -184,6 +184,7 @@ interface PlannedTicket {
   record: ZendeskTicketRecord
   messages: (PlannedMessage & {
     failed: FileFacts["failed"]
+    unusable: FileFacts["unusable"]
     files: PlannedFile[]
     scans: Partial<Record<TextField, FieldScan>>
     invalid: boolean
@@ -466,7 +467,7 @@ export class ZendeskImport {
       zendeskId,
       record,
       messages,
-      files: planned.reduce((sum, item) => sum + item.source.files.length, 0),
+      files: planned.reduce((sum, item) => sum + item.source.files.length + item.unusable.length, 0),
       links: linksOf(record, version.audits),
       ticketScan,
     }
@@ -792,6 +793,9 @@ export class ZendeskImport {
         // the names (P12).
         const fileDetail = (file: { id: string; name: string | null }) => (headersOk ? (file.name ?? file.id) : file.id)
         for (const file of item.failed) fileReports.push({ reason: "file_failed", detail: fileDetail(file) })
+        // A file with no ID the import can use has only its name to name it.
+        for (const file of item.unusable)
+          fileReports.push({ reason: "file_unusable_id", detail: headersOk ? file.name : null })
         for (const file of item.files) {
           const status = fileStatus(file)
           if (status === "infected") fileReports.push({ reason: "file_infected", detail: fileDetail(file) })

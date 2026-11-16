@@ -7,7 +7,8 @@ import type { AddressInfo } from "node:net"
  * API redirects to, the way Zendesk hands attachments to its content host. Every record is invented.
  */
 export interface StandInFile {
-  id: number
+  /** Zendesk's attachment ID: a number, or a string such as a side conversation attachment's. */
+  id: number | string
   name: string
   content: Buffer
   inline?: boolean
@@ -35,8 +36,8 @@ interface Ticket {
   record?: Record<string, unknown>
   /** The audits, in place of the ones made from the comments. */
   audits?: Record<string, unknown>[]
-  /** Side conversations in place of ticket 1's own: each with its events. */
-  sides?: { id: string; subject: string; events: Record<string, unknown>[] }[]
+  /** Side conversations in place of ticket 1's own: each with its events, and the files their messages carry. */
+  sides?: { id: string; subject: string; events: Record<string, unknown>[]; files?: StandInFile[] }[]
 }
 
 export class StandInZendesk {
@@ -158,7 +159,13 @@ export class StandInZendesk {
   }
 
   allFiles(): StandInFile[] {
-    return [...[...this.tickets.values()].flatMap((t) => t.comments.flatMap((c) => c.files)), this.sideFile]
+    return [
+      ...[...this.tickets.values()].flatMap((t) => [
+        ...t.comments.flatMap((c) => c.files),
+        ...(t.sides ?? []).flatMap((side) => side.files ?? []),
+      ]),
+      this.sideFile,
+    ]
   }
 
   async start(): Promise<void> {
@@ -375,8 +382,8 @@ export class StandInZendesk {
   }
 
   #attachment(url: URL, res: ServerResponse) {
-    const id = Number(/\/t(\d+)\//.exec(url.pathname)?.[1])
-    const file = this.allFiles().find((f) => f.id === id)
+    const id = /^\/attachments\/token\/t([^/]+)\//.exec(url.pathname)?.[1]
+    const file = this.allFiles().find((f) => String(f.id) === id)
     if (!file || file.serve === "missing") return send(res, 404, { error: "not found" })
     if (file.serve === "direct") {
       res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": file.content.length })
@@ -388,8 +395,8 @@ export class StandInZendesk {
 
   #handleFiles(req: IncomingMessage, res: ServerResponse) {
     if (req.headers.authorization) this.fileHostAuthorizations.push(req.headers.authorization)
-    const id = Number(/^\/f\/(\d+)$/.exec(req.url ?? "")?.[1])
-    const file = this.allFiles().find((f) => f.id === id)
+    const id = /^\/f\/([^/]+)$/.exec(req.url ?? "")?.[1]
+    const file = this.allFiles().find((f) => String(f.id) === id)
     if (!file) return send(res, 404, { error: "not found" })
     // No Content-Length: the size limit must hold while streaming, too.
     res.writeHead(200, { "Content-Type": "application/octet-stream" })

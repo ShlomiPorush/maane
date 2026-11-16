@@ -893,6 +893,56 @@ describe("the import's files", () => {
     ])
   })
 
+  it("imports a side conversation file by its string ID, and reports a file with no ID it can use", async () => {
+    const h = await start()
+    // Before: ticket 1's side conversation carries one file.
+    const before = await h.run()
+    const filesBefore = ((await runOf(h, before.id)).counts as { files: number }).files
+    // Zendesk's side conversation attachments have string IDs (its Side Conversation Attachments reference).
+    const photo: StandInFile = {
+      id: "01M1BJQJ58GFNNX614V04CHXTS",
+      name: "photo.txt",
+      content: randomBytes(30),
+      serve: "redirect",
+    }
+    const url = (id: string) => `${h.zendesk.apiOrigin}/attachments/token/t${id}/?name=file`
+    h.zendesk.change(1, (t) => {
+      t.sides = [
+        {
+          id: "sc-2",
+          subject: "Asking the courier",
+          events: [
+            {
+              id: 9101,
+              type: "create",
+              message: {
+                subject: "Asking the courier",
+                body: "Two files",
+                attachments: [
+                  { id: photo.id, name: photo.name, content_url: url(String(photo.id)), size: photo.content.length },
+                  { name: "unnamed.txt", content_url: url("none"), size: 4 },
+                ],
+              },
+            },
+          ],
+          files: [photo],
+        },
+      ]
+    })
+    await h.backup()
+    const run = await h.run()
+    expect(run.outcome).toEqual(DONE)
+    const note = (await messagesOf(h, 1)).find((m) => m.zendeskKey === "side:9101")
+    const [part] = await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, String(photo.id)))
+    expect([part?.messageId, part?.status, part?.fileName]).toEqual([note?.id, "clean", "photo.txt"])
+    expect(await readFile(h.files.storedPath(part?.storedSha256 ?? ""))).toEqual(photo.content)
+    // The file with no ID is never dropped silently: the report names it, and the count holds it.
+    expect((await reportOf(h, run.id)).filter((row) => row.startsWith("1:"))).toEqual([
+      "1:file_unusable_id:unnamed.txt",
+    ])
+    expect((await runOf(h, run.id)).counts).toMatchObject({ files: filesBefore + 1 })
+  })
+
   it("tries a file the scanner did not answer again from the archive, never Zendesk, and keeps a comment of files only", async () => {
     const h = await start()
     const slow = randomBytes(900)

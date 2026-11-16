@@ -1602,6 +1602,7 @@
         "file_failed": "A file failed in the backup: not imported",
         "file_infected": "The scanner found a file infected: not stored",
         "file_blocked": "A file of a blocked type: not stored",
+        "file_unusable_id": "A file without an ID the import can use: not imported",
         "blocked_content": "The scanner blocked a text",
         "ticket_failed": "Could not be saved, so the run stopped here"
       },

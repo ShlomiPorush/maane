@@ -257,20 +257,41 @@ export interface FileFacts {
   failed: { id: string; name: string | null }[]
   /** The files the manifest holds, in the comment's order, each once. */
   archived: ArchivedFile[]
+  /** The files whose ID the import cannot use, so it cannot find them in the manifest: reported, never dropped. */
+  unusable: { name: string | null }[]
 }
 
-/** A comment's files as the manifest records them: those it holds are imported (plan 5.2), the others reported. */
+/**
+ * An attachment's ID as the manifest keys it (`String(attachment.id)`): a comment attachment's number, or a side
+ * conversation attachment's string (Zendesk's Side Conversation Attachments reference shows one such as
+ * `01M1BJQJ58GFNNX614V04CHXTS`). Only letters, digits, `_`, and `-`, as it is part of the file's `cid:`.
+ */
+const attachmentId = (value: unknown): string | null =>
+  (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) ||
+  (typeof value === "string" && /^[0-9A-Za-z_-]{1,64}$/.test(value))
+    ? String(value)
+    : null
+
+/**
+ * A comment's files as the manifest records them: those it holds are imported (plan 5.2), the others reported, and
+ * one whose ID the import cannot use is reported too.
+ */
 export function filesOf(attachments: unknown, manifest: Manifest): FileFacts {
   const files: ImportedMessageSource["files"] = []
   const failed: FileFacts["failed"] = []
   const archived: ArchivedFile[] = []
+  const unusable: FileFacts["unusable"] = []
   const seen = new Set<string>()
   for (const attachment of Array.isArray(attachments) ? attachments : []) {
-    const entry = attachment as { id?: unknown; file_name?: unknown; name?: unknown; inline?: unknown }
-    const fileId = id(entry?.id)
-    if (!fileId || seen.has(fileId)) continue
-    seen.add(fileId)
+    const entry = (attachment ?? {}) as { id?: unknown; file_name?: unknown; name?: unknown; inline?: unknown }
     const name = text(entry.file_name) ?? text(entry.name)
+    const fileId = attachmentId(entry.id)
+    if (!fileId) {
+      unusable.push({ name })
+      continue
+    }
+    if (seen.has(fileId)) continue
+    seen.add(fileId)
     const recorded = manifest.files[fileId]
     const ok = recorded?.status === "ok" && typeof recorded.sha256 === "string" && typeof recorded.bytes === "number"
     const status = ok ? "ok" : recorded ? "failed" : "missing"
@@ -287,7 +308,7 @@ export function filesOf(attachments: unknown, manifest: Manifest): FileFacts {
         contentUrl: text(recorded.contentUrl),
       })
   }
-  return { files, failed, archived }
+  return { files, failed, archived, unusable }
 }
 
 /** The content ID an imported file gets, which a `cid:` image of its message's HTML names (plan 5.2). */
@@ -324,7 +345,7 @@ export function commentMessage(
   users: Map<string, ZendeskUser>,
   manifest: Manifest,
   fallback: Date,
-): PlannedMessage & Pick<FileFacts, "failed" | "archived"> {
+): PlannedMessage & Pick<FileFacts, "failed" | "archived" | "unusable"> {
   const authorId = id(comment.author_id)
   const author = authorId ? users.get(authorId) : undefined
   const isPublic = comment.public !== false
@@ -344,7 +365,7 @@ export function commentMessage(
   const to: MailAddress[] =
     email.kind === "recorded" && email.to?.address ? [{ address: email.to.address, name: email.to.name }] : []
   const cc: MailAddress[] = email.kind === "recorded" ? email.cc.map((address) => ({ address, name: null })) : []
-  const { files, failed, archived } = filesOf(comment.attachments, manifest)
+  const { files, failed, archived, unusable } = filesOf(comment.attachments, manifest)
   return {
     key: `comment:${String(comment.id)}`,
     direction,
@@ -360,6 +381,7 @@ export function commentMessage(
       ...to.map((entry) => entry.name),
       ...(email.kind === "recorded" ? [email.from?.name ?? null, email.to?.name ?? null] : []),
       ...files.map((file) => file.name),
+      ...unusable.map((file) => file.name),
       ...archived.map((file) => file.declaredType),
     ].filter((value): value is string => value !== null),
     source: {
@@ -375,6 +397,7 @@ export function commentMessage(
     },
     failed,
     archived,
+    unusable,
   }
 }
 
@@ -384,7 +407,7 @@ export function sideMessages(
   sides: ZendeskSideConversation[],
   manifest: Manifest,
   fallback: Date,
-): (PlannedMessage & Pick<FileFacts, "failed" | "archived">)[] {
+): (PlannedMessage & Pick<FileFacts, "failed" | "archived" | "unusable">)[] {
   return sides.flatMap((side) =>
     side.events.flatMap((event) => {
       const message = event.message
@@ -392,7 +415,7 @@ export function sideMessages(
       const name = text(message.from?.name) ?? text(event.actor?.name)
       const address = addressOf(message.from?.email) ?? addressOf(event.actor?.email)
       const subject = text(message.subject) ?? side.subject
-      const { files, failed, archived } = filesOf(message.attachments, manifest)
+      const { files, failed, archived, unusable } = filesOf(message.attachments, manifest)
       return [
         {
           key: `side:${String(event.id)}`,
@@ -407,6 +430,7 @@ export function sideMessages(
             name,
             subject,
             ...files.map((file) => file.name),
+            ...unusable.map((file) => file.name),
             ...archived.map((file) => file.declaredType),
           ].filter((value): value is string => value !== null),
           source: {
@@ -422,6 +446,7 @@ export function sideMessages(
           },
           failed,
           archived,
+          unusable,
         },
       ]
     }),

@@ -232,4 +232,46 @@ describe("the import's mapping", () => {
     expect(images.rewrite("https://images.example.com/logo.png")).toBeNull()
     expect([...images.used]).toEqual(["1"])
   })
+
+  it("takes a file's string ID as the manifest keeps it, and reports a file whose ID it cannot use", () => {
+    const ulid = "01M1BJQJ58GFNNX614V04CHXTS"
+    const manifest = {
+      files: {
+        [ulid]: {
+          attachmentId: ulid,
+          ticketId: "10",
+          commentId: "side:9101",
+          fileName: "photo.png",
+          contentType: "image/png",
+          inline: false,
+          size: 4,
+          contentUrl: null,
+          status: "ok" as const,
+          sha256: "b".repeat(64),
+          bytes: 4,
+          attempts: 1,
+          updatedAt: "2025-05-01T09:00:00Z",
+        },
+      },
+    }
+    const facts = filesOf(
+      [
+        { id: ulid, name: "photo.png" },
+        { id: 7, file_name: "seven.png" },
+        { name: "no-id.png" },
+        { id: "../escape", name: "path.png" },
+        { id: { nested: 1 } },
+        { id: -3, file_name: "negative.png" },
+      ],
+      manifest,
+    )
+    expect(facts.archived.map((file) => [file.id, file.name])).toEqual([[ulid, "photo.png"]])
+    expect(facts.failed.map((file) => file.id)).toEqual(["7"])
+    expect(facts.unusable).toEqual([
+      { name: "no-id.png" },
+      { name: "path.png" },
+      { name: null },
+      { name: "negative.png" },
+    ])
+  })
 })

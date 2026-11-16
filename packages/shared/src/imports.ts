@@ -54,6 +54,9 @@ export type ImportStopReason = (typeof IMPORT_STOP_REASONS)[number]
  * - `file_blocked`: a file of the ticket is of a blocked type; it was not stored (plan 5.2).
  *   The detail of the three file reasons is the file's name, or its Zendesk ID when the scanner blocked the names of
  *   its comment.
+ * - `file_unusable_id`: a file of the ticket has no ID the import can use (a number, or a string of letters, digits,
+ *   `_`, and `-`), so it is not imported. Its detail is the file's name, or none when the scanner blocked the names of
+ *   its comment.
  * - `blocked_content`: the scanner blocked a text of a comment, which was kept without it.
  * - `ticket_failed`: the ticket could not be saved, so the run stopped there (the last such error of the run). Its
  *   detail is an IMPORT_FAILURES kind, then `:` and the database constraint's name when one was named; never the
@@ -66,6 +69,7 @@ export const IMPORT_REPORT_REASONS = [
   "file_failed",
   "file_infected",
   "file_blocked",
+  "file_unusable_id",
   "blocked_content",
   "ticket_failed",
 ] as const
