@@ -13,9 +13,10 @@
 //    goes on only for the row of the version that passed (`done` at the row's version).
 //    A reminder's row (plan 4.3) is checked the same way, with its own checks: its waiting period still Maane's own and
 //    open, the ticket still pending, the customer silent, the reply that started the period not bounced; it has no
-//    author (Maane sends it as the organization), and it never goes again (Send again refuses it). A scheduled reply
-//    that goes ends the ticket's waiting period, and one that sets the ticket to pending starts a new one with its
-//    reminder, in this transaction, after its status action.
+//    author (Maane sends it as the organization), and it goes again only by Send again after no provider accepted it,
+//    with the same checks at its claim, which holds its action locked against every ending of the period. A scheduled
+//    reply that goes ends the ticket's waiting period, and one that sets the ticket to pending starts a new one with
+//    its reminder, in this transaction, after its status action.
 //    The claim gives the attempt an ID of its own (outbox.attempt). Every later step goes on only while the row is
 //    still `sending` under that ID, checked under the row's lock: right before each send, and with each result. An
 //    attempt another run made stale (marked unknown, sent again) stops there, without sending or writing.
