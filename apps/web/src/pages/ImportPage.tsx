@@ -429,7 +429,9 @@ function RunView({ run }: { run: ImportRunView }) {
         {run.highestNumber !== null ? (
           <div>
             <dt>{t("import.run.highest")}</dt>
-            <dd>{t("import.zendeskNumber", { number: formatNumber(run.highestNumber) })}</dd>
+            <dd>
+              <bdi dir="ltr">{t("import.zendeskNumber", { number: formatNumber(run.highestNumber) })}</bdi>
+            </dd>
           </div>
         ) : null}
         {COUNTS.map((key) => (
@@ -469,7 +471,9 @@ function ReportPanel({ run }: { run: ImportRunView }) {
       {rows.map((row) => (
         <div className="ui-item" key={row.id} data-reason={row.reason}>
           <div className="ui-item-main">
-            <span className="ui-item-title">{t("import.zendeskNumber", { number: formatNumber(row.zendeskId) })}</span>
+            <span className="ui-item-title">
+              <bdi dir="ltr">{t("import.zendeskNumber", { number: formatNumber(row.zendeskId) })}</bdi>
+            </span>
             <span className="ui-item-meta">
               <span>{t(`import.report.reason.${row.reason}`)}</span>
               {row.detail ? (
