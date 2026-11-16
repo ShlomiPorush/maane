@@ -1580,7 +1580,7 @@
       "alreadyEnded": "This run had already ended, so nothing was cancelled.",
       "cancelFailed": "Could not cancel the run. {reason}",
       "waiting": "Nothing is working on this run now. Fix what stopped it, then press Continue import.",
-      "retrying": "Maane tries this run again by itself in a few minutes. Nothing needs doing yet."
+      "retrying": "Maane will try this run again by itself. Nothing needs doing yet."
     },
     "report": {
       "title": "Report",
