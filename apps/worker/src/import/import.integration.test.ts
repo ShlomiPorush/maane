@@ -353,6 +353,22 @@ describe("the import from the Zendesk archive", () => {
     expect((await reportOf(h, id)).filter((row) => row.startsWith("2:"))).toHaveLength(2)
   })
 
+  it("counts the links once when it goes on after a crash between the links and the end", async () => {
+    const h = await start()
+    const [made] = await h.db.insert(importRun).values({ startedBy: h.owner }).returning({ id: importRun.id })
+    const id = made?.id ?? ""
+    const crash: ImportHooks = {
+      afterLinks: async () => {
+        throw new Error("the worker stopped")
+      },
+    }
+    await expect(h.again(id, crash)).rejects.toThrow("the worker stopped")
+    expect(await runOf(h, id)).toMatchObject({ state: "running", position: 7, counts: { links: 2 } })
+    expect(await h.again(id)).toEqual({ state: "done", reason: null })
+    expect(await h.db.select().from(ticketLink)).toHaveLength(2)
+    expect((await runOf(h, id)).counts).toMatchObject({ links: 2 })
+  })
+
   it("stops when a backup runs meanwhile, and the next start is a full pass that applies a redaction", async () => {
     const h = await start()
     const meanwhile: ImportHooks = {

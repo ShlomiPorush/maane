@@ -96,6 +96,8 @@ export interface ImportHooks {
   afterCheck?: () => Promise<void>
   /** After each ticket committed (a test crashes or changes the archive here). */
   afterTicket?: (zendeskId: number) => Promise<void>
+  /** After the links committed, before the run ends (a test crashes here). */
+  afterLinks?: () => Promise<void>
 }
 
 export interface ImportOptions {
@@ -286,12 +288,13 @@ export class ZendeskImport {
     // The links between imported tickets, once every ticket is in, and the numbers after the highest one.
     const closed = await this.#db.transaction(async (tx) => {
       if (!(await importWindow(tx, true)).open) return true
-      const links = await this.#link(tx)
-      await addCounts(tx, runId, { links })
+      // Set, not added: a retry after a crash between this commit and the end computes the same links again.
+      await addCounts(tx, runId, {}, { links: await this.#link(tx) })
       await continueNumbers(tx)
       return false
     })
     if (closed) return this.#finish(runId, "stopped", "went_live")
+    await this.#hooks.afterLinks?.()
     return this.#finish(runId, "done", null)
   }
 
@@ -672,8 +675,13 @@ function sameRecorded(run: { archiveRuns: number | null; coveredUntil: Date | nu
   return run.archiveRuns === mark.runs && (run.coveredUntil?.getTime() ?? null) === covered
 }
 
-/** Adds to a run's counts in the caller's transaction. */
-async function addCounts(tx: Tx, runId: string, add: Partial<ImportCounts>): Promise<void> {
+/** Adds to a run's counts, and sets the ones in `set`, in the caller's transaction. */
+async function addCounts(
+  tx: Tx,
+  runId: string,
+  add: Partial<ImportCounts>,
+  set: Partial<ImportCounts> = {},
+): Promise<void> {
   const [row] = await tx
     .select({ counts: importRun.counts })
     .from(importRun)
@@ -681,6 +689,7 @@ async function addCounts(tx: Tx, runId: string, add: Partial<ImportCounts>): Pro
     .for("update")
   const counts = { ...emptyImportCounts(), ...((row?.counts ?? {}) as Partial<ImportCounts>) }
   for (const [key, value] of Object.entries(add) as [keyof ImportCounts, number][]) counts[key] += value
+  Object.assign(counts, set)
   await tx.update(importRun).set({ counts }).where(eq(importRun.id, runId))
 }
 
