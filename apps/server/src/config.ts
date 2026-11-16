@@ -32,6 +32,8 @@ export type ServerConfig = {
   filesDir: string
   /** MAANE_GEOIP_DIR: the read-only directory of the GeoLite2 City and ASN files (deployment wiring), or null. */
   geoipDir: string | null
+  /** MAANE_ZENDESK_ARCHIVE_DIR: the phase 0 archive, mounted read-only for the import (default /zendesk-archive). */
+  archiveDir: string
   version: string
   /** Settings the environment sets: each overrides the stored value, and the UI shows the field locked. */
   overrides: Partial<Record<SettingKey, string>>
@@ -240,6 +242,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     webDir: env.MAANE_WEB_DIR || "dist/web",
     filesDir: env.MAANE_FILES_DIR || "/data/files",
     geoipDir: env.MAANE_GEOIP_DIR?.trim() || null,
+    archiveDir: env.MAANE_ZENDESK_ARCHIVE_DIR?.trim() || "/zendesk-archive",
     version: env.MAANE_VERSION || "dev",
     overrides,
   }

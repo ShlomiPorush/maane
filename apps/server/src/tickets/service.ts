@@ -60,6 +60,8 @@ import {
   timedAction,
 } from "../db/schema.ts"
 import { storedFilePath } from "../files/paths.ts"
+import { messageSourceView, ticketSourceView } from "../imports/source.ts"
+import { wentLiveAt } from "../imports/window.ts"
 import { linkViews } from "../links/service.ts"
 import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
 import { renderMailHtml } from "../mail/html.ts"
@@ -619,6 +621,7 @@ export class Tickets {
         links: clicked.get(m.id) ?? [],
         scheduled: outboxes.some((o) => o.messageId === m.id && o.actionKind === "reply"),
         reminder: outboxes.some((o) => o.messageId === m.id && o.actionKind === "reminder"),
+        imported: m.zendeskKey !== null ? messageSourceView(m.zendesk) : null,
       }
     })
     // The reminder of the ticket's waiting period that has not gone yet (plan 4.3): when it goes.
@@ -649,6 +652,9 @@ export class Tickets {
         categories: await categoriesOf(this.db, t.id),
         snoozedUntil: snoozedUntil(t.snoozedUntil),
         snoozeOverdue: t.snoozedUntil !== null && t.snoozedUntil.getTime() <= Date.now(),
+        // An imported ticket (plan 5.1) is read-only until Maane first goes live.
+        imported:
+          t.zendeskId !== null ? ticketSourceView(t.zendeskId, t.zendesk, (await wentLiveAt(this.db)) === null) : null,
       },
       participants,
       links: links.map((link) => ({ number: link.number, reason: link.reason as LinkReason })),

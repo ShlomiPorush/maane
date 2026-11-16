@@ -9,6 +9,7 @@ import { EnrollPage } from "./pages/auth/EnrollPage.tsx"
 import { LoginPage } from "./pages/auth/LoginPage.tsx"
 import { SetupPage } from "./pages/auth/SetupPage.tsx"
 import { CategoriesPage } from "./pages/CategoriesPage.tsx"
+import { ImportPage } from "./pages/ImportPage.tsx"
 import { IntakePage } from "./pages/IntakePage.tsx"
 import { NotFoundPage } from "./pages/NotFoundPage.tsx"
 import { OrganizationPage } from "./pages/OrganizationPage.tsx"
@@ -30,6 +31,7 @@ export const PAGES: readonly PageRoute[] = [
   { id: "organizations", path: "/organizations", Component: OrganizationsPage },
   { id: "organization", path: "/organizations/:id", Component: OrganizationPage },
   { id: "categories", path: "/categories", Component: CategoriesPage },
+  { id: "import", path: "/import", Component: ImportPage },
   { id: "users", path: "/users", Component: UsersPage },
   { id: "settings", path: "/settings", Component: SettingsPage },
   { id: "audit", path: "/audit", Component: AuditPage },

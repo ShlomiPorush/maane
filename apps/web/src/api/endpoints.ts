@@ -6,6 +6,10 @@ import {
   type CategoryView,
   defaultStatusFilter,
   type GraphTestView,
+  type ImportMappingInput,
+  type ImportReportPage,
+  type ImportRunView,
+  type ImportView,
   type IntakeLog,
   type Locale,
   type ReplyInput,
@@ -118,6 +122,9 @@ export const qk = {
   categories: ["categories"] as const,
   ticket: (number: number) => ["ticket", number] as const,
   intake: (filters: IntakeFilters) => ["intake", filters.mode ?? "", filters.flagged ? 1 : 0] as const,
+  importPage: ["import"] as const,
+  importRun: ["import", "run"] as const,
+  importReport: (runId: string) => ["import", "report", runId] as const,
 }
 
 /** The ticket list's filters, kept in the page's address. No status: open work, or every status in a search. */
@@ -203,6 +210,17 @@ export const api = {
   renameCategory: (id: string, name: string) =>
     request<{ ok: true }>("PATCH", `/admin/categories/${encodeURIComponent(id)}`, { name }),
   deleteCategory: (id: string) => request<{ ok: true }>("DELETE", `/admin/categories/${encodeURIComponent(id)}`),
+  importPage: () => request<ImportView>("GET", "/admin/import"),
+  saveImportMapping: (input: ImportMappingInput) => request<{ ok: true }>("PUT", "/admin/import/mapping", input),
+  importRun: () => request<{ run: ImportRunView | null }>("GET", "/admin/import/run"),
+  startImport: () => request<{ run: ImportRunView }>("POST", "/admin/import/start"),
+  cancelImport: (runId: string) =>
+    request<{ run: ImportRunView | null; cancelled: boolean }>("POST", "/admin/import/cancel", { runId }),
+  importReport: (runId: string, after: string | null) =>
+    request<ImportReportPage>(
+      "GET",
+      `/admin/import/runs/${encodeURIComponent(runId)}/report${query({ after: after ?? undefined })}`,
+    ),
   intake: (filters: IntakeFilters, after: string | null) =>
     request<IntakeLog>(
       "GET",

@@ -183,7 +183,7 @@ Each phase is a separate pull request with tests and green CI. No merge, release
 ### 5.2 Phase 5: Import
 
 - **Source.** Import reads the archive. Each ticket and each comment has a unique source key, so a repeated run creates no duplicates.
-- **Numbers.** The Zendesk ticket number is stored in its own field. The Maane numbering floor is set at cutover, not before.
+- **Numbers.** An imported ticket keeps its Zendesk ticket number as its Maane number, and the Zendesk number is also stored in its own field. After each import run, Maane's numbering continues right after the highest imported number, with no gap, so new Maane tickets continue the same series (owner's decision, 2026-11-16).
 - **Fidelity.** Internal notes stay internal. Original authors, dates, fields, and statuses are kept as they are.
 - **No side effects.** Import bypasses all live behavior: it reopens nothing, sends no notifications, and triggers no reminders.
 - **Report.** Counts, and a list of what did not map.
@@ -212,7 +212,7 @@ The owner makes every change in Microsoft 365 and DNS. For each step, Maane's do
 - **Routing.** Remove Zendesk from the rules, and wait for mail already in transit to arrive.
 - **Final import.** Wait at least 5 minutes after the cutover point. Run an updated Zendesk backup that continues from the saved position of the previous backup, and check that it covers time after the cutover point. Only then import. The Zendesk API does not return the last minute, so the gap is required.
 - **Reconciliation.** Mail that reached Maane after the cutover point is matched against what was imported, by `Message-ID` and sender. An ambiguous match is shown to the owner and decided before activation.
-- **Numbering.** The first Maane ticket gets a number above the highest Zendesk number, with a gap. Zendesk numbers are kept in their own field and shown as `Zendesk #1234`. The email subject carries only the Maane number.
+- **Numbering.** Imported tickets keep their Zendesk numbers (section 5.2), and Maane's numbering continues right after the highest imported number, with no gap; the final import moves it the same way (owner's decision, 2026-11-16, in place of a floor with a gap). Zendesk numbers are also kept in their own field and shown as `Zendesk #1234`. The email subject carries only the Maane number, which for an imported ticket is its Zendesk number.
 - **Activation.** Only after reconciliation is clean, turn on sending to customers and automations in Maane.
 - **Old replies.** While Zendesk stays open, a recurring job pulls new comments and new tickets from it. A customer who replies to a closed ticket makes Zendesk open a follow-up ticket, and the job links it to the original. Progress is saved, and a repeated run creates no duplicates. Before anything pulled affects Maane, it passes the same reconciliation: if the same message already reached Maane directly, the link between both sources is kept and no second message is created. An ambiguous match, or a message without enough identifiers, goes to the owner's review list, not to the live flow. Only what passed reconciliation enters Maane as ordinary activity, with a Maane number and a notification. The owner decides when to stop this job and close Zendesk.
 - **SPF.** Remove Zendesk from the records only after the rollback period ended.

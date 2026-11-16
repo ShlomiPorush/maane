@@ -69,9 +69,13 @@ export const AUDIT_ACTIONS = [
   "ticket.move",
   "ticket.snooze",
   "ticket.unsnooze",
+  "ticket.content_blocked",
   "category.create",
   "category.rename",
   "category.delete",
+  "import.mapping",
+  "import.run",
+  "import.cancel",
 ] as const
 
 const KNOWN = new Set<string>(AUDIT_ACTIONS)

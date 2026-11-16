@@ -1764,6 +1764,35 @@ describe("tickets", () => {
     expect(statusFilter.value).toBe("open_work")
   })
 
+  it("shows an imported ticket read-only until go-live, with its From Zendesk block (plan 5.1)", async () => {
+    const imported = {
+      zendeskId: 7,
+      readOnly: true,
+      brand: "Example Store",
+      tags: ["vip", "billing"],
+      fields: [{ name: "Order number", value: "A-17" }],
+      followers: [{ name: "Dana Agent", address: "dana.agent@example.com" }],
+    }
+    await renderAt("/tickets/7", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/tickets/7": view("v1", [], true, { imported }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("ticket.imported.readOnly")))
+    // No control changes it: status, snooze, categories, move, and the composer are not offered.
+    expect(document.querySelector('[data-testid="ticket-status"]')).toBeNull()
+    expect(button(he("ticket.categories.edit"))).toBeUndefined()
+    expect(button(he("ticket.move.open"))).toBeUndefined()
+    expect(document.querySelector(".ui-composer")).toBeNull()
+    expect(text()).toContain(he("ticket.imported.composerLocked"))
+    const block = document.querySelector('[data-testid="ticket-zendesk"]')
+    expect(block?.textContent).toContain(he("ticket.imported.zendeskNumber", { number: 7 }))
+    expect(block?.textContent).toContain("Example Store")
+    expect(block?.textContent).toContain("A-17")
+    expect(block?.textContent).toContain("vip")
+    expect(block?.textContent).toContain("Dana Agent")
+  })
+
   it("sets the status, the categories, and the organization from the ticket view (plan 4.1)", async () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
@@ -3431,5 +3460,293 @@ describe("browser notifications on this device", () => {
     await vi.waitFor(() => expect(text()).toContain(he("notifications.notForgotten")))
     expect(auth.signOut).not.toHaveBeenCalled()
     expect(where()).toBe("/enroll")
+  })
+})
+
+describe("import from Zendesk", () => {
+  const ORG = "0d7c6f0e-6a55-4b8e-9c55-5f0b6a3e2a11"
+  const CATEGORY = "2f9e8b2a-8c77-4da0-9e77-7b2d8c5a4c33"
+  const RUN = "5c1e0d4e-2b3c-4d5e-9f60-718293a4b5c6"
+  const when = "2026-11-12T08:00:00.000Z"
+  const button = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
+  const page = (over: Record<string, unknown> = {}) =>
+    ok({
+      window: { open: true, mode: "listening", wentLiveAt: null },
+      archive: {
+        present: true,
+        origin: "https://example.zendesk.com",
+        runs: 3,
+        coveredUntil: when,
+        backupRunning: false,
+        otherOrigin: false,
+        tickets: 12,
+      },
+      brands: [{ id: "100", name: "Example Store", tickets: 12, organizationId: null }],
+      tags: [{ tag: "vip", tickets: 4, categoryId: null }],
+      agentUserId: null,
+      users: [{ id: "u1", name: "Owner" }],
+      organizations: [{ id: ORG, name: "Alpha" }],
+      categories: [{ id: CATEGORY, name: "VIP" }],
+      run: null,
+      ...over,
+    })
+  const run = {
+    id: RUN,
+    state: "done",
+    reason: null,
+    problems: [],
+    createdAt: when,
+    finishedAt: when,
+    coveredUntil: when,
+    highestNumber: 12,
+    total: 12,
+    done: 12,
+    counts: { tickets: 11, messages: 40, notes: 5, sideConversations: 1, links: 2, files: 9, skipped: 1 },
+    reportRows: 1,
+    failure: null,
+    jobActive: false,
+    retrying: false,
+  }
+
+  it("maps the brands and tags, saves, starts, and shows the run with its report", async () => {
+    let saved = false
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": () => (saved ? page({ run }) : page()),
+      "/api/v1/admin/import/mapping": () => {
+        saved = true
+        return ok({ ok: true })
+      },
+      "/api/v1/admin/import/run": () => ok({ run: saved ? run : null }),
+      "/api/v1/admin/import/start": { status: 202, body: { run } },
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({
+        rows: [{ id: 1, zendeskId: 4, reason: "deleted_in_zendesk", detail: null }],
+        next: null,
+      }),
+    })
+    const brand = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLSelectElement>('[data-brand="100"] select')
+      expect(found).not.toBeNull()
+      return found as HTMLSelectElement
+    })
+    const start = () => button(he("import.run.start"))
+    expect(start()?.disabled).toBe(false)
+    await act(async () => {
+      brand.value = ORG
+      brand.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    const tag = document.querySelector<HTMLSelectElement>('[data-tag="vip"] select') as HTMLSelectElement
+    const agent = document.querySelector<HTMLSelectElement>("#import-agent") as HTMLSelectElement
+    await act(async () => {
+      tag.value = CATEGORY
+      tag.dispatchEvent(new Event("change", { bubbles: true }))
+      agent.value = "u1"
+      agent.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    // A changed mapping is saved before a run starts.
+    expect(start()?.disabled).toBe(true)
+    expect(text()).toContain(he("import.mapping.unsaved"))
+    await act(async () => button(he("import.mapping.save"))?.click())
+    await vi.waitFor(() => {
+      const put = requests.find((r) => r.method === "PUT" && r.url === "/api/v1/admin/import/mapping")
+      expect(JSON.parse(put?.body ?? "null")).toEqual({
+        brands: { "100": ORG },
+        tags: { vip: CATEGORY },
+        agentUserId: "u1",
+      })
+    })
+    await vi.waitFor(() => expect(start()?.disabled).toBe(false))
+    await act(async () => start()?.click())
+    await vi.waitFor(() =>
+      expect(requests.some((r) => r.method === "POST" && r.url === "/api/v1/admin/import/start")).toBe(true),
+    )
+    await vi.waitFor(() => expect(text()).toContain(he("import.report.reason.deleted_in_zendesk")))
+    expect(text()).toContain(he("import.run.state.done"))
+    expect(text()).toContain(he("import.zendeskNumber", { number: 4 }))
+  })
+
+  it("offers Continue for an open run whose job is gone, and says which ticket stopped it and why", async () => {
+    const stopped = { ...run, state: "running", reason: "failed", finishedAt: null, done: 2, jobActive: false }
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": page({ agentUserId: "u1", run: stopped }),
+      "/api/v1/admin/import/run": ok({ run: stopped }),
+      "/api/v1/admin/import/start": { status: 202, body: { run: { ...stopped, jobActive: true } } },
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({
+        rows: [{ id: 2, zendeskId: 3, reason: "ticket_failed", detail: "rule:ticket_number_rule" }],
+        next: null,
+      }),
+    })
+    await vi.waitFor(() => expect(button(he("import.run.continue"))?.disabled).toBe(false))
+    expect(button(he("import.run.start"))).toBeUndefined()
+    expect(text()).toContain(he("import.run.reason.failed"))
+    expect(text()).toContain(he("import.run.waiting"))
+    expect(text()).not.toContain(he("import.run.retrying"))
+    await vi.waitFor(() => expect(text()).toContain(he("import.report.failure.rule")))
+    expect(text()).toContain(he("import.report.reason.ticket_failed"))
+    expect(text()).toContain(he("import.zendeskNumber", { number: 3 }))
+    expect(text()).toContain("ticket_number_rule")
+    await act(async () => button(he("import.run.continue"))?.click())
+    await vi.waitFor(() =>
+      expect(requests.some((r) => r.method === "POST" && r.url === "/api/v1/admin/import/start")).toBe(true),
+    )
+  })
+
+  it("names the stage and the kind of an error no ticket caused", async () => {
+    const stopped = {
+      ...run,
+      state: "running",
+      reason: "failed",
+      finishedAt: null,
+      done: 12,
+      failure: { stage: "links", kind: "rule", constraint: "ticket_link_rule" },
+    }
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": page({ agentUserId: "u1", run: stopped }),
+      "/api/v1/admin/import/run": ok({ run: stopped }),
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("import.run.stage.links")))
+    const failure = document.querySelector('[data-failure="links"]')
+    expect(failure?.textContent).toContain(he("import.report.failure.rule"))
+    expect(failure?.textContent).toContain("ticket_link_rule")
+    expect(text()).toContain(he("import.run.reason.failed"))
+  })
+
+  it("says an automatic retry follows while pg-boss will try the stopped run again, not that the admin must act", async () => {
+    const retrying = {
+      ...run,
+      state: "running",
+      reason: "failed",
+      finishedAt: null,
+      done: 2,
+      jobActive: true,
+      retrying: true,
+    }
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": page({ agentUserId: "u1", run: retrying }),
+      "/api/v1/admin/import/run": ok({ run: retrying }),
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("import.run.retrying")))
+    expect(text()).toContain(he("import.run.reason.failed"))
+    expect(text()).not.toContain(he("import.run.waiting"))
+    expect(button(he("import.run.continue"))).toBeUndefined()
+    expect(button(he("import.run.start"))?.disabled).toBe(true)
+  })
+
+  it("keeps Start off while a job works on the open run", async () => {
+    const working = { ...run, state: "running", finishedAt: null, done: 2, jobActive: true }
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": page({ agentUserId: "u1", run: working }),
+      "/api/v1/admin/import/run": ok({ run: working }),
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("import.run.state.running")))
+    expect(button(he("import.run.start"))?.disabled).toBe(true)
+    expect(button(he("import.run.continue"))).toBeUndefined()
+    expect(text()).not.toContain(he("import.run.waiting"))
+    expect(text()).not.toContain(he("import.run.retrying"))
+  })
+
+  it("cancels an open run after asking, and says what a cancelled run means", async () => {
+    const working = { ...run, state: "running", finishedAt: null, done: 2, jobActive: true }
+    const cancelled = { ...working, state: "stopped", reason: "cancelled", finishedAt: when, jobActive: false }
+    let done = false
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": () => page({ agentUserId: "u1", run: done ? cancelled : working }),
+      "/api/v1/admin/import/run": () => ok({ run: done ? cancelled : working }),
+      "/api/v1/admin/import/cancel": () => {
+        done = true
+        return ok({ run: cancelled, cancelled: true })
+      },
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
+    })
+    await vi.waitFor(() => expect(button(he("import.run.cancel"))?.disabled).toBe(false))
+    await act(async () => button(he("import.run.cancel"))?.click())
+    const question = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[role=alertdialog]")
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(question.textContent).toContain(he("import.run.cancelMessage"))
+    const confirm = Array.from(question.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === he("import.run.cancel"),
+    )
+    await act(async () => confirm?.click())
+    await vi.waitFor(() => expect(text()).toContain(he("import.run.reason.cancelled")))
+    const sent = requests.filter((r) => r.method === "POST" && r.url === "/api/v1/admin/import/cancel")
+    expect(sent.map((r) => JSON.parse(r.body ?? "{}"))).toEqual([{ runId: RUN }])
+    await vi.waitFor(() =>
+      expect(document.querySelector(".ui-toast-success")?.textContent).toContain(he("import.run.cancelled")),
+    )
+    expect(text()).not.toContain(he("import.run.alreadyEnded"))
+    expect(text()).toContain(he("import.run.state.stopped"))
+    expect(button(he("import.run.cancel"))).toBeUndefined()
+    expect(button(he("import.run.start"))?.disabled).toBe(false)
+  })
+
+  it("says the run had already ended when a cancel finds it over, without claiming it cancelled anything", async () => {
+    const working = { ...run, state: "running", finishedAt: null, done: 2, jobActive: true }
+    const ended = { ...working, state: "done", reason: null, finishedAt: when, jobActive: false }
+    let done = false
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": () => page({ agentUserId: "u1", run: done ? ended : working }),
+      "/api/v1/admin/import/run": () => ok({ run: done ? ended : working }),
+      "/api/v1/admin/import/cancel": () => {
+        done = true
+        return ok({ run: ended, cancelled: false })
+      },
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
+    })
+    await vi.waitFor(() => expect(button(he("import.run.cancel"))?.disabled).toBe(false))
+    await act(async () => button(he("import.run.cancel"))?.click())
+    const question = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[role=alertdialog]")
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    const confirm = Array.from(question.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === he("import.run.cancel"),
+    )
+    await act(async () => confirm?.click())
+    await vi.waitFor(() =>
+      expect(document.querySelector(".ui-toast-info")?.textContent).toContain(he("import.run.alreadyEnded")),
+    )
+    expect(document.querySelector(".ui-toast-success")).toBeNull()
+    expect(text()).not.toContain(he("import.run.cancelled"))
+    expect(requests.filter((r) => r.method === "POST" && r.url === "/api/v1/admin/import/cancel")).toHaveLength(1)
+    expect(text()).toContain(he("import.run.state.done"))
+  })
+
+  it("says the import is closed for good once Maane went live", async () => {
+    await renderAt("/import", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/admin/import": page({ window: { open: false, mode: "live", wentLiveAt: when } }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("import.closed")))
+    expect(button(he("import.run.start"))?.disabled).toBe(true)
+    expect(document.querySelector<HTMLSelectElement>('[data-brand="100"] select')?.disabled).toBe(true)
+  })
+
+  it("locks the page for an agent without reading it", async () => {
+    session.set({ session: { id: "current" }, user: { id: "u2", role: "agent" } })
+    await renderAt("/import", { "/api/setup/status": status(), "/api/v1/me": agent })
+    await vi.waitFor(() => expect(text()).toContain(he("adminOnly.title")))
+    expect(requests.some((r) => r.url.startsWith("/api/v1/admin/import"))).toBe(false)
   })
 })

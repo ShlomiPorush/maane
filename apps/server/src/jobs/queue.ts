@@ -1,14 +1,14 @@
 import { drizzle } from "drizzle-orm/node-postgres"
 import pg from "pg"
-import { PgBoss, type Db as QueueDb, type QueueOptions } from "pg-boss"
+import { PgBoss, type Queue, type Db as QueueDb } from "pg-boss"
 import type { Db } from "../db/client.ts"
 import * as schema from "../db/schema.ts"
 import { errorFacts, log } from "../log.ts"
 
 // The job queues the server and the worker share. The worker runs every job; the server only queues the ones a user
 // asks for (a scanner, Graph, or SMTP connection test, a reply to send, an upload to scan, a timed action or the end
-// of a snooze at its time) and reads their state, through pg-boss's documented send (with `startAfter` for a time) and
-// getJobById. The server never calls an outside service itself.
+// of a snooze at its time) and reads their state, through pg-boss's documented send (with `startAfter` for a time),
+// getJobById, and findJobs. The server never calls an outside service itself.
 
 /** The scanner self-test: on worker start, every hour, when the scanner address changes, and for a connection test. */
 export const SCANNER_SELF_TEST = "scanner-self-test"
@@ -54,11 +54,28 @@ export type PushKind = "new_ticket" | "customer_reply"
 export type PushJob = { kind: PushKind; ticketId: string; messageId: string }
 
 /**
+ * One run of the import from the Zendesk archive (plan 5.1): `{ runId }`. One at a time: at most one run is open (a
+ * unique index), and the worker's session lock lets one job work at a time, so a second job for the open run (Start
+ * again, or a retry pg-boss starts while an expired run still works) does nothing. A failed run is tried again; it
+ * goes on from its last committed ticket.
+ */
+export const ZENDESK_IMPORT = "zendesk-import"
+
+/**
+ * The heartbeat of an import job, through pg-boss's documented `heartbeatSeconds` send option: the worker's pg-boss
+ * refreshes it while the handler runs, and its supervisor fails a job whose heartbeat stopped this long ago (a worker
+ * that died), so the job is retried, or Continue shows once its retries are used up, within minutes instead of after
+ * `expireInSeconds`, which stays the longest a run may take. Far above the longest stretch the handler holds the event
+ * loop (parsing one archive file).
+ */
+export const ZENDESK_IMPORT_HEARTBEAT_SECONDS = 120
+
+/**
  * The options of the queues the server sends to in a transaction, the same on both sides: pg-boss keeps the options of
  * the first createQueue. A failed run is tried again; a reply's outbox state makes a retry safe (it never sends what
  * an earlier run may have sent).
  */
-export const QUEUE_OPTIONS: Record<string, QueueOptions> = {
+export const QUEUE_OPTIONS: Record<string, Omit<Queue, "name">> = {
   // Longer than the slowest run (two providers, each up to SMTP_TIMEOUTS' setup and send deadlines, about 23 minutes),
   // so pg-boss never retries a run that still sends.
   [SEND_REPLY]: { retryLimit: 3, retryDelay: 30, retryBackoff: true, expireInSeconds: 45 * 60 },
@@ -69,6 +86,7 @@ export const QUEUE_OPTIONS: Record<string, QueueOptions> = {
   // a late run from acting twice. pg-boss keeps a job until its startAfter plus the retention, so a far time is kept.
   [TIMED_ACTION]: { retryLimit: 5, retryDelay: 30, retryBackoff: true, expireInSeconds: 5 * 60 },
   [SNOOZE_END]: { retryLimit: 5, retryDelay: 30, retryBackoff: true, expireInSeconds: 5 * 60 },
+  [ZENDESK_IMPORT]: { retryLimit: 5, retryDelay: 60, retryBackoff: true, expireInSeconds: 6 * 60 * 60 },
 }
 
 /** pg-boss's states of a job, as the server reports them to the UI. */
@@ -81,9 +99,19 @@ export interface JobQueue {
    * Queues a job inside the caller's transaction (pg-boss's documented `db` option): the job exists exactly when the
    * transaction commits. Throws when the queue takes nothing, so the transaction rolls back.
    */
-  sendIn(db: QueueDb, name: string, data: object, options?: { startAfter?: Date }): Promise<string>
+  sendIn(
+    db: QueueDb,
+    name: string,
+    data: object,
+    options?: { startAfter?: Date; heartbeatSeconds?: number },
+  ): Promise<string>
   /** A job's state and the output its handler returned, or null when no such job exists. */
   job(name: string, id: string): Promise<{ state: JobState; output: unknown } | null>
+  /**
+   * The state of the job of this queue whose data contains `data` that matters most while it is not done: working
+   * (`active`), then queued (`created`), then waiting to be tried again after a failure (`retry`); null when none is.
+   */
+  pending(name: string, data: object): Promise<"active" | "created" | "retry" | null>
   stop(): Promise<void>
 }
 
@@ -102,6 +130,7 @@ export async function openJobQueue(connectionString: string): Promise<JobQueue> 
   await boss.createQueue(UPLOAD_SCAN, QUEUE_OPTIONS[UPLOAD_SCAN])
   await boss.createQueue(TIMED_ACTION, QUEUE_OPTIONS[TIMED_ACTION])
   await boss.createQueue(SNOOZE_END, QUEUE_OPTIONS[SNOOZE_END])
+  await boss.createQueue(ZENDESK_IMPORT, QUEUE_OPTIONS[ZENDESK_IMPORT])
   return {
     async send(name, data = {}) {
       const id = await boss.send(name, data)
@@ -109,13 +138,22 @@ export async function openJobQueue(connectionString: string): Promise<JobQueue> 
       return id
     },
     async sendIn(db, name, data, options = {}) {
-      const id = await boss.send(name, data, { db, ...(options.startAfter ? { startAfter: options.startAfter } : {}) })
+      const id = await boss.send(name, data, {
+        db,
+        ...(options.startAfter ? { startAfter: options.startAfter } : {}),
+        ...(options.heartbeatSeconds ? { heartbeatSeconds: options.heartbeatSeconds } : {}),
+      })
       if (!id) throw new Error(`the queue did not accept a ${name} job`)
       return id
     },
     async job(name, id) {
       const job = await boss.getJobById(name, id)
       return job ? { state: job.state as JobState, output: job.output ?? null } : null
+    },
+    async pending(name, data) {
+      // findJobs' `queued` covers only the states before `active`, so the states are read here.
+      const states = new Set((await boss.findJobs(name, { data })).map((job) => job.state))
+      return (["active", "created", "retry"] as const).find((state) => states.has(state)) ?? null
     },
     stop: () => boss.stop({ graceful: false }),
   }

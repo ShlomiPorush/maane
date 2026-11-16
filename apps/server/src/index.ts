@@ -49,6 +49,7 @@ async function main(): Promise<void> {
     trustedProxies: config.trustedProxies,
     geoipDir: config.geoipDir,
     vapidPublicKey: config.vapid.publicKey,
+    archiveDir: config.archiveDir,
   })
 
   const server = serve({ fetch: app.fetch, port: config.port, hostname: "0.0.0.0" })

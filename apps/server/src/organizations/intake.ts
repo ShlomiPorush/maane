@@ -7,6 +7,7 @@ import { type IntakeMode, SETTINGS } from "@maane/shared"
 import { eq, sql } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
 import { setting, supportAddress } from "../db/schema.ts"
+import { goingLive } from "../imports/window.ts"
 import { Refusal } from "./refusal.ts"
 
 /** A transaction of Maane's connection. */
@@ -38,10 +39,12 @@ export async function hasDefaultAddress(tx: Pick<Tx, "select">): Promise<boolean
 
 /**
  * Called by the settings service inside the transaction that stores a new intake mode, before it writes: takes the
- * lock, and refuses live while no default address exists.
+ * lock, and refuses live while no default address exists. Live also locks the mode row, is refused while a Zendesk
+ * import run is open, and records the first time Maane went live, which closes the import window (plan 5.1).
  */
 export async function checkIntakeModeChange(tx: Tx, mode: IntakeMode): Promise<void> {
   await lockIntakeConfig(tx)
-  if (mode === "live" && !(await hasDefaultAddress(tx)))
-    throw new Refusal("intake_no_default_address", 409, { key: "intake.mode" })
+  if (mode !== "live") return
+  if (!(await hasDefaultAddress(tx))) throw new Refusal("intake_no_default_address", 409, { key: "intake.mode" })
+  await goingLive(tx)
 }

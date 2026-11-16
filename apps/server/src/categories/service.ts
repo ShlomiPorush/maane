@@ -6,6 +6,7 @@ import { asc, count, eq, sql } from "drizzle-orm"
 import { writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import { category, ticketCategory } from "../db/schema.ts"
+import { refuseImportedCategory } from "../imports/window.ts"
 import { databaseError, Refusal } from "../organizations/refusal.ts"
 import { type Acting, hidden } from "../organizations/service.ts"
 
@@ -97,11 +98,16 @@ export class Categories {
     }
   }
 
-  /** Deletes a category; every ticket that carried it loses it in the same transaction. */
+  /**
+   * Deletes a category; every ticket that carried it loses it in the same transaction. Refused while an imported
+   * ticket carries it and Maane has not gone live.
+   */
   async delete(id: string, acting: Acting): Promise<void> {
     await this.db.transaction(async (tx) => {
       const [current] = await tx.select({ name: category.name }).from(category).where(eq(category.id, id)).for("update")
       if (!current) throw new Refusal("category_not_found", 404)
+      // It would change an imported ticket, which is read-only until Maane goes live (plan 5.1).
+      await refuseImportedCategory(tx, id)
       await tx.delete(category).where(eq(category.id, id))
       await writeAudit(tx, acting.actor, {
         action: "category.delete",

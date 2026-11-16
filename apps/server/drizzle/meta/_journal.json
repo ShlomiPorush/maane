@@ -169,6 +169,27 @@
       "when": 1794781615569,
       "tag": "0023_reminders",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794835615082,
+      "tag": "0024_import",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1794835617583,
+      "tag": "0025_import_row",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794849761451,
+      "tag": "0026_import_failure",
+      "breakpoints": true
     }
   ]
 }

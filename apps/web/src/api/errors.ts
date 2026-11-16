@@ -73,6 +73,12 @@ export const ERROR_TEXT: Record<string, string> = {
   push_endpoint_refused: "errors.code.pushEndpointRefused",
   push_endpoint_taken: "errors.code.pushEndpointTaken",
   push_subscription_invalid: "errors.code.pushSubscriptionInvalid",
+  ticket_imported: "errors.code.ticketImported",
+  category_imported: "errors.code.categoryImported",
+  import_running: "errors.code.importRunning",
+  import_closed: "errors.code.importClosed",
+  import_no_agent: "errors.code.importNoAgent",
+  import_user_invalid: "errors.code.importUserInvalid",
   internal: "errors.server",
   // Maane's refusals on Better Auth's routes (apps/server/src/auth/auth.ts)
   UNAUTHORIZED: "errors.code.unauthorized",

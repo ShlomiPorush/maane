@@ -1,6 +1,7 @@
 // The words of the ticket list, the ticket view, file preview, and the intake log (plan 2.4) that the server and the
 // UI share: which detected types preview and how, and the shapes the API answers with.
 
+import type { ImportedMessageView, ImportedTicketView } from "./imports.ts"
 import type {
   IntakeOutcome,
   LinkReason,
@@ -138,6 +139,8 @@ export interface MessageView {
   scheduled: boolean
   /** An automatic reminder (plan 4.3), sent as the organization: it has no author. */
   reminder: boolean
+  /** A comment imported from Zendesk (plan 5.1), or null. */
+  imported: ImportedMessageView | null
 }
 
 export interface TicketView {
@@ -157,6 +160,8 @@ export interface TicketView {
     snoozedUntil: string | null
     /** A snooze whose time passed and that has not ended yet (its job is late): the agent can still end it by hand. */
     snoozeOverdue: boolean
+    /** A ticket imported from Zendesk (plan 5.1), or null. */
+    imported: ImportedTicketView | null
   }
   participants: MailAddress[]
   /** Tickets this one is linked to, either way, that the user may see. */

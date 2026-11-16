@@ -2992,3 +2992,78 @@ textarea.ui-input.ui-textarea {
     min-height: 44px;
   }
 }
+
+/* The import from Zendesk (plan 5.1): the mapping's groups and rows, the run's progress, and the archive check's
+   problems. */
+.ui-import-group {
+  display: grid;
+  gap: 6px;
+  padding: 4px var(--ui-pad-x) 12px;
+}
+.ui-import-group .ui-select {
+  justify-self: start;
+  width: min(100%, 360px);
+}
+.ui-import-subtitle {
+  margin: 0;
+  padding: 12px var(--ui-pad-x) 2px;
+  border-top: 1px solid var(--ui-line);
+  font-size: var(--ui-fs-h2);
+  font-weight: 650;
+}
+.ui-import-hint {
+  margin: 0;
+  padding: 0 var(--ui-pad-x) 10px;
+}
+.ui-import-row .ui-select {
+  width: min(42vw, 260px);
+}
+.ui-import-run {
+  display: grid;
+  gap: 10px;
+  padding-top: 4px;
+}
+.ui-import-progress-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 0 var(--ui-pad-x);
+  font-variant-numeric: tabular-nums;
+}
+.ui-import-progress {
+  height: 8px;
+  margin: 0 var(--ui-pad-x);
+  border-radius: 999px;
+  background: var(--ui-fill);
+  overflow: hidden;
+}
+.ui-import-progress > span {
+  display: block;
+  block-size: 100%;
+  border-radius: inherit;
+  background: var(--ui-info);
+}
+.ui-import-run[data-state="done"] .ui-import-progress > span {
+  background: var(--ui-ok);
+}
+.ui-import-problems {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-block: 0;
+  padding-inline: calc(var(--ui-pad-x) + 18px) var(--ui-pad-x);
+  font-size: var(--ui-fs-sm);
+  overflow-wrap: anywhere;
+}
+.ui-import-run > .ui-banner {
+  margin: 0 var(--ui-pad-x);
+}
+@media (max-width: 640px) {
+  .ui-import-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ui-import-row .ui-select {
+    width: 100%;
+  }
+}

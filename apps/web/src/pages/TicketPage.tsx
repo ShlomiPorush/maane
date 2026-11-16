@@ -11,7 +11,7 @@
 // reminder of its waiting period that has not gone yet shows there too, with when it goes (plan 4.3,
 // tickets/Reminder.tsx); a sent one is a message marked as an automatic reminder, under the organization's name.
 
-import type { AttachmentView, MessageView, ScheduledReplyView, TicketView } from "@maane/shared"
+import type { AttachmentView, ImportedTicketView, MessageView, ScheduledReplyView, TicketView } from "@maane/shared"
 import { Download, Eye, Paperclip } from "lucide-react"
 import { useState } from "react"
 import { Link, useParams } from "react-router"
@@ -23,7 +23,7 @@ import { PageHead } from "../shell/chrome.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { Copyable } from "../ui/Copyable.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
-import { Banner, ErrorState, Loading, StaleNote } from "../ui/states.tsx"
+import { Banner, ErrorState, Loading, Locked, StaleNote } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
 import { Tag } from "../ui/tags.tsx"
 import { Clicks } from "./tickets/Clicks.tsx"
@@ -111,8 +111,15 @@ function Ticket({ view }: { view: TicketView }) {
   // (one that went out or was cancelled meanwhile gets the server's refusal when saved).
   const [editing, setEditing] = useState<ScheduledReplyView | null>(null)
   const { ticket } = view
+  // An imported ticket is read-only until Maane goes live (plan 5.1): its values show, nothing changes them.
+  const readOnly = ticket.imported?.readOnly === true
   return (
     <>
+      {readOnly ? (
+        <Banner tone="info" title={t("ticket.imported.readOnly")}>
+          {t("ticket.imported.readOnlyHint")}
+        </Banner>
+      ) : null}
       <section className="ui-panel" aria-labelledby="ticket-details">
         <div className="ui-panel-head">
           <h2 id="ticket-details">{t("ticket.details")}</h2>
@@ -121,26 +128,26 @@ function Ticket({ view }: { view: TicketView }) {
           <div>
             <dt>{t("ticket.statusLabel")}</dt>
             <dd>
-              <StatusControl view={view} />
+              {readOnly ? (
+                <Tag tone="neutral">{t(`ticket.status.${ticket.status}`)}</Tag>
+              ) : (
+                <StatusControl view={view} />
+              )}
             </dd>
           </div>
           <div>
             <dt>{t("ticket.snooze.label")}</dt>
             <dd>
-              <SnoozeControl view={view} />
+              {readOnly ? <span className="ui-muted">{t("ticket.imported.none")}</span> : <SnoozeControl view={view} />}
             </dd>
           </div>
           <div>
             <dt>{t("ticket.categories.label")}</dt>
-            <dd>
-              <CategoriesControl view={view} />
-            </dd>
+            <dd>{readOnly ? <CategoryList view={view} /> : <CategoriesControl view={view} />}</dd>
           </div>
           <div>
             <dt>{t("ticket.organization")}</dt>
-            <dd>
-              <OrganizationControl view={view} />
-            </dd>
+            <dd>{readOnly ? <bdi dir="auto">{ticket.organization.name}</bdi> : <OrganizationControl view={view} />}</dd>
           </div>
           <div>
             <dt>{t("ticket.supportAddress")}</dt>
@@ -191,6 +198,7 @@ function Ticket({ view }: { view: TicketView }) {
           ) : null}
         </dl>
       </section>
+      {ticket.imported ? <FromZendesk imported={ticket.imported} /> : null}
       <h2 className="ui-section-title">{t("ticket.messagesTitle")}</h2>
       {view.messages.map((message) => (
         <MessageCard
@@ -201,18 +209,105 @@ function Ticket({ view }: { view: TicketView }) {
           onPreview={setPreview}
         />
       ))}
-      <ScheduledReplies view={view} editing={editing?.id ?? null} onEdit={setEditing} />
-      {view.reminder ? <PendingReminder reminder={view.reminder} /> : null}
-      {/* One composer per ticket: moving to another ticket starts a fresh one (recipients, text, files, submission). */}
-      <Composer
-        key={ticket.number}
-        view={view}
-        editing={editing}
-        onEditDone={() => setEditing(null)}
-        onEditKeep={setEditing}
-      />
+      {readOnly ? (
+        <Locked title={t("ticket.imported.composerLocked")}>{t("ticket.imported.readOnlyHint")}</Locked>
+      ) : (
+        <>
+          <ScheduledReplies view={view} editing={editing?.id ?? null} onEdit={setEditing} />
+          {view.reminder ? <PendingReminder reminder={view.reminder} /> : null}
+          {/* One composer per ticket: moving to another ticket starts a fresh one (recipients, text, files, submission). */}
+          <Composer
+            key={ticket.number}
+            view={view}
+            editing={editing}
+            onEditDone={() => setEditing(null)}
+            onEditKeep={setEditing}
+          />
+        </>
+      )}
       {preview ? <FilePreview file={preview} onClose={() => setPreview(null)} /> : null}
     </>
+  )
+}
+
+/** The ticket's categories, shown without the control that changes them. */
+function CategoryList({ view }: { view: TicketView }) {
+  const { t } = useI18n()
+  const own = view.ticket.categories
+  if (own.length === 0) return <span className="ui-muted">{t("ticket.categories.none")}</span>
+  return (
+    <span className="ui-facts-list" data-testid="ticket-categories">
+      {own.map((category) => (
+        <bdi key={category.id} dir="auto">
+          <Tag tone="neutral">{category.name}</Tag>
+        </bdi>
+      ))}
+    </span>
+  )
+}
+
+/** What the import kept of the Zendesk ticket (plan 5.1): its number, brand, tags, fields, and followers, read-only. */
+function FromZendesk({ imported }: { imported: ImportedTicketView }) {
+  const { t } = useI18n()
+  return (
+    <section className="ui-panel" aria-labelledby="ticket-zendesk" data-testid="ticket-zendesk">
+      <div className="ui-panel-head">
+        <h2 id="ticket-zendesk">{t("ticket.imported.title")}</h2>
+      </div>
+      <dl className="ui-facts">
+        <div>
+          <dt>{t("ticket.imported.number")}</dt>
+          <dd>
+            <bdi dir="ltr">{t("ticket.imported.zendeskNumber", { number: imported.zendeskId })}</bdi>
+          </dd>
+        </div>
+        {imported.brand ? (
+          <div>
+            <dt>{t("ticket.imported.brand")}</dt>
+            <dd>
+              <bdi dir="auto">{imported.brand}</bdi>
+            </dd>
+          </div>
+        ) : null}
+        <div>
+          <dt>{t("ticket.imported.tags")}</dt>
+          <dd className="ui-facts-list">
+            {imported.tags.length > 0 ? (
+              imported.tags.map((tag) => (
+                <bdi key={tag} className="ui-mono" dir="auto">
+                  <Tag tone="neutral">{tag}</Tag>
+                </bdi>
+              ))
+            ) : (
+              <span className="ui-muted">{t("ticket.imported.none")}</span>
+            )}
+          </dd>
+        </div>
+        {imported.fields.map((field) => (
+          <div key={field.name}>
+            <dt>
+              <bdi dir="auto">{field.name}</bdi>
+            </dt>
+            <dd>
+              <bdi dir="auto">{field.value}</bdi>
+            </dd>
+          </div>
+        ))}
+        {imported.followers.length > 0 ? (
+          <div>
+            <dt>{t("ticket.imported.followers")}</dt>
+            <dd className="ui-facts-list">
+              {imported.followers.map((follower) => (
+                <bdi key={`${follower.address}:${follower.name}`} dir="auto">
+                  {follower.name ?? follower.address}
+                </bdi>
+              ))}
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+      <p className="ui-hint ui-import-hint">{t("ticket.imported.followersHint")}</p>
+    </section>
   )
 }
 
@@ -241,10 +336,22 @@ function MessageCard({
           {message.direction !== "in" ? <Tag tone="neutral">{t(`ticket.direction.${message.direction}`)}</Tag> : null}
           {message.scheduled ? <Tag tone="info">{t("ticket.scheduledReply")}</Tag> : null}
           {message.reminder ? <Tag tone="info">{t("ticket.reminder")}</Tag> : null}
+          {message.imported ? <Tag tone="info">{t("ticket.imported.tag")}</Tag> : null}
+          {message.imported?.sideConversation ? (
+            <Tag tone="neutral">{t("ticket.imported.sideConversation")}</Tag>
+          ) : null}
           {message.author ? <bdi dir="auto">{message.author.name}</bdi> : null}
+          {message.imported?.authorName && message.direction !== "in" ? (
+            <span className="ui-muted">{t("ticket.imported.author", { name: message.imported.authorName })}</span>
+          ) : null}
           {message.reminder && organizationName ? <bdi dir="auto">{organizationName}</bdi> : null}
+          {/* An imported comment without a recorded address shows its Zendesk author's name, never an unknown sender. */}
           {message.direction === "note" ? null : message.from ? (
             <AddressLine value={message.from} />
+          ) : message.imported ? (
+            message.direction === "in" && message.imported.authorName ? (
+              <bdi dir="auto">{message.imported.authorName}</bdi>
+            ) : null
           ) : (
             <Sender sender={null} />
           )}
