@@ -17,7 +17,7 @@
 // Lock order: the ticket, then the reminder's action, then the period row. Kept free of sharp: the worker loads it.
 
 import type { PeriodEndReason } from "@maane/shared"
-import { and, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, eq, inArray, isNull, type SQL, sql } from "drizzle-orm"
 import { OPEN_ACTION_STATES } from "../actions/timed.ts"
 import type { Db } from "../db/client.ts"
 import { organization, reminder, ticket, timedAction, waitingPeriod } from "../db/schema.ts"
@@ -99,9 +99,18 @@ export async function endWaitingPeriodForMove(
 }
 
 /**
+ * The time a reminder goes: `days` days after `from` (the database's clock by default) on Israel's calendar, so at the
+ * same local time of day across a daylight-saving change. PostgreSQL's documented `date_add(timestamptz, interval,
+ * zone)` adds the days in that zone, whatever time zone the connection has.
+ */
+export function reminderDueAt(days: number, from: SQL = sql`now()`): SQL {
+  return sql`date_add(${from}, make_interval(days => ${days}), 'Asia/Jerusalem')`
+}
+
+/**
  * A new open period for the reply `messageId`, in the caller's transaction, which holds the ticket locked and has no
  * open period: when the ticket's organization has a reminder template, its reminder is made, due its number of days
- * from now by the database's clock, and its job queued for that same time.
+ * from now by the database's clock on Israel's calendar (reminderDueAt), and its job queued for that same time.
  */
 export async function openWaitingPeriod(
   tx: Pick<Tx, "select" | "insert">,
@@ -126,7 +135,7 @@ export async function openWaitingPeriod(
     .values({
       kind: "reminder",
       ticketId,
-      dueAt: sql`now() + make_interval(days => ${settings.days})`,
+      dueAt: reminderDueAt(settings.days),
     })
     .returning({ id: timedAction.id, version: timedAction.version, dueAt: timedAction.dueAt })
   if (!action) throw new Error("a reminder was not written")

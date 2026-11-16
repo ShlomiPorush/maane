@@ -4,6 +4,7 @@ import { auditLog, message, outbox, reminder, ticket, timedAction, waitingPeriod
 import { applyDeliveryEvent } from "@maane/server/delivery/service"
 import { type JobQueue, openJobQueue, TIMED_ACTION } from "@maane/server/jobs/queue"
 import { Organizations } from "@maane/server/organizations/service"
+import { reminderDueAt } from "@maane/server/reminders/periods"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
 import { createTestApp } from "@maane/server/testing/app"
@@ -35,6 +36,8 @@ const BOUNCE = "bounce@example.com"
 const DANA = "Dana Customer <dana@example.com>"
 const HOUR = 3_600_000
 const DAY = 24 * HOUR
+// A reminder's days are Israel's calendar days: one across a daylight-saving change is an hour shorter or longer.
+const DST_SLACK = HOUR + 60_000
 const TODA = fromCodePoints(0x5ea, 0x5d5, 0x5d3, 0x5d4)
 // "Shalom, we are still waiting for your answer" in Hebrew, then an English line: the email is right to left.
 const SHALOM = fromCodePoints(0x5e9, 0x5dc, 0x5d5, 0x5dd)
@@ -271,6 +274,38 @@ describe("an organization's reminder", () => {
   })
 })
 
+describe("a reminder's time", () => {
+  // Israel's clocks change on Friday 2026-03-27 (to UTC+3) and on Sunday 2026-10-25 (back to UTC+2).
+  const dueOf = async (from: string, days: number) =>
+    db().transaction(async (tx) => {
+      // A connection in another time zone: the days are still Israel's.
+      await tx.execute(sql`set local time zone 'UTC'`)
+      const rows = await tx.execute<{ epoch: string; local: string }>(
+        sql`select extract(epoch from due)::bigint::text as epoch,
+                   to_char(due at time zone 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') as local
+            from (select ${reminderDueAt(days, sql`${from}::timestamptz`)} as due) as t`,
+      )
+      const row = rows.rows[0]
+      return { at: new Date(Number(row?.epoch) * 1000), local: row?.local }
+    })
+
+  it("is X days later at the same local time, across the change to summer time", async () => {
+    // Thursday noon in Israel (UTC+2), three days on: Sunday noon (UTC+3), 71 hours later.
+    const from = "2026-03-26T10:00:00Z"
+    const due = await dueOf(from, 3)
+    expect(due.local).toBe("2026-03-29 12:00")
+    expect(due.at.getTime() - new Date(from).getTime()).toBe(71 * HOUR)
+  })
+
+  it("is X days later at the same local time, across the change back to winter time", async () => {
+    // Friday noon in Israel (UTC+3), three days on: Monday noon (UTC+2), 73 hours later.
+    const from = "2026-10-23T09:00:00Z"
+    const due = await dueOf(from, 3)
+    expect(due.local).toBe("2026-10-26 12:00")
+    expect(due.at.getTime() - new Date(from).getTime()).toBe(73 * HOUR)
+  })
+})
+
 describe("a reminder", () => {
   it("is sent once, X days after a reply set the ticket to pending, as the organization, through the send point", async () => {
     const { agent, t, started } = await waiting()
@@ -279,7 +314,7 @@ describe("a reminder", () => {
     expect(period).toMatchObject({ origin: "maane", messageId: started, endedAt: null })
     const due = await onlyReminder(t.id)
     expect(due).toMatchObject({ kind: "reminder", state: "scheduled", version: 1, authorUserId: null })
-    expect(Math.abs(due.dueAt.getTime() - (Date.now() + 2 * DAY))).toBeLessThan(60_000)
+    expect(Math.abs(due.dueAt.getTime() - (Date.now() + 2 * DAY))).toBeLessThan(DST_SLACK)
     expect(await timedJobs(due.id)).toEqual([{ version: 1, startAfter: due.dueAt }])
     expect((await view(agent, t.number)).reminder).toEqual({
       id: due.id,
@@ -520,7 +555,7 @@ describe("a move to another organization during a waiting period", () => {
     expect(newest?.periodId).toBe(periods[1]?.id)
     expect(fresh).toMatchObject({ kind: "reminder", state: "scheduled", version: 1 })
     // The new organization's days, counted from the move, with its job queued for that same time.
-    expect(Math.abs((fresh?.dueAt.getTime() ?? 0) - (Date.now() + 5 * DAY))).toBeLessThan(60_000)
+    expect(Math.abs((fresh?.dueAt.getTime() ?? 0) - (Date.now() + 5 * DAY))).toBeLessThan(DST_SLACK)
     expect(await timedJobs(fresh?.id ?? "")).toEqual([{ version: 1, startAfter: fresh?.dueAt }])
     expect((await view(agent, t.number)).reminder?.id).toBe(fresh?.id)
     // The audit counts the scheduled replies the move cancelled, never the reminder.
