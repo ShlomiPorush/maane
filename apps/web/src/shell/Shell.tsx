@@ -129,11 +129,16 @@ function TabBar({ pages }: { pages: readonly NavPage[] }) {
   )
 }
 
+/**
+ * Maane's mark, a thread: three bars that alternate sides like a ticket's messages. It never mirrors with the
+ * direction. The same bars, at the tile's scale, are public/favicon.svg and the icons rendered from it.
+ */
 export function BrandIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
-      <rect x="3.5" y="6" width="17" height="12" rx="1.5" />
-      <path d="m4 7 8 6 8-6" />
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <rect x="7.2" y="1.8" width="16.8" height="5.4" rx="2.7" />
+      <rect x="0" y="9.3" width="18" height="5.4" rx="2.7" />
+      <rect x="12" y="16.8" width="12" height="5.4" rx="2.7" />
     </svg>
   )
 }
