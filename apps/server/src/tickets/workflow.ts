@@ -5,7 +5,8 @@
 // A move takes the ticket to another organization: an admin may move any ticket; an agent only between two
 // organizations they belong to. From then on its replies come from the new organization's addresses: the composer
 // offers them, and the From check of a reply (when written and when sent) reads the ticket's organization. A move
-// cancels the ticket's scheduled replies that have not gone to the send point, in its own transaction (plan 4.2).
+// cancels the ticket's scheduled replies that have not gone to the send point, in its own transaction (plan 4.2), and
+// rebuilds the reminder of its waiting period from the new organization's template and days (plan 4.3, periods.ts).
 
 import type { CategoryRef, OrganizationRef, TicketStatus } from "@maane/shared"
 import { and, asc, eq, inArray, sql } from "drizzle-orm"
@@ -13,8 +14,10 @@ import { cancelTicketActions } from "../actions/timed.ts"
 import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import { category, organization, ticket, ticketCategory } from "../db/schema.ts"
+import { type JobQueue, TIMED_ACTION, transactionWithJobs } from "../jobs/queue.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import { inScope, type OrganizationScope } from "../organizations/scope.ts"
+import { endWaitingPeriodForMove, openWaitingPeriod } from "../reminders/periods.ts"
 import { fromAddresses, supportRules } from "../replies/rules.ts"
 import { changeStatus, type LockedTicket, lockTicket } from "./status.ts"
 
@@ -23,11 +26,33 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 /** The user a change acts for. */
 export type WorkflowUser = { id: string; role: string; actor: Actor; ipAddress: string | null }
 
+/** The organizations the user may move a ticket of this organization to: every other one in their scope. */
+export async function moveTargets(
+  db: Db,
+  scope: OrganizationScope,
+  organizationId: string,
+): Promise<OrganizationRef[]> {
+  if (!inScope(scope, organizationId)) return []
+  const rows = await db
+    .select({ id: organization.id, name: organization.name })
+    .from(organization)
+    .where(
+      scope.all
+        ? undefined
+        : inArray(organization.id, scope.organizationIds.length ? scope.organizationIds : [organizationId]),
+    )
+    .orderBy(asc(sql`lower(${organization.name})`))
+  return rows.filter((row) => row.id !== organizationId)
+}
+
 export class Workflow {
-  constructor(private readonly db: Db) {}
+  constructor(
+    private readonly db: Db,
+    private readonly jobs: JobQueue,
+  ) {}
 
   /** The ticket by number, locked, inside the scope; a 404 refusal otherwise (outside the scope it does not exist). */
-  async #locked(tx: Tx, scope: OrganizationScope, number: number): Promise<LockedTicket> {
+  async #locked(tx: Pick<Tx, "select">, scope: OrganizationScope, number: number): Promise<LockedTicket> {
     const [row] = await tx.select({ id: ticket.id }).from(ticket).where(eq(ticket.number, number))
     const locked = row ? await lockTicket(tx, row.id) : null
     if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
@@ -92,7 +117,7 @@ export class Workflow {
 
   /** Moves the ticket to another organization: an admin, or an agent of both organizations. */
   async move(scope: OrganizationScope, user: WorkflowUser, number: number, organizationId: string): Promise<void> {
-    await this.db.transaction(async (tx) => {
+    await transactionWithJobs(this.db, async (tx, jobs) => {
       const locked = await this.#locked(tx, scope, number)
       if (locked.organizationId === organizationId) return
       // An agent may move a ticket only into an organization they belong to; one outside the scope is not offered.
@@ -113,8 +138,17 @@ export class Workflow {
       if (!held || fromAddresses(await supportRules(tx), organizationId, held.supportAddress).from.length === 0)
         throw new Refusal("move_no_sending_address", 409)
       await tx.update(ticket).set({ organizationId }).where(eq(ticket.id, locked.id))
+      // The waiting period ends with the move (plan 4.3): its reminder was the old organization's. First, so the count
+      // of cancelled scheduled replies holds only them.
+      const waitingSince = await endWaitingPeriodForMove(tx, locked.id)
       // Scheduled replies were written as the old organization (its From address, its signature): cancelled.
       const cancelled = await cancelTicketActions(tx, locked.id, "move")
+      // A period Maane started goes on at once under the new organization: its reminder from the new organization's
+      // days, counted from now, and its template, read when it goes; none when it has no template.
+      if (waitingSince)
+        await openWaitingPeriod(tx, locked.id, waitingSince, (data, startAfter) =>
+          this.jobs.sendIn(jobs, TIMED_ACTION, data, { startAfter }),
+        )
       await writeAudit(tx, user.actor, {
         action: "ticket.move",
         entityType: "ticket",
@@ -129,29 +163,14 @@ export class Workflow {
       })
     })
   }
+}
 
-  /** The organizations the user may move a ticket of this organization to: every other one in their scope. */
-  async moveTargets(scope: OrganizationScope, organizationId: string): Promise<OrganizationRef[]> {
-    if (!inScope(scope, organizationId)) return []
-    const rows = await this.db
-      .select({ id: organization.id, name: organization.name })
-      .from(organization)
-      .where(
-        scope.all
-          ? undefined
-          : inArray(organization.id, scope.organizationIds.length ? scope.organizationIds : [organizationId]),
-      )
-      .orderBy(asc(sql`lower(${organization.name})`))
-    return rows.filter((row) => row.id !== organizationId)
-  }
-
-  /** A ticket's categories, by name. */
-  async categoriesOf(ticketId: string): Promise<CategoryRef[]> {
-    return this.db
-      .select({ id: category.id, name: category.name })
-      .from(ticketCategory)
-      .innerJoin(category, eq(category.id, ticketCategory.categoryId))
-      .where(eq(ticketCategory.ticketId, ticketId))
-      .orderBy(sql`lower(${category.name})`)
-  }
+/** A ticket's categories, by name. */
+export async function categoriesOf(db: Db, ticketId: string): Promise<CategoryRef[]> {
+  return db
+    .select({ id: category.id, name: category.name })
+    .from(ticketCategory)
+    .innerJoin(category, eq(category.id, ticketCategory.categoryId))
+    .where(eq(ticketCategory.ticketId, ticketId))
+    .orderBy(sql`lower(${category.name})`)
 }

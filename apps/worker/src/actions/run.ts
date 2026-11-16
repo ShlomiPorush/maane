@@ -12,6 +12,12 @@
 //
 // "Send and set pending" is not applied here: the send point's claim applies it, in the transaction that hands the
 // reply to `sending` (apps/worker/src/send/sender.ts), so a reply stopped before it goes leaves the status as it was.
+//
+// A reminder (plan 4.3) is the same rule's second kind: at its time, under the same locks, its waiting period must
+// still be Maane's own and open, the ticket still pending, the customer silent since, and the reply that started the
+// period not bounced (apps/server/src/reminders/checks.ts); then its email is built here, now, from the organization's
+// template (apps/server/src/reminders/mail.ts: 3.2's builder, without history, so without sharp), written with its
+// outbox row as a reply without an author, and checked once more at the send point. It never changes the status.
 
 import { randomUUID } from "node:crypto"
 import { lockAction, setActionState, ticketOfAction } from "@maane/server/actions/timed"
@@ -20,11 +26,14 @@ import type { Db } from "@maane/server/db/client"
 import { scheduledReply, ticket, timedAction } from "@maane/server/db/schema"
 import { SEND_REPLY, SNOOZE_END, TIMED_ACTION, transactionWithJobs } from "@maane/server/jobs/queue"
 import { errorFacts, log } from "@maane/server/log"
+import { reminderProblem } from "@maane/server/reminders/checks"
+import { reminderMessage } from "@maane/server/reminders/mail"
 import { sendProblem } from "@maane/server/replies/checks"
 import { ActionWritten, type ReplyFile, writeMessage } from "@maane/server/replies/write"
+import type { Settings } from "@maane/server/settings/service"
 import { customerWroteSince } from "@maane/server/tickets/customer-reply"
-import { lockTicket } from "@maane/server/tickets/status"
-import type { ActionReason, MailAddress } from "@maane/shared"
+import { type LockedTicket, lockTicket } from "@maane/server/tickets/status"
+import type { ActionReason, Locale, MailAddress } from "@maane/shared"
 import { and, eq, sql } from "drizzle-orm"
 import type { Db as QueueDb } from "pg-boss"
 import { lockIntakeMode } from "../intake/process.ts"
@@ -34,21 +43,26 @@ export type TimedResult = "handed" | "stale" | ActionReason
 
 export interface TimedActionsOptions {
   db: Db
+  /** The default language: a reminder's email is written in it (plan 4.3). */
+  settings: Settings
   /** Queues a job inside the transaction (pg-boss's documented `db` option). */
   queue: (db: QueueDb, name: string, data: object) => Promise<unknown>
 }
 
 export class TimedActions {
   readonly #db: Db
+  readonly #settings: Settings
   readonly #queue: TimedActionsOptions["queue"]
 
   constructor(options: TimedActionsOptions) {
     this.#db = options.db
+    this.#settings = options.settings
     this.#queue = options.queue
   }
 
   /** Runs the action's version that the job was queued for. */
   async run(actionId: string, version: number): Promise<TimedResult> {
+    const locale = (await this.#settings.get("general.defaultLocale")) as Locale
     try {
       return await transactionWithJobs(this.#db, async (tx, jobs) => {
         const mode = await lockIntakeMode(tx)
@@ -56,6 +70,7 @@ export class TimedActions {
         const locked = ticketId ? await lockTicket(tx, ticketId) : null
         const action = locked ? await lockAction(tx, actionId) : null
         if (!locked || !action || action.state !== "scheduled" || action.version !== version) return "stale"
+        if (action.kind === "reminder") return this.#reminder(tx, jobs, mode, locked, actionId, version, locale)
         const [reply] = await tx.select().from(scheduledReply).where(eq(scheduledReply.actionId, actionId))
         if (!reply || !action.authorUserId) return "stale"
         const problem = (await customerWroteSince(tx, locked.id, actionId))
@@ -126,13 +141,73 @@ export class TimedActions {
       throw error
     }
   }
+
+  /** A reminder at its time (plan 4.3), in run's transaction with its locks held: checked, built, and written. */
+  async #reminder(
+    tx: Db,
+    jobs: QueueDb,
+    mode: string,
+    locked: LockedTicket,
+    actionId: string,
+    version: number,
+    locale: Locale,
+  ): Promise<TimedResult> {
+    const end = async (reason: ActionReason) => {
+      await setActionState(tx, actionId, "ended", reason)
+      log.info("a reminder ended at its time without sending", { actionId, reason })
+      return reason
+    }
+    const problem = await reminderProblem(tx, actionId, locked)
+    if (problem) return end(problem)
+    const at = new Date()
+    const ready = await reminderMessage(tx, locked.id, locale, at)
+    if (typeof ready === "string") return end(ready)
+    const refused = await sendProblem(tx, mode, {
+      from: ready.from ?? "",
+      organizationId: locked.organizationId,
+      authorUserId: null,
+      automated: true,
+    })
+    if (refused) return end(refused)
+    const messageId = await writeMessage(
+      tx,
+      {
+        ticketId: locked.id,
+        authorUserId: null,
+        // Its own on each run: the outbox row's unique (action, version) keeps a rerun from writing twice.
+        submissionId: randomUUID(),
+        at,
+        ready,
+        action: { id: actionId, version },
+      },
+      (data) => this.#queue(jobs, SEND_REPLY, data),
+    )
+    if (!messageId) return "stale"
+    await setActionState(tx, actionId, "handed")
+    await writeAudit(tx, SYSTEM, {
+      action: "message.reminder",
+      entityType: "message",
+      entityId: messageId,
+      details: {
+        ticket: locked.number,
+        from: ready.from,
+        recipients: [...ready.to, ...ready.cc].map((entry) => entry.address),
+        reminder: actionId,
+      },
+    })
+    return "handed"
+  }
 }
 
-/** How long past its time a scheduled reply or a snooze waits for its own job before `timed-recover` queues another. */
+/**
+ * How long past its time a scheduled reply, a reminder, or a snooze waits for its own job before `timed-recover` queues
+ * another.
+ */
 export const OVERDUE = "5 minutes"
 
 /**
- * The `timed-recover` job (TIMED_RECOVER): queues again the `timed-action` job of every reply still `scheduled` and the
+ * The `timed-recover` job (TIMED_RECOVER): queues again the `timed-action` job of every action still `scheduled` (a
+ * scheduled reply or a reminder) and the
  * `snooze-end` job of every snooze still on, OVERDUE past their time by the database's clock. A job that failed for good,
  * or that the queue no longer holds after a long outage, is made up for; one that still runs meanwhile is harmless, as
  * each names its version. Returns how many it queued.

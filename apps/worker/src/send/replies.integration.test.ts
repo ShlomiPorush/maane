@@ -106,7 +106,13 @@ function workerSettings(values: Partial<Record<SettingKey, string>> = {}) {
 
 function sender(values: Partial<Record<SettingKey, string>> = {}, options: { afterClaim?: () => Promise<void> } = {}) {
   const settings = workerSettings(values)
-  return new ReplySender({ db: h.database.db, settings, timeouts: QUICK, afterClaim: options.afterClaim })
+  return new ReplySender({
+    db: h.database.db,
+    settings,
+    queue: (jobs, name, data, startAfter) => queue.sendIn(jobs, name, data, { startAfter }),
+    timeouts: QUICK,
+    afterClaim: options.afterClaim,
+  })
 }
 
 const browser = () => new TestBrowser(app.fetch, nextIp())

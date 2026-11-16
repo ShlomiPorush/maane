@@ -17,6 +17,8 @@
 //   of the ticket accepted last (by when it was accepted, not when its reply was written) decides; the flag is set while
 //   that row holds a bounce, a rejection, or a spam report written after its acceptance. A later accepted send to the
 //   same address clears it, and an old bounce of an earlier send never sets it again.
+// - A bounce, a rejection, or a spam report on the reply that started the ticket's waiting period ends that period, so
+//   its reminder never goes (plan 4.3), in the same transaction, after the ticket's lock the flag takes.
 
 import {
   DELIVERY_DETAIL_MAX,
@@ -29,6 +31,7 @@ import {
 import { and, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
 import { message, outbox, outboxRecipient, ticket } from "../db/schema.ts"
+import { endWaitingPeriod } from "../reminders/periods.ts"
 import { wellFormed, wellFormedText } from "../text.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
@@ -96,8 +99,9 @@ export function eventTime(value: unknown): Date | null {
 }
 
 /**
- * Writes one event to its recipient when it is newer than what the recipient holds, and refreshes the ticket's flag.
- * Returns whether a recipient changed; an event for an unknown reply or recipient changes nothing.
+ * Writes one event to its recipient when it is newer than what the recipient holds, and refreshes the ticket's flag; a
+ * failed delivery ends the waiting period that reply started. Returns whether a recipient changed; an event for an
+ * unknown reply or recipient changes nothing.
  */
 export async function applyDeliveryEvent(tx: Tx, target: DeliveryTarget, event: DeliveryEvent): Promise<boolean> {
   const final = FINAL_DELIVERY_STATUSES.includes(event.status)
@@ -153,7 +157,18 @@ export async function applyDeliveryEvent(tx: Tx, target: DeliveryTarget, event: 
         changed.map((row) => row.messageId),
       ),
     )
-  for (const row of tickets) if (row.ticketId) await refreshDeliveryFlag(tx, row.ticketId)
+  const failed = FAILED_DELIVERY_STATUSES.includes(event.status)
+  for (const row of tickets) {
+    if (!row.ticketId) continue
+    await refreshDeliveryFlag(tx, row.ticketId)
+    if (failed)
+      await endWaitingPeriod(
+        tx,
+        row.ticketId,
+        "delivery_failed",
+        changed.map((entry) => entry.messageId),
+      )
+  }
   return true
 }
 

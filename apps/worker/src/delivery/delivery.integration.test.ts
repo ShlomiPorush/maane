@@ -91,7 +91,14 @@ function workerSettings(values: Partial<Record<SettingKey, string>> = {}, withou
 const sender = (
   values: Partial<Record<SettingKey, string>> = {},
   hooks: Pick<ReplySenderOptions, "afterClaim" | "afterSend" | "afterRecord"> = {},
-) => new ReplySender({ db: h.database.db, settings: workerSettings(values), timeouts: QUICK, ...hooks })
+) =>
+  new ReplySender({
+    db: h.database.db,
+    settings: workerSettings(values),
+    queue: (jobs, name, data, startAfter) => queue.sendIn(jobs, name, data, { startAfter }),
+    timeouts: QUICK,
+    ...hooks,
+  })
 
 /** SMTP2GO cannot be logged in to, so the failover takes the reply (from the bounce address). */
 const viaFailover = () => ({ "smtp2go.password": `${smtp2go.password}x` })

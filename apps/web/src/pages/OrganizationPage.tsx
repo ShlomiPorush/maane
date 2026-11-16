@@ -5,13 +5,17 @@
 // (exact addresses only); while intake is live the default cannot be removed, only replaced, and the server says so
 // (intake_default_required). Only agents are added: admins see every organization by their role. Removing an agent
 // takes effect on their next request. The signature (plan 3.1) is plain text added after every reply sent for the
-// organization, edited in its own dialog.
+// organization, edited in its own dialog. The automatic reminder (plan 4.3) is edited the same way: its plain text
+// (empty for no reminders) and the days a ticket waits for the customer before it goes.
 
 import {
   ADDRESS_KINDS,
   type AddressKind,
   ORGANIZATION_NAME_MAX,
   parseSupportAddress,
+  REMINDER_DAYS_MAX,
+  REMINDER_DAYS_MIN,
+  REMINDER_TEMPLATE_MAX,
   SIGNATURE_MAX,
 } from "@maane/shared"
 import { keepPreviousData, useInfiniteQuery, useQueryClient } from "@tanstack/react-query"
@@ -91,6 +95,7 @@ function Organization() {
   const [addingAddress, setAddingAddress] = useState(false)
   const [addingMember, setAddingMember] = useState(false)
   const [signing, setSigning] = useState(false)
+  const [reminding, setReminding] = useState(false)
 
   const remove = async () => {
     if (!data) return
@@ -158,11 +163,24 @@ function Organization() {
       <Addresses data={data} change={change} onAdd={() => setAddingAddress(true)} />
       <Members data={data} change={change} onAdd={() => setAddingMember(true)} />
       <Signature signature={data.organization.signature} onEdit={() => setSigning(true)} />
+      <Reminder
+        template={data.organization.reminderTemplate}
+        days={data.organization.reminderDays}
+        onEdit={() => setReminding(true)}
+      />
       {renaming ? <RenameDialog id={id} name={name} onClose={() => setRenaming(false)} /> : null}
       {addingAddress ? <AddAddressDialog id={id} onClose={() => setAddingAddress(false)} /> : null}
       {addingMember ? <AddMemberDialog data={data} onClose={() => setAddingMember(false)} /> : null}
       {signing ? (
         <SignatureDialog id={id} signature={data.organization.signature} onClose={() => setSigning(false)} />
+      ) : null}
+      {reminding ? (
+        <ReminderDialog
+          id={id}
+          template={data.organization.reminderTemplate}
+          days={data.organization.reminderDays}
+          onClose={() => setReminding(false)}
+        />
       ) : null}
     </div>
   )
@@ -253,6 +271,159 @@ function SignatureDialog({ id, signature, onClose }: { id: string; signature: st
           />
           <p id={hintId} className="ui-hint">
             {t("organization.signature.hint", { max: SIGNATURE_MAX })}
+          </p>
+        </div>
+        {error ? <FormError>{error}</FormError> : null}
+      </form>
+    </Dialog>
+  )
+}
+
+/** A text's lines, each keyed by where it starts in the text. */
+function linesOf(text: string): { key: number; line: string }[] {
+  let at = 0
+  return text.split("\n").map((line) => {
+    const key = at
+    at += line.length + 1
+    return { key, line }
+  })
+}
+
+/** The automatic reminder: its text as the customer reads it, and after how many days it goes; or that there is none. */
+function Reminder({ template, days, onEdit }: { template: string; days: number; onEdit: () => void }) {
+  const { t, tc } = useI18n()
+  return (
+    <section className="ui-panel" aria-labelledby="organization-reminder" data-testid="organization-reminder">
+      <div className="ui-panel-head">
+        <h2 id="organization-reminder">{t("organization.reminder.title")}</h2>
+        <button type="button" className="ui-btn ui-btn-sm" onClick={onEdit}>
+          <Pencil aria-hidden="true" />
+          {t("organization.reminder.edit")}
+        </button>
+      </div>
+      {template ? (
+        <>
+          <p className="ui-reminder-after">{tc("organization.reminder.after", days)}</p>
+          {/* Each line with its own direction, as the email gives it: a Hebrew line and an English line both read right. */}
+          <div className="ui-signature" data-testid="organization-reminder-text">
+            {linesOf(template).map(({ key, line }) => (
+              <div key={key} dir="auto">
+                {line === "" ? <br /> : line}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <Empty title={t("organization.reminder.empty")} hint={t("organization.reminder.emptyHint")} />
+      )}
+    </section>
+  )
+}
+
+function ReminderDialog({
+  id,
+  template,
+  days,
+  onClose,
+}: {
+  id: string
+  template: string
+  days: number
+  onClose: () => void
+}) {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+  const formId = useId()
+  const fieldId = useId()
+  const hintId = useId()
+  const daysId = useId()
+  const daysHintId = useId()
+  const mounted = useMounted()
+  const [value, setValue] = useState(template)
+  const [count, setCount] = useState(String(days))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [daysError, setDaysError] = useState(false)
+  const guardedClose = useDiscardGuard(value !== template || count !== String(days), onClose)
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    const text = count.trim()
+    const wanted = /^[0-9]{1,3}$/.test(text) ? Number(text) : Number.NaN
+    if (!(wanted >= REMINDER_DAYS_MIN && wanted <= REMINDER_DAYS_MAX)) {
+      setDaysError(true)
+      return setError(t("organization.reminder.daysRule", { min: REMINDER_DAYS_MIN, max: REMINDER_DAYS_MAX }))
+    }
+    setDaysError(false)
+    if ([...value].length > REMINDER_TEMPLATE_MAX)
+      return setError(t("organization.reminder.rule", { max: REMINDER_TEMPLATE_MAX }))
+    setBusy(true)
+    setError(null)
+    try {
+      await api.setReminder(id, value, wanted)
+      showToast(t("organization.reminder.done"), "success")
+      if (mounted.current) {
+        guardedClose.dismiss()
+        onClose()
+      }
+      await queryClient.invalidateQueries({ queryKey: qk.organization(id) })
+    } catch (failure) {
+      setError(errorText(t, failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog
+      title={t("organization.reminder.editTitle")}
+      size="md"
+      onClose={() => void guardedClose()}
+      foot={
+        <button type="submit" form={formId} className="ui-btn ui-btn-primary" disabled={busy}>
+          {busy ? t("organization.reminder.saving") : t("organization.reminder.save")}
+        </button>
+      }
+    >
+      <form id={formId} className="ui-form-stack" onSubmit={(event) => void submit(event)} noValidate>
+        <div className="ui-field">
+          <label className="ui-label" htmlFor={fieldId}>
+            {t("organization.reminder.template")}
+          </label>
+          <textarea
+            id={fieldId}
+            className="ui-input ui-textarea"
+            dir="auto"
+            rows={6}
+            value={value}
+            aria-describedby={hintId}
+            onChange={(event) => setValue(event.target.value)}
+          />
+          <p id={hintId} className="ui-hint">
+            {t("organization.reminder.templateHint", { max: REMINDER_TEMPLATE_MAX })}
+          </p>
+        </div>
+        <div className="ui-field">
+          <label className="ui-label" htmlFor={daysId}>
+            {t("organization.reminder.days")}
+          </label>
+          <input
+            id={daysId}
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={3}
+            data-field="days"
+            className="ui-input ui-mono ui-input-days"
+            dir="ltr"
+            value={count}
+            aria-invalid={daysError ? true : undefined}
+            aria-describedby={daysHintId}
+            onChange={(event) => setCount(event.target.value)}
+          />
+          <p id={daysHintId} className="ui-hint">
+            {t("organization.reminder.daysHint", { min: REMINDER_DAYS_MIN, max: REMINDER_DAYS_MAX })}
           </p>
         </div>
         {error ? <FormError>{error}</FormError> : null}

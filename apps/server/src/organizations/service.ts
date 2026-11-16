@@ -8,6 +8,9 @@ import {
   ORGANIZATION_NAME_MAX,
   parseExactAddress,
   parseSupportAddress,
+  REMINDER_DAYS_MAX,
+  REMINDER_DAYS_MIN,
+  REMINDER_TEMPLATE_MAX,
   resolveSupportAddress,
   SIGNATURE_MAX,
 } from "@maane/shared"
@@ -111,7 +114,14 @@ export class Organizations {
 
   /** One organization with its addresses (the default first, then exact, then patterns) and its members. */
   async get(id: string): Promise<{
-    organization: { id: string; name: string; signature: string; createdAt: Date }
+    organization: {
+      id: string
+      name: string
+      signature: string
+      reminderTemplate: string
+      reminderDays: number
+      createdAt: Date
+    }
     addresses: AddressRow[]
     members: MemberRow[]
   }> {
@@ -120,6 +130,8 @@ export class Organizations {
         id: organization.id,
         name: organization.name,
         signature: organization.signature,
+        reminderTemplate: organization.reminderTemplate,
+        reminderDays: organization.reminderDays,
         createdAt: organization.createdAt,
       })
       .from(organization)
@@ -220,6 +232,42 @@ export class Organizations {
         action: "organization.signature",
         entityType: "organization",
         entityId: id,
+        ipAddress: acting.ipAddress,
+      })
+    })
+  }
+
+  /**
+   * The automatic reminder (plan 4.3): its template, plain text as the signature (at most REMINDER_TEMPLATE_MAX
+   * characters, empty for no reminders), and the days a ticket waits for the customer before it goes (a whole number
+   * from REMINDER_DAYS_MIN to REMINDER_DAYS_MAX). A change applies to the waiting periods that start after it; a
+   * reminder already waiting keeps its time and is written from the template as it is when it goes.
+   */
+  async setReminder(id: string, input: { template: unknown; days: unknown }, acting: Acting): Promise<void> {
+    const template =
+      typeof input.template === "string" ? wellFormedText(input.template.replace(/\r\n?/g, "\n")).value.trimEnd() : null
+    if (template === null || [...template].length > REMINDER_TEMPLATE_MAX)
+      throw new Refusal("reminder_template_invalid", 400, { max: REMINDER_TEMPLATE_MAX })
+    const days = input.days
+    if (typeof days !== "number" || !Number.isInteger(days) || days < REMINDER_DAYS_MIN || days > REMINDER_DAYS_MAX)
+      throw new Refusal("reminder_days_invalid", 400, { min: REMINDER_DAYS_MIN, max: REMINDER_DAYS_MAX })
+    await this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ template: organization.reminderTemplate, days: organization.reminderDays })
+        .from(organization)
+        .where(eq(organization.id, id))
+        .for("update")
+      if (!current) throw new Refusal("organization_not_found", 404)
+      if (current.template === template && current.days === days) return
+      await tx
+        .update(organization)
+        .set({ reminderTemplate: template, reminderDays: days })
+        .where(eq(organization.id, id))
+      await writeAudit(tx, acting.actor, {
+        action: "organization.reminder",
+        entityType: "organization",
+        entityId: id,
+        details: { days, template: template === "" ? "none" : "set" },
         ipAddress: acting.ipAddress,
       })
     })

@@ -55,6 +55,7 @@ export type Provider = (typeof PROVIDERS)[number]
  * - `unreachable`: no provider could be reached or logged in to, so nothing was sent.
  * - `customer_reply`: a scheduled reply (plan 4.2) whose customer wrote before it went out.
  * - `action_ended`: a scheduled reply cancelled or replaced before it went out.
+ * - `reminder_ended`: an automatic reminder (plan 4.3) whose waiting period ended before it went out.
  */
 export const SEND_PROBLEMS = [
   "listening",
@@ -64,6 +65,7 @@ export const SEND_PROBLEMS = [
   "unreachable",
   "customer_reply",
   "action_ended",
+  "reminder_ended",
 ] as const
 export type SendProblem = (typeof SEND_PROBLEMS)[number]
 
@@ -160,6 +162,13 @@ export interface DeliveryView {
    * point. It is never sent again; the agent can write a new reply.
    */
   scheduledEnded: boolean
+  /** An automatic reminder (plan 4.3). */
+  reminder: boolean
+  /**
+   * An automatic reminder that Send again may send again: no provider accepted it (never one with an unknown fate), and
+   * its waiting period still holds. Any other reminder is never sent again.
+   */
+  reminderResend: boolean
 }
 
 /** What the composer of a ticket starts from. */
@@ -219,7 +228,10 @@ export type ActionState = (typeof ACTION_STATES)[number]
 /**
  * Why a timed action was cancelled or ended: the agent cancelled it, the customer wrote (`customer_reply`), the ticket
  * moved to another organization (`move`), or a check at its time failed (intake listens, the From address or the author
- * is no longer allowed).
+ * is no longer allowed). A reminder (plan 4.3) also ends with its waiting period: the ticket left pending
+ * (`status_change`), an agent replied again (`agent_reply`), the reply that started the period bounced, was rejected, or
+ * was reported as spam (`delivery_failed`); or at its time the organization has no reminder template (`no_template`),
+ * the ticket has no customer to write to (`no_recipients`), or the period was imported (`imported`).
  */
 export const ACTION_REASONS = [
   "agent",
@@ -228,8 +240,33 @@ export const ACTION_REASONS = [
   "listening",
   "from_not_allowed",
   "author_not_allowed",
+  "status_change",
+  "agent_reply",
+  "delivery_failed",
+  "no_template",
+  "no_recipients",
+  "imported",
 ] as const
 export type ActionReason = (typeof ACTION_REASONS)[number]
+
+/** Why a waiting period ended (plan 4.3); its reminder, if it had not gone yet, never goes. */
+export const PERIOD_END_REASONS = ["customer_reply", "status_change", "agent_reply", "move", "delivery_failed"] as const
+export type PeriodEndReason = (typeof PERIOD_END_REASONS)[number]
+
+/** The longest reminder template an organization keeps, in characters (as a signature). */
+export const REMINDER_TEMPLATE_MAX = 2000
+/** The bounds of the days a ticket waits for the customer before its reminder (the default is the column's, three). */
+export const REMINDER_DAYS_MIN = 1
+export const REMINDER_DAYS_MAX = 60
+
+/** A ticket's reminder that has not gone yet (plan 4.3), for the ticket view: when it goes. */
+export interface ReminderView {
+  id: string
+  /** When it goes, as an instant. */
+  dueAt: string
+  /** `scheduled`, or `handed`: written and waiting for the send point. */
+  state: ActionState
+}
 
 /** A file of a scheduled reply: one of the agent's uploads, or a file of the ticket's own messages. */
 export interface ScheduledFile {

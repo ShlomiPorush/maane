@@ -11,6 +11,12 @@
 //    must not have written since the action was made. A failed check ends the action without sending. When it passes,
 //    its status action ("Send and set pending") applies in this transaction, and only then. A later claim (Send again)
 //    goes on only for the row of the version that passed (`done` at the row's version).
+//    A reminder's row (plan 4.3) is checked the same way, with its own checks: its waiting period still Maane's own and
+//    open, the ticket still pending, the customer silent, the reply that started the period not bounced; it has no
+//    author (Maane sends it as the organization), and it goes again only by Send again after no provider accepted it,
+//    with the same checks at its claim, which holds its action locked against every ending of the period. A scheduled
+//    reply that goes ends the ticket's waiting period, and one that sets the ticket to pending starts a new one with
+//    its reminder, in this transaction, after its status action.
 //    The claim gives the attempt an ID of its own (outbox.attempt). Every later step goes on only while the row is
 //    still `sending` under that ID, checked under the row's lock: right before each send, and with each result. An
 //    attempt another run made stale (marked unknown, sent again) stops there, without sending or writing.
@@ -34,7 +40,10 @@ import {
   ticketParticipant,
 } from "@maane/server/db/schema"
 import { queueIdOf, refreshDeliveryFlag } from "@maane/server/delivery/service"
+import { TIMED_ACTION, transactionWithJobs } from "@maane/server/jobs/queue"
 import { errorFacts, log } from "@maane/server/log"
+import { reminderProblem } from "@maane/server/reminders/checks"
+import { endWaitingPeriod, startWaitingPeriod } from "@maane/server/reminders/periods"
 import { sendProblem } from "@maane/server/replies/checks"
 import type { Settings } from "@maane/server/settings/service"
 import { customerWroteSince } from "@maane/server/tickets/customer-reply"
@@ -49,6 +58,7 @@ import {
   type TicketStatus,
 } from "@maane/shared"
 import { and, eq, inArray, ne, sql } from "drizzle-orm"
+import type { Db as QueueDb } from "pg-boss"
 import type { Tx } from "../files/types.ts"
 import { lockIntakeMode } from "../intake/process.ts"
 import { type Delivery, deliver, SMTP_TIMEOUTS, type SmtpConfig, type SmtpTimeouts, smtpConfig } from "./smtp.ts"
@@ -56,6 +66,11 @@ import { type Delivery, deliver, SMTP_TIMEOUTS, type SmtpConfig, type SmtpTimeou
 export interface ReplySenderOptions {
   db: Db
   settings: Settings
+  /**
+   * Queues a job inside the claim's transaction (pg-boss's documented `db` option): a scheduled reply that sets the
+   * ticket to pending starts a waiting period there, whose reminder's `timed-action` job waits for its time (plan 4.3).
+   */
+  queue: (jobs: QueueDb, name: string, data: object, startAfter: Date) => Promise<unknown>
   timeouts?: SmtpTimeouts
   /** Called right after the attempt was committed as `sending`, before anything is sent: a test stops a run here. */
   afterClaim?: (messageId: string) => Promise<void>
@@ -80,6 +95,7 @@ type Claim = {
 export class ReplySender {
   readonly #db: Db
   readonly #settings: Settings
+  readonly #queue: ReplySenderOptions["queue"]
   readonly #timeouts: SmtpTimeouts
   readonly #afterClaim?: (messageId: string) => Promise<void>
   readonly #afterSend?: (messageId: string) => Promise<void>
@@ -89,6 +105,7 @@ export class ReplySender {
   constructor(options: ReplySenderOptions) {
     this.#db = options.db
     this.#settings = options.settings
+    this.#queue = options.queue
     this.#timeouts = options.timeouts ?? SMTP_TIMEOUTS
     this.#afterClaim = options.afterClaim
     this.#afterSend = options.afterSend
@@ -143,7 +160,7 @@ export class ReplySender {
 
   /** Step 1: the checks and the claim, committed before anything is sent. Null when nothing may be sent now. */
   async #claim(messageId: string): Promise<Claim | null> {
-    return this.#db.transaction(async (tx) => {
+    return transactionWithJobs(this.#db, async (tx, jobs) => {
       const mode = await lockIntakeMode(tx)
       const [row] = await tx
         .select({
@@ -180,26 +197,38 @@ export class ReplySender {
       // the ticket FOR NO KEY UPDATE to refresh its delivery flag, which KEY SHARE does not block, so a claim waiting
       // for that recipient row below never holds up the webhook it waits for.
       const [held] = await tx
-        .select({ organizationId: ticket.organizationId })
+        .select({ organizationId: ticket.organizationId, status: ticket.status })
         .from(ticket)
         .where(eq(ticket.id, row.ticketId))
         .for("key share")
       if (!held) return null
       // A timed action's row (plan 4.2): its action, locked after the ticket as every path takes them. Its first claim
-      // (the action `handed`) checks it once more; a later one (Send again after it passed) is an ordinary reply's.
+      // (the action `handed`) checks it once more; a later one (Send again after it passed) is an ordinary reply's,
+      // except a reminder's.
       const action = row.actionId ? await lockAction(tx, row.actionId) : null
       const handoff = action?.state === "handed" && action.version === row.actionVersion
+      // An automatic reminder (plan 4.3): no author, and its waiting period's checks at every claim, Send again's too
+      // (its action stays `done` then; only the row fails). Every ending of its period locks this action in any state
+      // (periods.ts), so it waits for this claim to commit, or this claim for it, and the checks read what it wrote.
+      const automated = action?.kind === "reminder"
       let problem: SendProblem | null = null
+      let ended: ActionReason | null = null
       // Only the row of the version that passed goes again: an earlier version's row (changed after it was written)
       // never does.
       if (row.actionId && !handoff && !actionPassed(action, row.actionVersion))
-        problem = action?.reason === "customer_reply" ? "customer_reply" : "action_ended"
-      else if (handoff && row.actionId && (await customerWroteSince(tx, row.ticketId, row.actionId)))
+        problem = automated ? "reminder_ended" : action?.reason === "customer_reply" ? "customer_reply" : "action_ended"
+      else if (row.actionId && automated) {
+        ended = await reminderProblem(tx, row.actionId, {
+          id: row.ticketId,
+          status: held.status as TicketStatus,
+        })
+        if (ended) problem = "reminder_ended"
+      } else if (handoff && row.actionId && (await customerWroteSince(tx, row.ticketId, row.actionId)))
         problem = "customer_reply"
-      problem ??= await sendProblem(tx, mode, { ...row, organizationId: held.organizationId })
+      problem ??= await sendProblem(tx, mode, { ...row, organizationId: held.organizationId, automated })
       if (problem) {
-        if (handoff && action && problem !== "action_ended")
-          await setActionState(tx, action.id, "ended", problem as ActionReason)
+        if (handoff && action && (ended || problem !== "action_ended"))
+          await setActionState(tx, action.id, "ended", ended ?? (problem as ActionReason))
         await tx
           .update(outbox)
           .set({ state: "failed", problem, updatedAt: this.#now() })
@@ -240,25 +269,33 @@ export class ReplySender {
         .update(outboxRecipient)
         .set({ possibleSends: sql`${outboxRecipient.possibleSends} + 1` })
         .where(and(eq(outboxRecipient.messageId, messageId), eq(outboxRecipient.state, "pending")))
-      // A scheduled reply's status action ("Send and set pending"), now that it goes, and only then: the last write of
-      // the claim, so the ticket's stronger lock comes after the recipients' rows, as the webhook's order needs.
-      if (handoff && action?.authorUserId) await this.#statusAction(tx, row.ticketId, action.id, action.authorUserId)
+      // A scheduled reply's status action ("Send and set pending"), now that it goes, and only then, with its waiting
+      // period (plan 4.3): the last writes of the claim, so the ticket's stronger lock comes after the recipients'
+      // rows, as the webhook's order needs. A reminder changes neither the status nor the period.
+      if (handoff && action?.kind === "reply" && action.authorUserId)
+        await this.#replyGoes(tx, jobs, { ticketId: row.ticketId, messageId, actionId: action.id }, action.authorUserId)
       return { attempt, mime: row.mime, from: row.from, ticketId: row.ticketId, recipients }
     })
   }
 
   /**
-   * Sets the ticket to pending for a scheduled reply that asked for it, by the one status writer, as its author. The
-   * ticket is locked FOR NO KEY UPDATE (it does not conflict with the KEY SHARE this claim and others hold, so two
-   * claims of one ticket wait for each other instead of deadlocking) and its status read again under that lock. A ticket
-   * the author may no longer set to pending (closed meanwhile, not an admin) keeps its status.
+   * A scheduled reply goes to sending: it ends the ticket's waiting period (a new agent reply, plan 4.3) and, when it
+   * asked for it, sets the ticket to pending by the one status writer, as its author, and starts a new waiting period
+   * with its reminder. The ticket is locked FOR NO KEY UPDATE (it does not conflict with the KEY SHARE this claim and
+   * others hold, so two claims of one ticket wait for each other instead of deadlocking) and its status read again
+   * under that lock. A ticket the author may no longer set to pending (closed meanwhile, not an admin) keeps its status.
    */
-  async #statusAction(tx: Tx, ticketId: string, actionId: string, authorUserId: string): Promise<void> {
+  async #replyGoes(
+    tx: Db,
+    jobs: QueueDb,
+    reply: { ticketId: string; messageId: string; actionId: string },
+    authorUserId: string,
+  ): Promise<void> {
+    const { ticketId, messageId, actionId } = reply
     const [content] = await tx
       .select({ setPending: scheduledReply.setPending })
       .from(scheduledReply)
       .where(eq(scheduledReply.actionId, actionId))
-    if (!content?.setPending) return
     const [held] = await tx
       .select({ id: ticket.id, number: ticket.number, status: ticket.status, organizationId: ticket.organizationId })
       .from(ticket)
@@ -269,11 +306,17 @@ export class ReplySender {
       .from(authUser)
       .where(eq(authUser.id, authorUserId))
     if (!held) return
+    await endWaitingPeriod(tx, ticketId, "agent_reply")
+    if (!content?.setPending) return
     const locked: LockedTicket = { ...held, status: held.status as TicketStatus }
     const role = author?.role ?? "agent"
     if (!mayChangeStatus(role, locked.status, "pending")) return
     const actor = { userId: authorUserId, label: author?.username ?? author?.name ?? "?" }
     await changeStatus(tx, locked, "pending", { role, actor, ipAddress: null }, "reply")
+    if (locked.status === "pending")
+      await startWaitingPeriod(tx, ticketId, messageId, (data, startAfter) =>
+        this.#queue(jobs, TIMED_ACTION, data, startAfter),
+      )
   }
 
   /**
@@ -356,7 +399,7 @@ export class ReplySender {
     return settled ?? this.#stale(messageId)
   }
 
-  async #settle(tx: Tx, messageId: string, configured: boolean): Promise<OutboxState> {
+  async #settle(tx: Pick<Tx, "select" | "update">, messageId: string, configured: boolean): Promise<OutboxState> {
     const states = (
       await tx
         .select({ state: outboxRecipient.state })

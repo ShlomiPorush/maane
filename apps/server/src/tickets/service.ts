@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import {
+  type ActionState,
   type AttachmentView,
   DELIVERY_SOURCES,
   DELIVERY_STATUSES,
@@ -39,7 +40,7 @@ import {
 } from "@maane/shared"
 import { and, asc, type Column, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm"
 import { alias, QueryBuilder } from "drizzle-orm/pg-core"
-import { actionPassed } from "../actions/timed.ts"
+import { actionPassed, OPEN_ACTION_STATES } from "../actions/timed.ts"
 import { Categories } from "../categories/service.ts"
 import type { Db } from "../db/client.ts"
 import {
@@ -63,7 +64,8 @@ import { linkViews } from "../links/service.ts"
 import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
 import { renderMailHtml } from "../mail/html.ts"
 import type { OrganizationScope } from "../organizations/scope.ts"
-import { Workflow } from "./workflow.ts"
+import { reminderMayGoAgain } from "../reminders/checks.ts"
+import { categoriesOf, moveTargets } from "./workflow.ts"
 
 /** The image types an inline part may be embedded as, by the type read from its content. */
 const INLINE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
@@ -421,7 +423,6 @@ export class Tickets {
       .where(and(eq(ticket.number, number), inScope(scope, ticket.organizationId)))
     if (!row) return null
     const t = row.ticket
-    const workflow = new Workflow(this.db)
 
     const messages = await this.db
       .select()
@@ -466,6 +467,7 @@ export class Tickets {
             unmatchedDeliveryEvent: outbox.unmatchedDeliveryEvent,
             actionId: outbox.actionId,
             actionVersion: outbox.actionVersion,
+            actionKind: timedAction.kind,
             actionState: timedAction.state,
             actionCurrent: timedAction.version,
           })
@@ -517,6 +519,22 @@ export class Tickets {
       replyIds.map((id) => ({ id, since: sentAt(id) })),
     )
     const authorOf = new Map(authors.map((a) => [a.id, { id: a.id, name: a.name || a.username || a.id }]))
+    // The reminders Send again may send again, by the rule it checks itself (plan 4.3).
+    const reminderResend = new Set<string>()
+    for (const sent of outboxes)
+      if (
+        sent.actionKind === "reminder" &&
+        sent.actionId !== null &&
+        sent.actionState !== null &&
+        sent.actionCurrent !== null &&
+        (await reminderMayGoAgain(
+          this.db,
+          sent,
+          { id: sent.actionId, state: sent.actionState, version: sent.actionCurrent },
+          { id: t.id, status: t.status as TicketStatus },
+        ))
+      )
+        reminderResend.add(sent.messageId)
     const deliveryOf = (id: string): MessageView["delivery"] => {
       const sent = outboxes.find((o) => o.messageId === id)
       if (!sent) return null
@@ -541,13 +559,16 @@ export class Tickets {
         unmatchedDelivery: unmatchedOf(sent),
         // A scheduled reply stopped before it went out (plan 4.2): Send again refuses it, so the view never offers it.
         scheduledEnded:
-          sent.actionId !== null &&
+          sent.actionKind === "reply" &&
           !actionPassed(
             sent.actionState === null || sent.actionCurrent === null
               ? null
               : { state: sent.actionState, version: sent.actionCurrent },
             sent.actionVersion,
           ),
+        // An automatic reminder (plan 4.3) goes again only by the rule Send again checks.
+        reminder: sent.actionKind === "reminder",
+        reminderResend: reminderResend.has(id),
       }
     }
     const views: MessageView[] = messages.map((m) => {
@@ -596,9 +617,23 @@ export class Tickets {
         fields: fieldNotices(m.fieldScans),
         attachments,
         links: clicked.get(m.id) ?? [],
-        scheduled: outboxes.some((o) => o.messageId === m.id && o.actionId !== null),
+        scheduled: outboxes.some((o) => o.messageId === m.id && o.actionKind === "reply"),
+        reminder: outboxes.some((o) => o.messageId === m.id && o.actionKind === "reminder"),
       }
     })
+    // The reminder of the ticket's waiting period that has not gone yet (plan 4.3): when it goes.
+    const [pending] = await this.db
+      .select({ id: timedAction.id, dueAt: timedAction.dueAt, state: timedAction.state })
+      .from(timedAction)
+      .where(
+        and(
+          eq(timedAction.ticketId, t.id),
+          eq(timedAction.kind, "reminder"),
+          inArray(timedAction.state, [...OPEN_ACTION_STATES]),
+        ),
+      )
+      .orderBy(desc(timedAction.createdAt))
+      .limit(1)
 
     return {
       ticket: {
@@ -611,15 +646,18 @@ export class Tickets {
         supportAddress: t.supportAddress,
         createdAt: t.createdAt.toISOString(),
         lastActivityAt: t.lastActivityAt.toISOString(),
-        categories: await workflow.categoriesOf(t.id),
+        categories: await categoriesOf(this.db, t.id),
         snoozedUntil: snoozedUntil(t.snoozedUntil),
         snoozeOverdue: t.snoozedUntil !== null && t.snoozedUntil.getTime() <= Date.now(),
       },
       participants,
       links: links.map((link) => ({ number: link.number, reason: link.reason as LinkReason })),
       categories: await new Categories(this.db).refs(),
-      moveTargets: await workflow.moveTargets(scope, t.organizationId),
+      moveTargets: await moveTargets(this.db, scope, t.organizationId),
       messages: views,
+      reminder: pending
+        ? { id: pending.id, dueAt: pending.dueAt.toISOString(), state: pending.state as ActionState }
+        : null,
       ticketId: t.id,
       organizationSignature: row.signature,
     }

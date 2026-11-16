@@ -162,6 +162,13 @@
       "when": 1794775096211,
       "tag": "0022_scheduled",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1794781615569,
+      "tag": "0023_reminders",
+      "breakpoints": true
     }
   ]
 }
