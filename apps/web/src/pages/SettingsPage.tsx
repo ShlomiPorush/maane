@@ -407,7 +407,8 @@ function Settings() {
     const sendingRow = (key: SettingKey) => {
       const id = `${sendingIds}-${key}`
       const label = t(labelKey(key))
-      const hint = t(`settings.sending.${key}.hint`, { example: "example.com" })
+      // The whole address is the value, isolated as one: an isolated domain after "bounces@" read out of order in Hebrew.
+      const hint = t(`settings.sending.${key}.hint`, { example: "bounces@example.com" })
       if (key === "failover.security")
         return (
           <Row key={key} label={label} hint={hint} lock={lockOf(key)} reset={resetOf(key)}>

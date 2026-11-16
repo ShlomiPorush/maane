@@ -201,9 +201,14 @@ function Signature({ signature, onEdit }: { signature: string; onEdit: () => voi
         </button>
       </div>
       {signature ? (
-        <p className="ui-signature" dir="auto" data-testid="organization-signature">
-          {signature}
-        </p>
+        // Each line with its own direction, as the email gives it: a Hebrew line and an English line both read right.
+        <div className="ui-signature" data-testid="organization-signature">
+          {linesOf(signature).map(({ key, line }) => (
+            <div key={key} dir="auto">
+              {line === "" ? <br /> : line}
+            </div>
+          ))}
+        </div>
       ) : (
         <Empty title={t("organization.signature.empty")} hint={t("organization.signature.emptyHint")} />
       )}

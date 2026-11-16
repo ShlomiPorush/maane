@@ -47,3 +47,7 @@ All notable changes to Maane. The format follows [Keep a Changelog](https://keep
 - Releases: the Release workflow publishes a version from `main` (the image `ghcr.io/shlomiporush/maane` with its version tag and `latest`, an annotated Git tag, and a GitHub Release from this file), after a green CI run of the commit. It never deploys. A run that stopped halfway is finished by the next run.
 - Deployment notes in `docs/deployment.md`: Traefik, generating the production secrets once on the server, the setup window, what to back up, a restore test, and upgrades.
 - Development: the pnpm workspace, the toolchain container, the repository guards, `scripts/verify.sh` (with the container stack stage), CI, end-to-end tests of the web UI against the container stack, `scripts/local.sh` for a development stack, and `scripts/try-pr.sh` to run a pull request beside it.
+
+### Fixed
+
+- An organization's signature, on its page and under the composer, shows each line with its own direction, so an English line under a Hebrew one ends with its period, as the email gives it. The Account page reads a session's device in the page's language, so "Chrome on Linux" keeps its word order in Hebrew. The bounce address example in Settings reads `bounces@example.com` in Hebrew too.

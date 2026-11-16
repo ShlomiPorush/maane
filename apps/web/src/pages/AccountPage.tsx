@@ -149,7 +149,8 @@ function AccountSections() {
           <div key={session.id} className="ui-item">
             <div className="ui-item-main">
               <span className="ui-item-title">
-                <bdi dir="auto">{sessionName(session)}</bdi>{" "}
+                {/* The page's direction, not auto: the label is a sentence of this language around isolated names. */}
+                <span>{sessionName(session)}</span>{" "}
                 {session.id === current ? <Tag tone="info">{t("account.thisSession")}</Tag> : null}
               </span>
               <span className="ui-item-meta">

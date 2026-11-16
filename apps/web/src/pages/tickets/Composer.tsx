@@ -507,7 +507,15 @@ export function Composer({
         {kind === "reply" && compose.signature ? (
           <div className="ui-composer-signature">
             <span className="ui-label">{t("compose.signature")}</span>
-            <bdi dir="auto">{compose.signature}</bdi>
+            <div>
+              {compose.signature.split(/\r?\n/).map((line, index) => (
+                // Each line takes the direction of its first letter, as the email's paragraphs do.
+                // biome-ignore lint/suspicious/noArrayIndexKey: the lines of one fixed text, in order
+                <div key={index} dir="auto">
+                  {line === "" ? <br /> : line}
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
         {files.length > 0 ? (

@@ -880,7 +880,7 @@
       "mail": {
         "bounceAddress": {
           "label": "Bounce address",
-          "hint": "The envelope sender of mail sent through the backup server, for example bounces@{example}. It must reach the intake mailbox."
+          "hint": "The envelope sender of mail sent through the backup server, for example {example}. It must reach the intake mailbox."
         }
       },
       "test": {
