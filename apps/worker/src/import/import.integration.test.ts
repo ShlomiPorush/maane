@@ -810,7 +810,7 @@ async function withShortStreams<T>(h: Harness, limit: number, work: () => Promis
 }
 
 describe("the import's files", () => {
-  it("stores files through the scanner with intake's statuses and block events, reports refused ones, and scans nothing again", async () => {
+  it("stores files through the scanner with intake's statuses and block events, reports refused ones, scans no stored file again, and takes a file once the limit allows it", async () => {
     const h = await start()
     await h.settings.update({ "files.maxBytes": MEGABYTE }, SYSTEM)
     const infected = Buffer.from(`report ${MARKERS.infected}`)
@@ -876,8 +876,11 @@ describe("the import's files", () => {
       ["infected", "report.txt", part("141")?.id],
     ])
 
-    // Again: the same parts and stored rows, nothing scanned or stored again, no second block event, the same report.
+    // Again: the same parts and stored rows, no stored file scanned or stored again, no second block event, the same
+    // report. A file whose content was not stored is decided again: the infected one goes to the scanner again (the
+    // blocked type is refused by its type, before the scanner), and the one still over the limit is not read.
     const storedBefore = await h.db.select().from(storedFile).orderBy(asc(storedFile.sha256))
+    const kept = h.zendesk.allFiles().filter((f) => ![141, 142, 143].includes(Number(f.id)))
     const from = clamd.scanned.length
     const second = await h.run()
     expect(second.outcome).toEqual(DONE)
@@ -885,12 +888,23 @@ describe("the import's files", () => {
       parts.map((p) => ({ ...p, updatedAt: expect.any(Date) })),
     )
     expect(await h.db.select().from(storedFile).orderBy(asc(storedFile.sha256))).toEqual(storedBefore)
-    expect(scansOf([...h.zendesk.allFiles().map((f) => f.content), infected, program, huge], from)).toBe(0)
+    expect(scansOf([...kept.map((f) => f.content), program, huge], from)).toBe(0)
+    expect(scansOf([infected], from)).toBe(1)
     expect(await events()).toHaveLength(2)
     expect((await reportOf(h, second.id)).filter((row) => row.startsWith("1:"))).toEqual([
       "1:file_infected:report.txt",
       "1:file_blocked:setup.exe",
     ])
+
+    // Once the admin raises the limit, the file refused as too large is scanned and stored by the next run.
+    await h.settings.update({ "files.maxBytes": 2 * MEGABYTE }, SYSTEM)
+    const third = await h.run()
+    expect(third.outcome).toEqual(DONE)
+    const [grown] = await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, "143"))
+    expect([grown?.id, grown?.status, grown?.storedSha256]).toEqual([part("143")?.id, "clean", sha256Of(huge)])
+    expect(await readFile(h.files.storedPath(sha256Of(huge)))).toEqual(huge)
+    expect((await messagesOf(h, 1)).find((m) => m.zendeskKey === "comment:14")?.reviewFlags).toEqual([])
+    expect(await events()).toHaveLength(2)
   })
 
   it("imports a side conversation file by its string ID, and reports a file with no ID it can use", async () => {

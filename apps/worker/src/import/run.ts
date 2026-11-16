@@ -474,10 +474,11 @@ export class ZendeskImport {
   }
 
   /**
-   * What becomes of one file the manifest holds. A part that already holds the same content keeps its status, with
-   * nothing scanned or stored again; a file over files.maxBytes is `too_large`, decided from the manifest's size before
-   * it is read; any other file is read from the archive and scanned as intake scans a part. A scan that answers
-   * `waiting` stops the run (ScannerWaitingError): its job reads the file from the archive again.
+   * What becomes of one file the manifest holds. A part that already stores the same content keeps its status, with
+   * nothing scanned or stored again; a part whose content was not stored is decided again, so a file refused as too
+   * large is taken once the limit allows it. A file over files.maxBytes is `too_large`, decided from the manifest's
+   * size before it is read; any other file is read from the archive and scanned as intake scans a part. A scan that
+   * answers `waiting` stops the run (ScannerWaitingError): its job reads the file from the archive again.
    */
   async #decide(
     reader: ArchiveReader,
@@ -485,7 +486,8 @@ export class ZendeskImport {
     before: StoredPart | null,
     maxBytes: number,
   ): Promise<FileDecision> {
-    if (before && before.sha256 === file.sha256) return { kind: "kept", part: before }
+    if (before && before.sha256 === file.sha256 && before.storedSha256 === file.sha256)
+      return { kind: "kept", part: before }
     if (file.bytes > maxBytes) return { kind: "too_large" }
     const bytes = await archivedBytes(reader, file)
     try {
