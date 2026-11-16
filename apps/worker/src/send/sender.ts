@@ -207,7 +207,8 @@ export class ReplySender {
       const action = row.actionId ? await lockAction(tx, row.actionId) : null
       const handoff = action?.state === "handed" && action.version === row.actionVersion
       // An automatic reminder (plan 4.3): no author, and its waiting period's checks at every claim, Send again's too
-      // (its action stays `done` then; only the row fails).
+      // (its action stays `done` then; only the row fails). Every ending of its period locks this action in any state
+      // (periods.ts), so it waits for this claim to commit, or this claim for it, and the checks read what it wrote.
       const automated = action?.kind === "reminder"
       let problem: SendProblem | null = null
       let ended: ActionReason | null = null

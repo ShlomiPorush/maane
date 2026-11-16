@@ -7,8 +7,10 @@
 //
 // A period ends on a customer reply, a status change away from pending, a new agent reply, a move to another
 // organization, or a bounce, rejection, or spam report on the reply that started it, each in its own transaction, which
-// holds the ticket locked: its reminder, if it has not gone to the send point, is cancelled with the same reason. The
-// reminder's job and the send point's claim check every ending again (checks.ts), after they locked the action.
+// holds the ticket locked: its reminder's action is locked whatever its state, and cancelled with the same reason if it
+// has not gone to the send point. The reminder's job and the send point's claim check every ending again (checks.ts),
+// after they locked the action, which they hold until they commit: an ending and a claim, Send again's too, never
+// overlap.
 //
 // A move to another organization (plan 4.1) ends the period and, when Maane started it, starts a new one for the same
 // reply at once: its reminder is the new organization's, due its number of days from the move, its template read at
@@ -43,19 +45,15 @@ export async function endWaitingPeriod(
     .from(waitingPeriod)
     .where(and(eq(waitingPeriod.ticketId, ticketId), isNull(waitingPeriod.endedAt)))
   if (!open || (startedBy && !(open.messageId && startedBy.includes(open.messageId)))) return false
-  // The reminder's action first, as the job and the claim lock it before they read the period.
+  // The reminder's action first, as the job and the claim lock it before they read the period: locked in every state,
+  // so a claim of Send again (its action stays `done`, which nothing below changes) and this ending wait for each other
+  // too (review round 2, M2). After the check above: a bounce on another reply locks nothing here.
+  const reminders = tx.select({ id: reminder.actionId }).from(reminder).where(eq(reminder.periodId, open.id))
+  await tx.select({ id: timedAction.id }).from(timedAction).where(inArray(timedAction.id, reminders)).for("update")
   await tx
     .update(timedAction)
     .set({ state: "cancelled", reason, updatedAt: sql`now()` })
-    .where(
-      and(
-        inArray(
-          timedAction.id,
-          tx.select({ id: reminder.actionId }).from(reminder).where(eq(reminder.periodId, open.id)),
-        ),
-        inArray(timedAction.state, [...OPEN_ACTION_STATES]),
-      ),
-    )
+    .where(and(inArray(timedAction.id, reminders), inArray(timedAction.state, [...OPEN_ACTION_STATES])))
   await tx
     .update(waitingPeriod)
     .set({ endedAt: sql`now()`, endReason: reason })

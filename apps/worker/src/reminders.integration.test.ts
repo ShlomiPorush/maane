@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto"
 import { SYSTEM } from "@maane/server/audit"
-import { auditLog, message, outbox, reminder, ticket, timedAction, waitingPeriod } from "@maane/server/db/schema"
+import {
+  auditLog,
+  message,
+  outbox,
+  outboxRecipient,
+  reminder,
+  ticket,
+  timedAction,
+  waitingPeriod,
+} from "@maane/server/db/schema"
 import { applyDeliveryEvent } from "@maane/server/delivery/service"
 import { type JobQueue, openJobQueue, TIMED_ACTION } from "@maane/server/jobs/queue"
 import { Organizations } from "@maane/server/organizations/service"
@@ -13,7 +22,7 @@ import { type SettingKey, type TicketView, userEmail } from "@maane/shared"
 import { and, count, desc, eq, sql } from "drizzle-orm"
 import { simpleParser } from "mailparser"
 import { PgBoss } from "pg-boss"
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { requeueOverdue, TimedActions } from "./actions/run.ts"
 import { ReplySender } from "./send/sender.ts"
 import type { SmtpTimeouts } from "./send/smtp.ts"
@@ -782,6 +791,94 @@ describe("Send again of a reminder that no provider took", () => {
     // The action went to the send point once; only its row failed.
     expect((await db().select().from(timedAction).where(eq(timedAction.id, due.id)))[0]?.state).toBe("done")
     expect(await deliveryShown(agent, t.number, id)).toMatchObject({ problem: "reminder_ended", reminderResend: false })
+  })
+
+  describe("and the end of its waiting period at the same time (review round 2, M2)", () => {
+    type Tx = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0]
+    /** Backends of this database waiting for a lock. */
+    const lockWaiters = async () => {
+      const rows = await db().execute<{ n: number }>(
+        sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+      )
+      return rows.rows[0]?.n ?? 0
+    }
+    const waitForLockWaiters = (n: number) =>
+      vi.waitFor(async () => expect(await lockWaiters()).toBe(n), { timeout: 15_000, interval: 50 })
+    /** A transaction that runs `hold` and then stays open, holding its locks, until it is released. */
+    async function holding(hold: (tx: Tx) => Promise<unknown>) {
+      let release = () => {}
+      const released = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let held = () => {}
+      const holds = new Promise<void>((resolve) => {
+        held = resolve
+      })
+      const done = db().transaction(async (tx) => {
+        const result = await hold(tx)
+        held()
+        await released
+        return result
+      })
+      await Promise.race([holds, done])
+      return { release, done }
+    }
+    /** A bounce on the reply that started the period, which ends it. */
+    const bounce = (tx: Tx, started: string) =>
+      applyDeliveryEvent(
+        tx,
+        { messageId: started, acceptedBefore: new Date(Date.now() + HOUR) },
+        { recipient: "dana@example.com", status: "hard_bounce", at: new Date(), detail: null, source: "report" },
+      )
+
+    it("a claim past its checks goes first: the ending waits for it, then ends the period", async () => {
+      const { agent, t, due, started, header, id } = await failedReminder()
+      expect((await resend(agent, id)).status).toBe(200)
+      expect(await lockWaiters()).toBe(0)
+      // The reminder's recipients held here: the claim passes its checks, holding the action, and waits at them.
+      const recipients = await holding((tx) =>
+        tx.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id)).for("update"),
+      )
+      let claim: Promise<unknown> = Promise.resolve()
+      let ending: Promise<unknown> = Promise.resolve()
+      try {
+        claim = sender().send(id)
+        await waitForLockWaiters(1)
+        ending = db().transaction((tx) => bounce(tx, started))
+        // The ending waits on the reminder's action, which the claim holds: the period is still open.
+        await waitForLockWaiters(2)
+        expect((await periodsOf(t.id))[0]?.endedAt).toBeNull()
+      } finally {
+        recipients.release()
+      }
+      await recipients.done
+      expect(await claim).toBe("accepted")
+      expect(await ending).toBe(true)
+      expect(delivered(header)).toHaveLength(1)
+      expect((await periodsOf(t.id))[0]).toMatchObject({ endReason: "delivery_failed" })
+      expect((await db().select().from(timedAction).where(eq(timedAction.id, due.id)))[0]?.state).toBe("done")
+    })
+
+    it("an ending that holds the reminder's action goes first: the claim waits, then refuses and sends nothing", async () => {
+      const { agent, t, due, started, header, id } = await failedReminder()
+      expect((await resend(agent, id)).status).toBe(200)
+      expect(await lockWaiters()).toBe(0)
+      const ending = await holding((tx) => bounce(tx, started))
+      let claim: Promise<unknown> = Promise.resolve()
+      try {
+        claim = sender().send(id)
+        // The claim waits on the reminder's action, which the ending holds.
+        await waitForLockWaiters(1)
+      } finally {
+        ending.release()
+      }
+      expect(await ending.done).toBe(true)
+      expect(await claim).toBe("failed")
+      expect((await outboxOfAction(due.id))[0]?.problem).toBe("reminder_ended")
+      expect(delivered(header)).toHaveLength(0)
+      expect((await periodsOf(t.id))[0]).toMatchObject({ endReason: "delivery_failed" })
+      expect((await db().select().from(timedAction).where(eq(timedAction.id, due.id)))[0]?.state).toBe("done")
+    })
   })
 })
 
