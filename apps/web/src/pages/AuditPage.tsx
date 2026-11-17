@@ -76,6 +76,7 @@ export const AUDIT_ACTIONS = [
   "import.mapping",
   "import.run",
   "import.cancel",
+  "import.finish",
 ] as const
 
 const KNOWN = new Set<string>(AUDIT_ACTIONS)
@@ -208,8 +209,6 @@ export function describe(
     const key = SETTING_ROWS.find((row) => row === entry.entityId)
     facts.push({ label: t("audit.fact.setting"), value: key ? t(labelKey(key)) : entry.entityId, ltr: !key })
     if (details.secret === true) facts.push({ label: t("audit.fact.value"), value: t("audit.secretChanged") })
-    else if (entry.entityId === "intake.mode" && (details.value === "listening" || details.value === "live"))
-      facts.push({ label: t("audit.fact.value"), value: t(`settings.intakeMode.mode.${details.value}`) })
     else if ("value" in details) facts.push({ label: t("audit.fact.value"), value: String(details.value), ltr: true })
   }
   if (entry.action.startsWith("organization.")) {

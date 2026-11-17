@@ -27,7 +27,7 @@ Examples in this document use `example.com`. Real addresses, domains, tenant det
 | Repository | `ShlomiPorush/maane`, public, to use GitHub code scanning. | Docs, code, and commits are in English, and no organization detail enters the repository. |
 | Runtime host | The owner's existing Docker host with Traefik. | Maane ships as Docker Compose with Traefik labels. Traefik provides public HTTPS. |
 | Auto-close | Not in v1. | |
-| Zendesk after cutover | How long Zendesk stays open is decided after the old Zendesk mail is checked during preparation. | |
+| Zendesk after setup day | How long Zendesk stays open is decided after the old Zendesk mail is checked during preparation. | |
 | Per-organization content | A signature and reminder templates per organization. Categories are shared. No per-organization logo in v1. | |
 | First-run setup | A web setup screen, open for 5 minutes after the server starts and only while no user exists. See section 9.1. | Owner's decision over a one-time setup code or setup before the route is exposed. |
 
@@ -162,13 +162,13 @@ Each phase is a separate pull request with tests and green CI. No merge, release
 
 | # | Phase | Content | Result |
 |---|---|---|---|
-| 0 | Zendesk backup | A standalone command-line tool. See section 5.1. | A complete local archive that passed a restore check. It does not mean Zendesk can be closed; that happens only after cutover. |
+| 0 | Zendesk backup | A standalone command-line tool. See section 5.1. | A complete local archive that passed a restore check. It does not mean Zendesk can be closed; that happens only after setup day (section 6). |
 | 1 | Foundation | Repository, Compose, workflow scripts, CI, sign-in, encrypted settings, audit log, and job queue, based on n8n-ops and Mikud with the changes in section 8. | An empty admin UI you can sign in to. |
-| 2 | Intake | Graph intake, automated-mail classification, address matching, threading, file scanning, tickets, the list, the ticket view, and file preview. Against a test mailbox it creates tickets. Against the real mailbox, until cutover, it only records (listening mode, section 6.2). | Incoming mail becomes tickets, with no sending at all. |
-| 3 | Sending | Replies, addresses and display names, the outbox with its states, bounces, the email template by `html-email`, and link tracking. No separate sending mode or test-address list (owner's decision, 2026-11-13): while intake listens the send point refuses customer replies, and in live mode replies go to whoever the agent addresses. | Replies work. |
+| 2 | Intake | Graph intake, automated-mail classification, address matching, threading, file scanning, tickets, the list, the ticket view, and file preview. Mail becomes tickets from the first moment (section 6.2). | Incoming mail becomes tickets, with no sending at all. |
+| 3 | Sending | Replies, addresses and display names, the outbox with its states, bounces, the email template by `html-email`, and link tracking. No separate sending mode or test-address list (owner's decision, 2026-11-13): replies go to whoever the agent addresses. | Replies work. |
 | 4 | Workflow | Statuses, categories, snooze, scheduled replies, reminders, search, and notifications. | The system covers everything the owner does in Zendesk today. |
 | 5 | Import | See section 5.2. | All history inside Maane. |
-| 6 | Listening and cutover | See section 6. | Maane answers customers, and Zendesk receives no new mail. |
+| 6 | Live from the first moment | See section 6. Listening mode, the cutover, and the rollback were removed (owner's decision, 2026-11-17). | Maane answers customers, and Zendesk receives no new mail. |
 
 ### 5.1 Phase 0: Zendesk backup
 
@@ -188,9 +188,9 @@ Each phase is a separate pull request with tests and green CI. No merge, release
 - **No side effects.** Import bypasses all live behavior: it reopens nothing, sends no notifications, and triggers no reminders.
 - **Report.** Counts, and a list of what did not map.
 
-## 6. Cutover
+## 6. Setup day
 
-The owner makes every change in Microsoft 365 and DNS. For each step, Maane's documentation gives commands that are safe to run top to bottom. The principle: at any moment only one system answers customers.
+The owner makes every change in Microsoft 365 and DNS. For each step, Maane's documentation gives commands that are safe to run top to bottom. The principle: at any moment only one system answers customers, and from setup day it is Maane.
 
 ### 6.1 Preparation
 
@@ -199,31 +199,29 @@ The owner makes every change in Microsoft 365 and DNS. For each step, Maane's do
 - **Mailbox and permission.** Create the intake mailbox and give the application read access to that mailbox only, with no general mail permission in Entra. Check that access to this mailbox works and that access to any other mailbox is refused.
 - **SPF and DKIM.** Verify each sending domain at SMTP2GO, and add the failover server to the records. Zendesk stays in the records.
 
-### 6.2 Listening (instead of running in parallel)
+### 6.2 Live from the first moment (owner's decision, 2026-11-17)
 
-- Each rule gets the intake mailbox as an extra recipient beside Zendesk. Zendesk keeps answering as usual.
-- In listening mode, sending to customers is blocked at the send point itself, not only in the UI. Reminders and automations are off. Only sends to test addresses the owner sets are allowed.
-- In listening mode Maane opens no tickets and assigns no numbers. It records each message that arrived beside what it would have done: the chosen address, the ticket it would have matched, and its classification. The comparison with Zendesk uses this record. So there are never two versions of one message, one from Graph and one from the import.
-- Rare cases are tested with deliberate mail: an alias, an address that exists only in a rule, the wildcard, a blind copy, two support addresses in one message, a bounce, and an auto-reply. Cutover happens when every case passed and the comparison with Zendesk is clean, with no minimum duration.
+There is no listening period, no cutover, and no rollback. Maane answers customers from the moment the Microsoft 365 rules point at its intake mailbox, and the import runs on the same day. The order on setup day:
 
-### 6.3 Cutover
+1. Set Maane up; configure domains, addresses, and SMTP2GO; mount the Zendesk archive; run the import.
+2. Point the Microsoft 365 rules at the intake mailbox instead of Zendesk. From here Maane receives and answers all new mail.
+3. At least 5 minutes later, run the Zendesk backup again (it continues from its saved position) and the import again, so mail Zendesk received before the rules changed is in Maane too. The Zendesk API does not return the last minute, so the gap is required.
+4. An admin presses **Finish import**.
 
-- **Cutover point.** Choose a time. Stop answering in Zendesk, and turn off both its automations and the triggers that send notifications and receipts.
-- **Routing.** Remove Zendesk from the rules, and wait for mail already in transit to arrive.
-- **Final import.** Wait at least 5 minutes after the cutover point. Run an updated Zendesk backup that continues from the saved position of the previous backup, and check that it covers time after the cutover point. Only then import. The Zendesk API does not return the last minute, so the gap is required.
-- **Reconciliation.** Mail that reached Maane after the cutover point is matched against what was imported, by `Message-ID` and sender. An ambiguous match is shown to the owner and decided before activation.
-- **Numbering.** Imported tickets keep their Zendesk numbers (section 5.2), and Maane's numbering continues right after the highest imported number, with no gap; the final import moves it the same way (owner's decision, 2026-11-16, in place of a floor with a gap). Zendesk numbers are also kept in their own field and shown as `Zendesk #1234`. The email subject carries only the Maane number, which for an imported ticket is its Zendesk number.
-- **Activation.** Only after reconciliation is clean, turn on sending to customers and automations in Maane.
-- **Old replies.** While Zendesk stays open, a recurring job pulls new comments and new tickets from it. A customer who replies to a closed ticket makes Zendesk open a follow-up ticket, and the job links it to the original. Progress is saved, and a repeated run creates no duplicates. Before anything pulled affects Maane, it passes the same reconciliation: if the same message already reached Maane directly, the link between both sources is kept and no second message is created. An ambiguous match, or a message without enough identifiers, goes to the owner's review list, not to the live flow. Only what passed reconciliation enters Maane as ordinary activity, with a Maane number and a notification. The owner decides when to stop this job and close Zendesk.
-- **SPF.** Remove Zendesk from the records only after the rollback period ended.
+- **Default address.** Mail becomes tickets only while a default address exists. While none exists, intake processes nothing and counts no attempt; once one exists, every waiting message is processed once, in the usual order. The default address can be replaced but never removed.
+- **Rare cases** are tested with deliberate mail right after step 2: an alias, an address that exists only in a rule, the wildcard, a blind copy, two support addresses in one message, a bounce, and an auto-reply. Each opens or joins a ticket like any mail.
 
-### 6.4 Rollback
+### 6.3 The import window
 
-1. Always first: return Maane to listening mode, so sending to customers is blocked, and decide each message in `sending` or `unknown`.
-2. **Routing.** Put Zendesk back in the rules, without turning its triggers and automations on yet.
-3. **Restore.** Maane exports everything that happened since the cutover point, per ticket: each incoming and outgoing message with full content, attachments, and current status. Each message is marked public or internal, and sent to the customer or not sent. The owner enters the export into Zendesk by hand, keeping public and internal apart. At this volume the work is small. At the end, check ticket by ticket against the export: the messages, their visibility, and the status.
-4. **Mapping.** Maane keeps a table of Maane number against the restored Zendesk ticket number. A customer who later replies to mail that Maane sent opens a new ticket in Zendesk, because Zendesk does not know Maane's identifiers. Merge it by hand into the right ticket with Zendesk's merge tool, using the table. If the target ticket is solved, reopen it in the merge, because the merge does not do so by itself. If it is closed, merging into it is not possible: create a follow-up (**Create follow-up**), update the table to the new ticket, and merge into it. Test this on at least one reply, including a solved ticket and a closed ticket.
-5. Only at the end, turn the Zendesk triggers and automations back on. Turned on earlier, Zendesk would send the customer every reply that is entered by hand.
+- **Finish import** is an admin action on the import page: refused while a run is open, audited, and final. After it every import is refused, and imported tickets are ordinary tickets.
+- **Until then** the rules of phase 5 hold: imported tickets are read-only for agents, a run again replaces imported content, and numbering continues right after the highest imported number. Live mail may still join an imported ticket. A run that finds that intake added a message to a ticket since its import still updates the ticket's imported comments, notes, and files, but keeps the ticket's own fields (status, last activity, participants, organization, categories, subject) and reports `kept_live_changes`.
+- **The same mail through both paths.** When a message intake received and an imported comment on the same ticket share `Message-ID` and sender, both stay visible and the ticket is flagged for review (`possible_duplicate`), whichever arrived first. The overlap lasts only the few minutes of the rules change, so a rare visible duplicate is preferred over any risk of hiding a customer's mail.
+- **Numbers.** One lock guards ticket numbers, so a number intake draws and a number the import inserts never collide, and the numbering never moves back. A ticket intake opened that holds a Zendesk number is reported as `number_taken`.
+- **Numbering.** Imported tickets keep their Zendesk numbers (section 5.2), and Maane's numbering continues right after the highest imported number, with no gap (owner's decision, 2026-11-16). Zendesk numbers are also kept in their own field and shown as `Zendesk #1234`. The email subject carries only the Maane number, which for an imported ticket is its Zendesk number.
+
+### 6.4 Old replies
+
+A customer reply to old Zendesk mail joins its imported ticket only when it uses Maane's own `[#n]` form. Replies by Zendesk's own identifiers wait until the owner forwards one or two old Zendesk emails with full headers; then a small follow-up adds only the confirmed forms, scoped to the address's organization, joining only a unique imported ticket whose participants include the sender. Until then such a reply opens a new ticket. How long Zendesk stays open is decided after that check. SPF records keep Zendesk until it closes.
 
 ## 7. Secrets
 
@@ -236,7 +234,7 @@ No tracked file holds a working value for a secret-like setting, also not for de
 | SMTP2GO webhook secret | Not needed. | New for each run. | Generated in the admin UI by a cryptographically secure generator, stored encrypted, and entered at SMTP2GO as the path and the `Authorization` header. The admin UI can replace it. |
 | SMTP2GO API key and failover SMTP credentials | A stand-in API and a local SMTP server, with no real credentials. Real test sends use a separate key from the local secret store. | A stand-in API and SMTP server. | Entered in the admin UI and stored encrypted, or set through an environment variable that locks the field. The SMTP2GO key has the least permissions: send and read activity. |
 | VAPID key for browser notifications | Generated once on the machine with the Web Push library's tool, into an ignored owner-only file, never overwritten. | New for each run. | Generated once on the server the same way, and backed up. Replacing it disconnects every notification subscription, so it is never generated again on start. |
-| Zendesk API token | Not needed. Tests use a stand-in API. | A stand-in API. | Entered at run time through a secure prompt, and stored encrypted only while the old-replies job is active. Never written to a file. |
+| Zendesk API token | Not needed. Tests use a stand-in API. | A stand-in API. | Entered at run time through the backup tool's secure prompt. Never stored, and never written to a file. |
 
 ## 8. Security
 
@@ -248,8 +246,8 @@ No tracked file holds a working value for a secret-like setting, also not for de
 - **Settings.** Every setting the owner manages is edited in the admin UI and stored encrypted where it is secret. An environment value wins and locks the field. The failover server has no unencrypted option. The SMTP2GO webhook has a secret path and a secret `Authorization` header configured at SMTP2GO. A request without the right header is refused, and an event about a message ID that Maane did not send is ignored. If the secret leaks, the damage is limited to a wrong delivery status and stopped reminders, and the admin UI replaces it.
 - **Incoming content.** Incoming HTML is sanitized and shown isolated. Every file is scanned by ClamAV before it is stored, and stored by hash with a size limit. Preview exists only for safe types, by content, and only for a clean file. Everything else is a download.
 - **Notification subscriptions.** Subscribing and unsubscribing need a signed-in user and CSRF protection. The server decides who owns a subscription, never the browser. Maane sends only to HTTPS endpoints of the supported browsers' push services, and never to an internal or private address, also not through a redirect. Subscription endpoints and keys are never logged and never returned to another user. Tests show that a user cannot change another user's subscription, that an internal address is refused, and that removing authorization stops notifications without affecting an authorized user.
-- **Audit log.** Every sensitive action is recorded: a setting change, an address or template change, a send, a deletion, an import, and a switch between listening and sending. Secret values are never logged.
-- **Backup and restore.** Not part of the application. The owner's own stack runs backups. Maane documents what a backup must include: the database, the attachments directory, the settings encryption key, the Better Auth secret, the VAPID key, and the phase 0 Zendesk archive. Without the encryption key, backed-up settings cannot be read. Without the Better Auth secret, the two-factor secrets cannot be read and nobody can sign in. One restore is tested before cutover, including a sign-in with an existing user and that user's existing authenticator.
+- **Audit log.** Every sensitive action is recorded: a setting change, an address or template change, a send, a deletion, an import, and Finish import. Secret values are never logged.
+- **Backup and restore.** Not part of the application. The owner's own stack runs backups. Maane documents what a backup must include: the database, the attachments directory, the settings encryption key, the Better Auth secret, the VAPID key, and the phase 0 Zendesk archive. Without the encryption key, backed-up settings cannot be read. Without the Better Auth secret, the two-factor secrets cannot be read and nobody can sign in. One restore is tested before setup day, including a sign-in with an existing user and that user's existing authenticator.
 
 ## 9. Accepted residual risks
 
@@ -263,7 +261,7 @@ Residual risk: anyone who reaches the address within those 5 minutes before the 
 
 Each item needs evidence before Maane relies on it.
 
-- How Exchange actually routes aliases, rule-only addresses, the wildcard, blind copies, overlapping rules, and several support addresses in one message. Checked in listening mode with deliberate mail and message trace.
+- How Exchange actually routes aliases, rule-only addresses, the wildcard, blind copies, overlapping rules, and several support addresses in one message. Checked with deliberate mail and message trace right after the rules point at the intake mailbox (section 6.2).
 - Whether Exchange keeps the original recipient in the headers after a rule. Not checked, so a default address was decided. If the recipient is kept, Maane uses it.
 - Limiting Graph to one mailbox through RBAC for Applications. Documented, but not tested against a real tenant.
 - What Zendesk put in the mail it sent in the past, and which identifiers its API exposes for threading.

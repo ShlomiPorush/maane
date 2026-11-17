@@ -30,7 +30,8 @@ export type PartStatus = (typeof PART_STATUSES)[number]
  * - `unavailable`, `parse_failed`, `too_large`: stage one kept only the Graph metadata.
  * - `invalid_characters`: a decoded text held U+0000 or an unpaired surrogate, replaced by U+FFFD before storing.
  * - `reused_message_id`: another message has the same Message-ID with other content.
- * - `no_default_address`: no support address matched and no default exists, so it opened no ticket.
+ * - `no_default_address`: no support address matched and no default existed, so it opened no ticket (records from
+ *   before phase 6: since then a message waits until a default address exists).
  * - `part_too_large`: a part was over files.maxBytes and was not scanned or kept.
  * - `blocked_content`: a stored text field (the text, the HTML, or the header values) scanned infected or blocked
  *   and was not stored.
@@ -59,12 +60,16 @@ export type MessageFlag = (typeof MESSAGE_FLAGS)[number]
  *   each of them.
  * - `delivery_failed`: a reply bounced, was rejected, or was reported as spam for a recipient, and no later reply to
  *   that recipient was accepted (plan 3.3). Maane sets and clears it from the replies' recipients.
+ * - `possible_duplicate`: a message intake received and a comment the import brought in, on this ticket, share their
+ *   Message-ID and sender (phase 6): the same mail may have reached Maane through both paths while the Microsoft 365
+ *   rules changed. Both stay visible; a person decides.
  */
 export const TICKET_FLAGS = [
   "possibly_automated",
   "sender_not_participant",
   "ambiguous_original",
   "delivery_failed",
+  "possible_duplicate",
 ] as const
 export type TicketFlag = (typeof TICKET_FLAGS)[number]
 
@@ -85,12 +90,13 @@ export const LINK_REASONS = ["sender_not_participant", "ambiguous_original", "fo
 export type LinkReason = (typeof LINK_REASONS)[number]
 
 /**
- * What processing did with a message (live) or would have done (listening):
+ * What processing did with a message:
  * - `copy`: a copy of an earlier message (Message-ID, From, Date, and content all equal), or of a reply Maane sent
  *   (its own Message-ID from its own From address, reason `sent_by_maane`); nothing else changes.
  * - `automated`: automated mail; it never opens, joins, or reopens a ticket.
  * - `unreadable`: only Graph metadata was kept (see MESSAGE_CONTENTS).
- * - `no_address`: it needed a new ticket, but no support address matched and no default exists.
+ * - `no_address`: it needed a new ticket, but no support address matched and no default existed. Since phase 6 no
+ *   message is processed while no default address exists (it waits), so only records from before carry it.
  * - `new_ticket`, `joined`: a new ticket, or a ticket it matched and whose participant sent it.
  * - `new_linked_ticket`: a new ticket linked to the ticket or tickets it matched (sender not a participant, or a late
  *   original several tickets wait for).

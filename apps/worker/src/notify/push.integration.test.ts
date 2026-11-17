@@ -45,7 +45,6 @@ beforeEach(async () => {
   h = await startIntake(clamd)
   support = await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
   other = await h.organization("Example Other", [{ value: OTHER }])
-  await h.mode("live")
   app = createTestApp(h.database)
   await app.ready
   push.received.length = 0
@@ -339,7 +338,7 @@ describe("intake's notifications", () => {
     return jobs.map((job) => job.data)
   }
 
-  it("queues one for a new ticket and one for a customer's message that joins it, in live mode only", async () => {
+  it("queues one for a new ticket and one for a customer's message that joins it", async () => {
     const original = `${randomUUID()}@mail.example.com`
     const first = h.graph.add(mime({ messageId: original, subject: SUBJECT, to: SUPPORT, text: { content: BODY } }))
     await round()
@@ -389,12 +388,6 @@ describe("intake's notifications", () => {
         text: { content: BODY },
       }),
     )
-    await round()
-    expect(await queued()).toEqual([])
-
-    // Listening mode keeps shadow conversations: no ticket, no notification.
-    await h.mode("listening")
-    h.graph.add(mime({ subject: "While listening", to: SUPPORT, text: { content: BODY } }))
     await round()
     expect(await queued()).toEqual([])
   })

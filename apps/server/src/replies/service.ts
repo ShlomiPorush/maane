@@ -5,8 +5,8 @@
 //
 // One reply per click: the composer sends a submission ID, and a unique index on (author, submission ID) makes a
 // repeated or lost request find the same message. Only the ticket's own files and the user's own uploads can be
-// attached, and the server reads their bytes itself. The From address must belong to the ticket's organization, and
-// the send point refuses a reply while intake listens (the worker checks both again when it sends).
+// attached, and the server reads their bytes itself. The From address must belong to the ticket's organization (the
+// worker checks it again when it sends).
 //
 // A scheduled reply (plan 4.2) is built here too, at once, dated at its time, and stored as its timed action's version
 // (`scheduled_reply`): the worker writes it at its time through write.ts, as submit writes a reply sent now. Its author
@@ -218,7 +218,6 @@ export class Replies {
       cc: others,
       signature,
       senderName: `${await this.#agentName(userId)} (${organizationName})`,
-      listening: (await this.settings.get("intake.mode")) === "listening",
     }
   }
 
@@ -241,8 +240,8 @@ export class Replies {
     const found = await this.#ticket(scope, number)
     if (!found) throw new Refusal("not_found", 404)
     const t = found.ticket
-    // An imported ticket is read-only until Maane goes live (plan 5.1): before the send point's checks, so a note and a
-    // reply give the same answer; again under the ticket's lock below.
+    // An imported ticket is read-only until the import is finished (plan 5.1): before the send point's checks, so a
+    // note and a reply give the same answer; again under the ticket's lock below.
     await refuseImported(this.db, t.id)
     const isReply = input.kind === "reply"
     const now = new Date()
@@ -300,8 +299,8 @@ export class Replies {
   }
 
   /**
-   * Everything a reply or a note needs before its transaction: the checks of the send point (a reply while intake
-   * listens, its From address, its recipients), the sanitized body with the signature, the files read and checked, and
+   * Everything a reply or a note needs before its transaction: the checks of the send point (a reply's From address,
+   * its recipients), the sanitized body with the signature, the files read and checked, and
    * for a reply the email built once (dated `date`: now, or a scheduled reply's time) with its links.
    */
   async #prepare(
@@ -315,8 +314,6 @@ export class Replies {
     let from: string | null = null
     let people: { to: MailAddress[]; cc: MailAddress[] } = { to: [], cc: [] }
     if (isReply) {
-      // The send point refuses customer replies while intake listens; the worker checks again under the mode's lock.
-      if ((await this.settings.get("intake.mode")) === "listening") throw new Refusal("listening_mode", 409)
       const parsed = parseExactAddress(input.from ?? "")
       if (!parsed.ok || !belongsTo(parsed.value, await supportRules(this.db), t.organizationId))
         throw new Refusal("from_not_allowed", 400)
@@ -890,7 +887,6 @@ export class Replies {
    * Only one locked change out of `unknown` or `failed` queues an attempt, so two clicks queue one.
    */
   async resend(scope: OrganizationScope, user: ReplyUser, messageId: string): Promise<void> {
-    if ((await this.settings.get("intake.mode")) === "listening") throw new Refusal("listening_mode", 409)
     await transactionWithJobs(this.db, async (tx, jobs) => {
       const row = await this.#reply(tx, scope, messageId)
       if (row.state !== "unknown" && row.state !== "failed") throw new Refusal("reply_not_retryable", 409)

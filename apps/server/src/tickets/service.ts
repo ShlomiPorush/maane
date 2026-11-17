@@ -45,7 +45,6 @@ import { Categories } from "../categories/service.ts"
 import type { Db } from "../db/client.ts"
 import {
   authUser,
-  intakeConversation,
   intakeRecord,
   message,
   messagePart,
@@ -61,7 +60,7 @@ import {
 } from "../db/schema.ts"
 import { storedFilePath } from "../files/paths.ts"
 import { messageSourceView, ticketSourceView } from "../imports/source.ts"
-import { wentLiveAt } from "../imports/window.ts"
+import { finishedAt } from "../imports/window.ts"
 import { linkViews } from "../links/service.ts"
 import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
 import { renderMailHtml } from "../mail/html.ts"
@@ -652,9 +651,9 @@ export class Tickets {
         categories: await categoriesOf(this.db, t.id),
         snoozedUntil: snoozedUntil(t.snoozedUntil),
         snoozeOverdue: t.snoozedUntil !== null && t.snoozedUntil.getTime() <= Date.now(),
-        // An imported ticket (plan 5.1) is read-only until Maane first goes live.
+        // An imported ticket (plan 5.1) is read-only for agents until the import is finished.
         imported:
-          t.zendeskId !== null ? ticketSourceView(t.zendeskId, t.zendesk, (await wentLiveAt(this.db)) === null) : null,
+          t.zendeskId !== null ? ticketSourceView(t.zendeskId, t.zendesk, (await finishedAt(this.db)) === null) : null,
       },
       participants,
       links: links.map((link) => ({ number: link.number, reason: link.reason as LinkReason })),
@@ -743,19 +742,14 @@ export class Tickets {
   }
 
   /** The intake log (admins): every record, newest first, with the review flags of its message and thread. */
-  async intake(filters: {
-    mode?: "listening" | "live"
-    flagged?: boolean
-    cursor?: string
-    limit: number
-  }): Promise<IntakeLog> {
+  async intake(filters: { flagged?: boolean; cursor?: string; limit: number }): Promise<IntakeLog> {
     const cursor = filters.cursor ? decodeCursor(filters.cursor, "uuid") : null
     if (filters.cursor && !cursor) throw new CursorError()
     const opened = alias(ticket, "opened")
     const matched = alias(ticket, "matched")
     const flags = sql<
       string[]
-    >`array(select distinct unnest(${message.reviewFlags} || coalesce(${opened.reviewFlags}, '{}'::text[]) || coalesce(${intakeConversation.reviewFlags}, '{}'::text[])) order by 1)`
+    >`array(select distinct unnest(${message.reviewFlags} || coalesce(${opened.reviewFlags}, '{}'::text[])) order by 1)`
     const rows = await this.db
       .select({
         record: intakeRecord,
@@ -775,10 +769,8 @@ export class Tickets {
       .leftJoin(organization, eq(organization.id, intakeRecord.organizationId))
       .leftJoin(opened, eq(opened.id, intakeRecord.ticketId))
       .leftJoin(matched, eq(matched.id, intakeRecord.matchedTicketId))
-      .leftJoin(intakeConversation, eq(intakeConversation.id, intakeRecord.conversationId))
       .where(
         and(
-          filters.mode ? eq(intakeRecord.mode, filters.mode) : undefined,
           filters.flagged ? sql`cardinality(${flags}) > 0` : undefined,
           cursor
             ? sql`(${intakeRecord.createdAt}, ${intakeRecord.messageId}) < (${cursor.at}::timestamptz, ${cursor.key}::uuid)`
@@ -791,7 +783,6 @@ export class Tickets {
       messageId: row.record.messageId,
       at: row.record.createdAt.toISOString(),
       receivedAt: row.receivedAt.toISOString(),
-      mode: row.record.mode === "live" ? "live" : "listening",
       outcome: row.record.outcome as IntakeEntry["outcome"],
       classification: row.record.classification,
       reasons: (row.record.reason ?? "")

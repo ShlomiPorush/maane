@@ -60,6 +60,14 @@ export function importRoutes(imports: Imports): Hono<ApiEnv> {
   )
 
   routes.post(
+    "/finish",
+    admins(async (c) => {
+      await imports.finish({ actor: c.get("actor"), ipAddress: clientIp(c.req.raw) })
+      return c.json(await imports.view())
+    }),
+  )
+
+  routes.post(
     "/cancel",
     admins(async (c) => {
       const parsed = CancelBody.safeParse(await c.req.json().catch(() => null))

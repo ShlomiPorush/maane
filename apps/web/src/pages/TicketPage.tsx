@@ -111,7 +111,7 @@ function Ticket({ view }: { view: TicketView }) {
   // (one that went out or was cancelled meanwhile gets the server's refusal when saved).
   const [editing, setEditing] = useState<ScheduledReplyView | null>(null)
   const { ticket } = view
-  // An imported ticket is read-only until Maane goes live (plan 5.1): its values show, nothing changes them.
+  // An imported ticket is read-only until the import is finished (plan 5.1): its values show, nothing changes them.
   const readOnly = ticket.imported?.readOnly === true
   return (
     <>

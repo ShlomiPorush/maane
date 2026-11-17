@@ -1,18 +1,11 @@
 import { userEmail } from "@maane/shared"
 import { eq } from "drizzle-orm"
-import pg from "pg"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { type Actor, SYSTEM } from "../audit.ts"
-import { auditLog, intakeConversation, organizationMember, setting, supportAddress, ticket } from "../db/schema.ts"
-import { createSettingsCipher } from "../settings/crypto.ts"
-import { Settings } from "../settings/service.ts"
+import { auditLog, organizationMember, setting, supportAddress, ticket } from "../db/schema.ts"
 import { createTestApp } from "../testing/app.ts"
 import { type Answer, nextIp, TestBrowser, testPassword } from "../testing/browser.ts"
-import { createTestDatabase, testKey } from "../testing/db.ts"
-import { INTAKE_CONFIG_LOCK } from "./intake.ts"
-import { Refusal } from "./refusal.ts"
+import { createTestDatabase } from "../testing/db.ts"
 import { visibleOrganizations } from "./scope.ts"
-import { Organizations } from "./service.ts"
 
 let database: Awaited<ReturnType<typeof createTestDatabase>>
 let app: ReturnType<typeof createTestApp>
@@ -141,10 +134,6 @@ describe("organizations", () => {
     expect(refused.status).toBe(409)
     expect(refused.json).toEqual({ error: "organization_has_mail" })
     expect((await actions()).length).toBe(before)
-    // A listening conversation keeps another one too.
-    const other = await createOrganization(admin, "Listened")
-    await database.db.insert(intakeConversation).values({ organizationId: other, supportAddress: "a@example.com" })
-    expect((await admin.call("DELETE", `${BASE}/${other}`)).json).toEqual({ error: "organization_has_mail" })
   })
 
   it("answers 404 to an id that names nothing, also one that is not a UUID", async () => {
@@ -388,108 +377,27 @@ describe("a role change and memberships", () => {
   })
 })
 
-describe("the intake mode", () => {
-  const settings = () => new Settings(database.db, createSettingsCipher([{ version: 1, value: testKey() }]), {})
-
-  it("exists as a stored row from the migration, listening, and no variable can lock it", async () => {
-    const [row] = await database.db.select().from(setting).where(eq(setting.key, "intake.mode"))
-    expect(row?.value).toBe("listening")
-    expect((await settings().view()).find((v) => v.key === "intake.mode")).toMatchObject({
-      value: "listening",
-      locked: false,
-      variable: null,
-    })
-  })
-
-  it("refuses live without a default address, and while live keeps the default replaceable but not removable", async () => {
+describe("the default address", () => {
+  it("is replaceable but never removable, and the intake mode is gone with its row", async () => {
     const { b: admin } = await firstAdmin()
-    const live = () => admin.call("PUT", "/api/v1/settings", { "intake.mode": "live" })
-    expect((await live()).json).toEqual({ error: "intake_no_default_address", key: "intake.mode" })
     const id = await createOrganization(admin, "One")
     const first = await addAddress(admin, id, "exact", "help@example.com")
     const second = await addAddress(admin, id, "exact", "support@example.com")
     await admin.call("PUT", `${BASE}/${id}/addresses/${first}/default`)
-    expect((await live()).status).toBe(200)
-    expect(await app.settings.get("intake.mode")).toBe("live")
-
     expect((await admin.call("DELETE", `${BASE}/${id}/addresses/${first}`)).json).toEqual({
       error: "intake_default_required",
     })
     expect((await admin.call("PUT", `${BASE}/${id}/addresses/${second}/default`)).status).toBe(200)
     expect((await admin.call("DELETE", `${BASE}/${id}/addresses/${first}`)).status).toBe(200)
-
-    expect((await admin.call("PUT", "/api/v1/settings", { "intake.mode": "listening" })).status).toBe(200)
-    expect((await admin.call("DELETE", `${BASE}/${id}/addresses/${second}`)).status).toBe(200)
-    const switches = (await database.db.select().from(auditLog)).filter((r) => r.entityId === "intake.mode")
-    expect(switches.map((r) => r.details)).toEqual([{ value: "live" }, { value: "listening" }])
-  })
-
-  it("lets a switch to live and the removal of the default, started together, never both pass", async () => {
-    const organizations = new Organizations(database.db)
-    const actor: Actor = SYSTEM
-    const acting = { actor, ipAddress: null }
-    for (let round = 0; round < 3; round++) {
-      const { id } = await organizations.create(`Race ${round}`, acting)
-      const { id: address } = await organizations.addAddress(id, "exact", `help-${round}@example.com`, acting)
-      await organizations.setDefault(id, address, acting)
-      await settings().update({ "intake.mode": "listening" }, actor)
-
-      // A third connection holds the lock, so both requests are in flight and waiting before either can decide.
-      const holder = new pg.Client({ connectionString: database.url })
-      await holder.connect()
-      await holder.query("begin")
-      await holder.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [INTAKE_CONFIG_LOCK])
-      const settled: string[] = []
-      const track = (name: string, work: Promise<unknown>) =>
-        work.then(
-          () => {
-            settled.push(name)
-            return "ok"
-          },
-          (error: unknown) => {
-            settled.push(name)
-            if (error instanceof Refusal) return error.code
-            throw error
-          },
-        )
-      const both =
-        round % 2 === 0
-          ? [
-              track("switch", settings().update({ "intake.mode": "live" }, actor)),
-              track("remove", organizations.removeAddress(id, address, acting)),
-            ]
-          : [
-              track("remove", organizations.removeAddress(id, address, acting)),
-              track("switch", settings().update({ "intake.mode": "live" }, actor)),
-            ]
-      await waitForLockWaiters(holder, 2)
-      expect(settled).toEqual([])
-      await holder.query("commit")
-      await holder.end()
-      const results = await Promise.all(both)
-
-      const passed = results.filter((result) => result === "ok")
-      expect(passed, JSON.stringify(results)).toHaveLength(1)
-      expect(results.filter((r) => r !== "ok")[0]).toMatch(/^intake_(no_default_address|default_required)$/)
-      // Whatever won, live never stands without a default address.
-      const mode = await settings().get("intake.mode")
-      const defaults = await database.db.select().from(supportAddress).where(eq(supportAddress.isDefault, true))
-      if (mode === "live") expect(defaults).toHaveLength(1)
-      // Back to listening and no default before the next round.
-      await settings().update({ "intake.mode": "listening" }, actor)
-      if (defaults.length > 0) await organizations.removeAddress(id, address, acting)
-    }
+    expect((await admin.call("DELETE", `${BASE}/${id}/addresses/${second}`)).json).toEqual({
+      error: "intake_default_required",
+    })
+    const defaults = await database.db.select().from(supportAddress).where(eq(supportAddress.isDefault, true))
+    expect(defaults.map((row) => row.value)).toEqual(["support@example.com"])
+    // No intake mode any more (phase 6): its row is gone, and the settings refuse the key.
+    expect(await database.db.select().from(setting).where(eq(setting.key, "intake.mode"))).toEqual([])
+    expect((await admin.call("PUT", "/api/v1/settings", { "intake.mode": "live" })).json).toMatchObject({
+      error: "setting_unknown",
+    })
   })
 })
-
-/** Waits until `count` other sessions wait for an advisory lock the holder's session holds. */
-async function waitForLockWaiters(holder: pg.Client, count: number): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const { rows } = await holder.query(
-      "select count(*)::int as n from pg_locks where locktype = 'advisory' and not granted",
-    )
-    if (rows[0]?.n >= count) return
-    await new Promise((resolve) => setTimeout(resolve, 25))
-  }
-  throw new Error(`fewer than ${count} sessions waited for the lock`)
-}

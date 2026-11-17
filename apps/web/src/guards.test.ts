@@ -27,7 +27,6 @@ import {
   IMPORT_RUN_STATES,
   IMPORT_STAGES,
   IMPORT_STOP_REASONS,
-  INTAKE_MODES,
   INTAKE_OUTCOMES,
   INTAKE_REASONS,
   LINK_REASONS,
@@ -314,8 +313,6 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "organization.kind.": ADDRESS_KINDS,
   "organization.kindHint.": ADDRESS_KINDS,
   "organizations.check.": ["exact", "pattern", "default"],
-  "settings.intakeMode.mode.": INTAKE_MODES,
-  "settings.intakeMode.explain.": INTAKE_MODES,
   "settings.scannerPolicy.mode.": SCANNER_POLICIES,
   "settings.scannerPolicy.explain.": SCANNER_POLICIES,
   "settings.scanner.check.": SCANNER_CHECKS,
@@ -327,15 +324,15 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "scan.hint.": PART_STATUSES.filter((status) => status !== "clean"),
   "scan.hintImported.": ["infected", "blocked_type"],
   "flag.": [...MESSAGE_FLAGS, ...TICKET_FLAGS],
-  "intake.mode.": INTAKE_MODES,
   "intake.outcome.": INTAKE_OUTCOMES,
-  "intake.outcomeWould.": INTAKE_OUTCOMES,
   "intake.reason.": INTAKE_REASONS,
   "ticket.direction.": ["out", "note"],
   "ticket.link.": LINK_REASONS,
   "import.run.state.": IMPORT_RUN_STATES,
   "import.run.stage.": IMPORT_STAGES,
-  "import.run.reason.": IMPORT_STOP_REASONS,
+  // With went_live and not_listening here, and listening in delivery.problem and scheduled.reason below: values only
+  // rows from before phase 6 (listening mode) carry, still shown.
+  "import.run.reason.": [...IMPORT_STOP_REASONS, "went_live", "not_listening"],
   "import.run.counts.": Object.keys(emptyImportCounts()),
   "import.report.reason.": IMPORT_REPORT_REASONS,
   "import.report.failure.": IMPORT_FAILURES,
@@ -346,8 +343,8 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "delivery.state.": OUTBOX_STATES,
   "delivery.recipient.": RECIPIENT_STATES,
   "delivery.provider.": PROVIDERS,
-  "delivery.problem.": SEND_PROBLEMS,
-  "scheduled.reason.": ACTION_REASONS,
+  "delivery.problem.": [...SEND_PROBLEMS, "listening"],
+  "scheduled.reason.": [...ACTION_REASONS, "listening"],
   "audit.snoozeEnd.": ["agent", "time", "customer_reply"],
   "delivery.status.": DELIVERY_STATUSES,
   "settings.sending.": SETTING_ROWS.filter(
@@ -728,7 +725,7 @@ describe("intake reasons", () => {
   })
 
   it("reads the literals and the listed expressions (the scan itself works)", () => {
-    for (const reason of ["copy", "process_failed", "no_default_address", "sender_not_participant", "unavailable"])
+    for (const reason of ["copy", "process_failed", "sender_not_participant", "unavailable"])
       expect(reasons.has(reason)).toBe(true)
     expect(reasons.has("auto_submitted")).toBe(true)
   })

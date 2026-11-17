@@ -3,7 +3,7 @@
 // each paragraph takes the direction of its first letter (its documented textDirection: "auto"). Files come from the
 // agent's computer (uploaded, then scanned by the worker; a refused one says why and is never sent) or from the
 // ticket's own messages. One click is one message: the composer sends a submission ID, kept until the server answers,
-// so a repeated or lost request finds the same message. While intake listens, only internal notes can be written.
+// so a repeated or lost request finds the same message.
 // A reply's default action is "Send and set pending" (plan 4.1): the server sets the status in the reply's own
 // transaction; "Send" leaves the status. A closed ticket offers only "Send" to an agent (only an admin leaves closed).
 // "Send later" (plan 4.2) schedules the reply for a date and time in Israel time, with its status action, which applies
@@ -131,7 +131,7 @@ export function Composer({
   const compose = view.compose
   const queryClient = useQueryClient()
   const formId = useId()
-  const [kind, setKind] = useState<Kind>(compose.listening ? "note" : "reply")
+  const [kind, setKind] = useState<Kind>("reply")
   const [chosenFrom, setFrom] = useState(compose.defaultFrom ?? "")
   // A From the ticket no longer offers (it moved to another organization) gives way to its default; the draft stays.
   const from = compose.from.includes(chosenFrom) ? chosenFrom : (compose.defaultFrom ?? "")
@@ -150,10 +150,6 @@ export function Composer({
       mounted.current = false
     }
   }, [])
-  // Intake switched to listening while the composer was open: only a note can go now.
-  useEffect(() => {
-    if (compose.listening) setKind("note")
-  }, [compose.listening])
 
   const editor = useEditor({
     extensions: [
@@ -436,7 +432,7 @@ export function Composer({
               type="button"
               data-kind={option}
               aria-pressed={kind === option}
-              disabled={busy || (option === "reply" && compose.listening) || (option === "note" && Boolean(editing))}
+              disabled={busy || (option === "note" && Boolean(editing))}
               onClick={() => setKind(option)}
             >
               {t(`compose.kinds.${option}`)}
@@ -445,7 +441,6 @@ export function Composer({
         </fieldset>
       </div>
       <div className="ui-composer-body">
-        {compose.listening ? <Banner tone="info" title={t("compose.listening")} /> : null}
         {editing ? (
           <Banner
             tone="info"
@@ -571,7 +566,7 @@ export function Composer({
             <button
               type="button"
               className={editing ? "ui-btn ui-btn-primary" : "ui-btn"}
-              disabled={busy || scanning || !editor || compose.listening}
+              disabled={busy || scanning || !editor}
               onClick={openLater}
               data-testid="composer-later"
             >

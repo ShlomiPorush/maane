@@ -5,7 +5,6 @@ import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import { setting } from "../db/schema.ts"
 import { makeSourceCurrent } from "../intake/source.ts"
-import { checkIntakeModeChange } from "../organizations/intake.ts"
 import type { SettingsCipher } from "./crypto.ts"
 
 /** A refusal the API maps to a stable error code. */
@@ -56,9 +55,8 @@ export class Settings {
 
   /**
    * Stores changes in one transaction with one audit row each. Refuses a locked field, an unknown key, or a value
-   * that does not validate, before anything is written. A new intake mode first takes the intake configuration lock
-   * and is refused as live while no default address exists (organizations/intake.ts). A new Graph tenant or mailbox
-   * makes the matching intake source current in the same transaction, after it locked the current one (intake/source.ts).
+   * that does not validate, before anything is written. A new Graph tenant or mailbox makes the matching intake source
+   * current in the same transaction, after it locked the current one (intake/source.ts).
    */
   async update(changes: Record<string, unknown>, actor: Actor, ipAddress: string | null = null): Promise<void> {
     const rows: { key: SettingKey; value: unknown; ciphertext: string | null }[] = []
@@ -78,8 +76,6 @@ export class Settings {
       )
     }
     await this.db.transaction(async (tx) => {
-      const mode = rows.find((row) => row.key === "intake.mode")
-      if (mode) await checkIntakeModeChange(tx, mode.value as SettingValue<"intake.mode">)
       for (const row of rows) {
         await tx
           .insert(setting)

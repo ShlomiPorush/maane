@@ -180,8 +180,6 @@ export {
   FILES_MAX_BYTES_MAX,
   FILES_MAX_BYTES_MIN,
   GRAPH_SECRET_MAX,
-  INTAKE_MODES,
-  type IntakeMode,
   isHostName,
   MEGABYTE,
   normalizeBlockedTypes,
@@ -203,7 +201,6 @@ export {
 export {
   type AttachmentView,
   type FieldNotice,
-  INTAKE_FILTER_MODES,
   INTAKE_PAGE_SIZE,
   type IntakeEntry,
   type IntakeLog,

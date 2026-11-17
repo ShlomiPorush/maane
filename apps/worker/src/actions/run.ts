@@ -1,9 +1,9 @@
 // A timed action at its time (plan 4.2), the `timed-action` job: one rule for every timed action
-// (apps/server/src/actions/timed.ts). In one transaction, after the intake mode (FOR SHARE), the ticket (FOR UPDATE),
-// and the action (FOR UPDATE), in the order every path takes them: the job's version must still be the action's and
+// (apps/server/src/actions/timed.ts). In one transaction, after the ticket (FOR UPDATE) and the action (FOR UPDATE),
+// in the order every path takes them: the job's version must still be the action's and
 // the action still `scheduled` (else a change or a cancellation replaced it, and the job does nothing); the customer
-// must not have written since the action was made; and the send point's checks must pass (intake live, the From
-// address still the ticket's organization's, the author still allowed on it). A failed check ends the action without
+// must not have written since the action was made; and the send point's checks must pass (the From address still
+// the ticket's organization's, the author still allowed on it). A failed check ends the action without
 // sending, with its reason. Otherwise the reply is written from the version the server built, with its outbox row
 // (at most one per action and version) and its `send-reply` job, and the action becomes `handed`; the send point checks
 // it once more in the transaction that takes the row to `sending`. A rerun after a crash finds the action `handed` (or
@@ -36,7 +36,6 @@ import { type LockedTicket, lockTicket } from "@maane/server/tickets/status"
 import type { ActionReason, Locale, MailAddress } from "@maane/shared"
 import { and, eq, sql } from "drizzle-orm"
 import type { Db as QueueDb } from "pg-boss"
-import { lockIntakeMode } from "../intake/process.ts"
 
 /** What one run did: wrote the reply (`handed`), found the job stale, or ended the action for this reason. */
 export type TimedResult = "handed" | "stale" | ActionReason
@@ -65,17 +64,16 @@ export class TimedActions {
     const locale = (await this.#settings.get("general.defaultLocale")) as Locale
     try {
       return await transactionWithJobs(this.#db, async (tx, jobs) => {
-        const mode = await lockIntakeMode(tx)
         const ticketId = await ticketOfAction(tx, actionId)
         const locked = ticketId ? await lockTicket(tx, ticketId) : null
         const action = locked ? await lockAction(tx, actionId) : null
         if (!locked || !action || action.state !== "scheduled" || action.version !== version) return "stale"
-        if (action.kind === "reminder") return this.#reminder(tx, jobs, mode, locked, actionId, version, locale)
+        if (action.kind === "reminder") return this.#reminder(tx, jobs, locked, actionId, version, locale)
         const [reply] = await tx.select().from(scheduledReply).where(eq(scheduledReply.actionId, actionId))
         if (!reply || !action.authorUserId) return "stale"
         const problem = (await customerWroteSince(tx, locked.id, actionId))
           ? "customer_reply"
-          : await sendProblem(tx, mode, {
+          : await sendProblem(tx, {
               from: reply.fromAddress,
               organizationId: locked.organizationId,
               authorUserId: action.authorUserId,
@@ -146,7 +144,6 @@ export class TimedActions {
   async #reminder(
     tx: Db,
     jobs: QueueDb,
-    mode: string,
     locked: LockedTicket,
     actionId: string,
     version: number,
@@ -162,7 +159,7 @@ export class TimedActions {
     const at = new Date()
     const ready = await reminderMessage(tx, locked.id, locale, at)
     if (typeof ready === "string") return end(ready)
-    const refused = await sendProblem(tx, mode, {
+    const refused = await sendProblem(tx, {
       from: ready.from ?? "",
       organizationId: locked.organizationId,
       authorUserId: null,

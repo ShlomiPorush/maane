@@ -1,5 +1,4 @@
 import { createECDH, randomBytes } from "node:crypto"
-import { SETTINGS } from "@maane/shared"
 import { describe, expect, it } from "vitest"
 import { ConfigError, isGeneratedHex, isPlaceholder, loadConfig } from "./config.ts"
 
@@ -188,12 +187,6 @@ describe("loadConfig", () => {
     expect(problems(env({ MAANE_FAILOVER_SECURITY: "plain" }))).toContain("MAANE_FAILOVER_SECURITY is not valid")
     expect(problems(env({ MAANE_SMTP2GO_PORT: "70000" }))).toContain("MAANE_SMTP2GO_PORT is not valid")
     expect(problems(env({ MAANE_BOUNCE_ADDRESS: "bounces" }))).toContain("MAANE_BOUNCE_ADDRESS is not valid")
-  })
-
-  it("lets no variable set or lock the intake mode", () => {
-    expect(SETTINGS["intake.mode"].env).toBeNull()
-    const loaded = loadConfig(env({ MAANE_INTAKE_MODE: "live", INTAKE_MODE: "live" }))
-    expect(loaded.overrides).not.toHaveProperty("intake.mode")
   })
 })
 

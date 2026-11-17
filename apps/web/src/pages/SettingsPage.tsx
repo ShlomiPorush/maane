@@ -4,10 +4,8 @@
 // disabled, and names its variable. The server refuses a locked field (setting_locked), an invalid value
 // (setting_invalid) and an unknown key (setting_unknown); each refusal is explained and points at its field. A
 // refresh never touches a field being edited: the draft holds only what was changed. A field edited again while a
-// save is on its way keeps its new text: a save takes out of the draft only what it sent. The intake mode has no
-// variable; the server refuses live without a default address (intake_no_default_address) and the refusal points
-// at its field. Files and scanning (phase 2.2) shows the scanner's latest self-test and a connection test the
-// worker runs: the page queues it and reads its state until it is done (the server never calls the scanner). Microsoft
+// save is on its way keeps its new text: a save takes out of the draft only what it sent. Files and scanning (phase
+// 2.2) shows the scanner's latest self-test and a connection test the worker runs: the page queues it and reads its state until it is done (the server never calls the scanner). Microsoft
 // Graph (phase 2.3) holds the tenant, the application, its client secret (write only: the page shows whether one is
 // set, never the value, and an empty field keeps it), and the intake mailbox, and a connection test the worker runs the
 // same way: it reads only the mailbox's Inbox folder details and reports Graph's error code. Sending (phase 3.1) holds
@@ -22,7 +20,6 @@ import {
   FILES_MAX_BYTES_MIN,
   GRAPH_SECRET_MAX,
   type GraphTestResult,
-  INTAKE_MODES,
   isClientId,
   isHostName,
   isLinkDomain,
@@ -70,7 +67,6 @@ import { Group, Row } from "./parts.tsx"
 export const SETTING_ROWS: readonly SettingKey[] = [
   "general.defaultLocale",
   "security.sessionDays",
-  "intake.mode",
   "graph.tenantId",
   "graph.clientId",
   "graph.clientSecret",
@@ -194,7 +190,6 @@ export function parseSetting(key: SettingKey, text: string): unknown {
   if (key === "links.domain")
     return text.trim() === "" || isLinkDomain(text.trim().toLowerCase()) ? text.trim().toLowerCase() : null
   if (key === "scanner.unavailablePolicy") return (SCANNER_POLICIES as readonly string[]).includes(text) ? text : null
-  if (key === "intake.mode") return (INTAKE_MODES as readonly string[]).includes(text) ? text : null
   return (LOCALES as readonly string[]).includes(text) ? text : null
 }
 
@@ -336,17 +331,15 @@ function Settings() {
     const label =
       key === "general.defaultLocale"
         ? nativeName(fallbackText as (typeof LOCALES)[number])
-        : key === "intake.mode"
-          ? t(`settings.intakeMode.mode.${fallbackText}`)
-          : key === "scanner.unavailablePolicy"
-            ? t(`settings.scannerPolicy.mode.${fallbackText}`)
-            : key === "failover.security"
-              ? t(`settings.sending.security.${fallbackText}`)
-              : key === "links.tracking"
-                ? t(`settings.linkTracking.mode.${fallbackText}`)
-                : key === "files.blockedTypes"
-                  ? t("settings.blockedTypes.defaultList")
-                  : fallbackText
+        : key === "scanner.unavailablePolicy"
+          ? t(`settings.scannerPolicy.mode.${fallbackText}`)
+          : key === "failover.security"
+            ? t(`settings.sending.security.${fallbackText}`)
+            : key === "links.tracking"
+              ? t(`settings.linkTracking.mode.${fallbackText}`)
+              : key === "files.blockedTypes"
+                ? t("settings.blockedTypes.defaultList")
+                : fallbackText
     return { label, onReset: () => edit(key, fallbackText) }
   }
 
@@ -390,7 +383,6 @@ function Settings() {
   else {
     const locale = "general.defaultLocale" as const
     const days = "security.sessionDays" as const
-    const mode = "intake.mode" as const
     const address = "scanner.address" as const
     const policy = "scanner.unavailablePolicy" as const
     const scanTimeout = "scanner.scanTimeoutSeconds" as const
@@ -489,33 +481,6 @@ function Settings() {
               className: "ui-input-num",
               numeric: { min: SESSION_DAYS_MIN, max: SESSION_DAYS_MAX },
             })}
-          </Row>
-        </Group>
-        <Group id="settings-intake" title={t("settings.intake")}>
-          <Row
-            label={t(labelKey(mode))}
-            hint={INTAKE_MODES.map((option) => (
-              <span key={option} className="ui-set-desc-line">
-                {t(`settings.intakeMode.explain.${option}`)}
-              </span>
-            ))}
-            lock={lockOf(mode)}
-            reset={resetOf(mode)}
-          >
-            <fieldset className="ui-seg" aria-label={t(labelKey(mode))}>
-              {INTAKE_MODES.map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  data-mode={option}
-                  aria-pressed={value(mode) === option}
-                  disabled={Boolean(lockOf(mode))}
-                  onClick={() => edit(mode, option)}
-                >
-                  {t(`settings.intakeMode.mode.${option}`)}
-                </button>
-              ))}
-            </fieldset>
           </Row>
         </Group>
         <Group id="settings-graph" title={t("settings.graphGroup")} intro={t("settings.graphIntro")}>
@@ -1126,7 +1091,6 @@ export function engineOf(version: string | null): { version: string; signatures:
 /** The label of a setting. */
 export function labelKey(key: SettingKey): string {
   if (key === "general.defaultLocale") return "settings.defaultLocale.label"
-  if (key === "intake.mode") return "settings.intakeMode.label"
   if (key === "scanner.address") return "settings.scannerAddress.label"
   if (key === "scanner.unavailablePolicy") return "settings.scannerPolicy.label"
   if (key === "scanner.scanTimeoutSeconds") return "settings.scanTimeout.label"

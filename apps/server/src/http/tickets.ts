@@ -8,7 +8,6 @@ import { stat } from "node:fs/promises"
 import { Readable } from "node:stream"
 import {
   defaultStatusFilter,
-  INTAKE_FILTER_MODES,
   INTAKE_PAGE_SIZE,
   previewKind,
   SEARCH_MAX_LENGTH,
@@ -186,14 +185,11 @@ export function ticketRoutes(db: Db, filesDir: string, replies: Replies): Hono<A
 
   routes.get("/intake", async (c) => {
     if (c.get("user").role !== "admin") return c.json({ error: "forbidden" }, 403)
-    const mode = c.req.query("mode")
     const flagged = c.req.query("flagged")
-    if (mode !== undefined && !(INTAKE_FILTER_MODES as readonly string[]).includes(mode)) return invalid(c)
     if (flagged !== undefined && flagged !== "1") return invalid(c)
     try {
       return c.json(
         await tickets.intake({
-          mode: mode as (typeof INTAKE_FILTER_MODES)[number] | undefined,
           flagged: flagged === "1",
           cursor: c.req.query("after"),
           limit: INTAKE_PAGE_SIZE,

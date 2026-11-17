@@ -1,17 +1,8 @@
 import { randomBytes } from "node:crypto"
 import { stat } from "node:fs/promises"
-import { SYSTEM } from "@maane/server/audit"
 import { loadConfig } from "@maane/server/config"
 import { openDatabase } from "@maane/server/db/client"
-import {
-  intakeRecord,
-  message,
-  messagePart,
-  organization,
-  storedFile,
-  supportAddress,
-  ticket,
-} from "@maane/server/db/schema"
+import { message, messagePart, organization, storedFile, supportAddress, ticket } from "@maane/server/db/schema"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
 import { pdf, png, scannedPdf } from "@maane/server/testing/files"
@@ -35,10 +26,10 @@ import { encodedWord, INVOICE, mime, SHALOM_OLAM } from "./mime.ts"
 // worker service, with its configuration, network, read-only root, and /data, against the stack's PostgreSQL and the
 // real ClamAV, and a stand-in Graph inside this process (its certificate trusted only here). The Graph settings are
 // given to this process alone, as variables would: the stack's own worker has none, so its schedule stays a quiet no-op
-// and never reaches Microsoft. Messages become tickets in live mode and intake records in listening mode, and those
+// and never reaches Microsoft. Messages become tickets (Maane is live from the first moment, phase 6), and those
 // tickets are the ones the end-to-end tests read (e2e/tickets.spec.ts names them by their subjects and organizations;
-// keep both in step). At the end the stand-in's source stops being current, the intake mode is listening again, and
-// the default address this check set is unset. Bundled by verify.sh into apps/worker/dist/stack-check; never part of
+// keep both in step). At the end the stand-in's source stops being current, and the default address this check set is
+// unset (directly: the product never removes a default). Bundled by verify.sh into apps/worker/dist/stack-check; never part of
 // the image.
 
 let failed = false
@@ -112,13 +103,12 @@ try {
     await db.insert(supportAddress).values({ organizationId: made?.id ?? "", kind: "exact", value: address })
   }
   const alphaId = organizations[alpha.address] ?? ""
-  // Live needs a default address. None exists before the end-to-end tests: Alpha's address is it for this run.
+  // Stage two needs a default address. None exists before the end-to-end tests: Alpha's address is it for this run.
   const [fallback] = await db.select().from(supportAddress).where(eq(supportAddress.isDefault, true))
   if (!fallback) {
     await db.update(supportAddress).set({ isDefault: true }).where(eq(supportAddress.value, alpha.address))
     setDefault = true
   }
-  await settings.update({ "intake.mode": "live" }, SYSTEM)
 
   // A Hebrew message written without dir, with an inline image, a remote image, a Hebrew-named PDF, and a photo.
   const hebrewId = graph.add(
@@ -148,7 +138,7 @@ try {
       ],
     }),
   )
-  // An English text-only message with a text file; later, a reply to it while listening.
+  // An English text-only message with a text file.
   const englishMessageId = `english-${run}@mail.example.com`
   const clean = Buffer.from(`Maane stack intake ${run}\nLine two of the notes.\n`, "utf8")
   const englishId = graph.add(
@@ -286,42 +276,13 @@ try {
   const automated = await stored(automatedId)
   check(automated?.ticketId === null && automated.classification === "automated", "automated mail opens no ticket")
 
-  await settings.update({ "intake.mode": "listening" }, SYSTEM)
-  const listeningId = graph.add(mime({ to: alpha.address, subject: `Listening ${run}` }))
-  const replyId = graph.add(
-    mime({
-      to: alpha.address,
-      subject: `Re: ${FIXTURES.english}`,
-      inReplyTo: englishMessageId,
-      references: [englishMessageId],
-      text: { content: "One more detail about the invoice." },
-    }),
-  )
-  await round()
-  const listening = await stored(listeningId)
-  const [record] = listening ? await db.select().from(intakeRecord).where(eq(intakeRecord.messageId, listening.id)) : []
-  check(
-    record?.mode === "listening" &&
-      record.outcome === "new_ticket" &&
-      record.ticketId === null &&
-      record.supportAddress === alpha.address &&
-      listening?.ticketId === null,
-    `listening: an intake record (${record?.outcome ?? "none"}) and no ticket`,
-  )
-  const reply = await stored(replyId)
-  const [heard] = reply ? await db.select().from(intakeRecord).where(eq(intakeRecord.messageId, reply.id)) : []
-  check(
-    heard?.outcome === "joined" && heard.matchedTicketId === opened?.id && reply?.ticketId === null,
-    `listening: a reply would join ticket #${opened?.number ?? "none"} (${heard?.outcome ?? "none"}), which stays as it is`,
-  )
   check(graph.withoutImmutableIds.length === 0, "every Graph request asked for immutable IDs")
 } catch (error) {
   check(false, `the intake check threw: ${error instanceof Error ? error.message : String(error)}`)
 } finally {
-  // The stack's own settings again: no current source (it has no Graph settings), listening, and no default address
-  // of this check's, so the end-to-end tests set their own.
+  // The stack's own settings again: no current source (it has no Graph settings), and no default address of this
+  // check's, so the end-to-end tests set their own.
   await reconcileIntakeSource(db, stackSettings).catch(() => undefined)
-  await stackSettings.update({ "intake.mode": "listening" }, SYSTEM).catch(() => undefined)
   if (setDefault)
     await db
       .update(supportAddress)

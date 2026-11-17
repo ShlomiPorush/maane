@@ -48,7 +48,6 @@ export type Provider = (typeof PROVIDERS)[number]
 
 /**
  * Why nothing was sent (the message `failed`):
- * - `listening`: intake listens, so Maane answers no customer (the send point refuses).
  * - `from_not_allowed`: the From address no longer belongs to the ticket's organization.
  * - `author_not_allowed`: the author may no longer answer this ticket (removed, disabled, or out of its organization).
  * - `not_configured`: neither SMTP2GO nor the failover server is set up.
@@ -58,7 +57,6 @@ export type Provider = (typeof PROVIDERS)[number]
  * - `reminder_ended`: an automatic reminder (plan 4.3) whose waiting period ended before it went out.
  */
 export const SEND_PROBLEMS = [
-  "listening",
   "from_not_allowed",
   "author_not_allowed",
   "not_configured",
@@ -184,8 +182,6 @@ export interface ComposeView {
   signature: string
   /** How the From line names the sender: `Agent Name (Organization Name)`. */
   senderName: string
-  /** Intake listens: Maane sends no reply; internal notes are still written. */
-  listening: boolean
 }
 
 /** What the composer submits. */
@@ -227,8 +223,8 @@ export type ActionState = (typeof ACTION_STATES)[number]
 
 /**
  * Why a timed action was cancelled or ended: the agent cancelled it, the customer wrote (`customer_reply`), the ticket
- * moved to another organization (`move`), or a check at its time failed (intake listens, the From address or the author
- * is no longer allowed). A reminder (plan 4.3) also ends with its waiting period: the ticket left pending
+ * moved to another organization (`move`), or a check at its time failed (the From address or the author is no longer
+ * allowed). A reminder (plan 4.3) also ends with its waiting period: the ticket left pending
  * (`status_change`), an agent replied again (`agent_reply`), the reply that started the period bounced, was rejected, or
  * was reported as spam (`delivery_failed`); or at its time the organization has no reminder template (`no_template`),
  * the ticket has no customer to write to (`no_recipients`), or the period was imported (`imported`).
@@ -237,7 +233,6 @@ export const ACTION_REASONS = [
   "agent",
   "customer_reply",
   "move",
-  "listening",
   "from_not_allowed",
   "author_not_allowed",
   "status_change",

@@ -1,14 +1,11 @@
-// The intake configuration rule (plan 2.1, P17): while the intake mode is live, a default address must exist. Every
-// change that could break it (switching the mode, setting the default, removing an address) takes one
-// transaction-scoped advisory lock first and then reads the mode and the default inside the same transaction, so a
-// switch to live and the removal of the default at the same moment cannot both pass.
+// The intake configuration rule (plan 2.1, P17; phase 6): mail becomes tickets only while a default address exists,
+// and once one exists it can only be replaced, never removed. Every change that could touch the default (setting the
+// default, removing an address) takes one transaction-scoped advisory lock first and then reads the default inside the
+// same transaction. While no default exists, stage two of intake processes nothing (apps/worker/src/intake/process.ts).
 
-import { type IntakeMode, SETTINGS } from "@maane/shared"
 import { eq, sql } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
-import { setting, supportAddress } from "../db/schema.ts"
-import { goingLive } from "../imports/window.ts"
-import { Refusal } from "./refusal.ts"
+import { supportAddress } from "../db/schema.ts"
 
 /** A transaction of Maane's connection. */
 export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
@@ -21,13 +18,6 @@ export async function lockIntakeConfig(tx: Pick<Tx, "execute">): Promise<void> {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${INTAKE_CONFIG_LOCK}, 0))`)
 }
 
-/** The intake mode as stored (no variable can set it); the default when the row holds nothing valid. */
-export async function intakeModeIn(tx: Pick<Tx, "select">): Promise<IntakeMode> {
-  const [row] = await tx.select({ value: setting.value }).from(setting).where(eq(setting.key, "intake.mode"))
-  const parsed = SETTINGS["intake.mode"].schema.safeParse(row?.value)
-  return parsed.success ? parsed.data : SETTINGS["intake.mode"].defaultValue
-}
-
 export async function hasDefaultAddress(tx: Pick<Tx, "select">): Promise<boolean> {
   const [row] = await tx
     .select({ id: supportAddress.id })
@@ -35,16 +25,4 @@ export async function hasDefaultAddress(tx: Pick<Tx, "select">): Promise<boolean
     .where(eq(supportAddress.isDefault, true))
     .limit(1)
   return row !== undefined
-}
-
-/**
- * Called by the settings service inside the transaction that stores a new intake mode, before it writes: takes the
- * lock, and refuses live while no default address exists. Live also locks the mode row, is refused while a Zendesk
- * import run is open, and records the first time Maane went live, which closes the import window (plan 5.1).
- */
-export async function checkIntakeModeChange(tx: Tx, mode: IntakeMode): Promise<void> {
-  await lockIntakeConfig(tx)
-  if (mode !== "live") return
-  if (!(await hasDefaultAddress(tx))) throw new Refusal("intake_no_default_address", 409, { key: "intake.mode" })
-  await goingLive(tx)
 }

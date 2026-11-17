@@ -57,7 +57,7 @@ export class Workflow {
     const [row] = await tx.select({ id: ticket.id }).from(ticket).where(eq(ticket.number, number))
     const locked = row ? await lockTicket(tx, row.id) : null
     if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
-    // An imported ticket is read-only until Maane goes live (plan 5.1).
+    // An imported ticket is read-only until the import is finished (plan 5.1).
     await refuseImported(tx, locked.id)
     return locked
   }

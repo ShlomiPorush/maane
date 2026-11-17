@@ -197,6 +197,34 @@
       "when": 1794856780622,
       "tag": "0027_import_files",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1794874282845,
+      "tag": "0028_live_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1794874308211,
+      "tag": "0029_remove_listening",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1794874380275,
+      "tag": "0030_drop_listening_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1794874390632,
+      "tag": "0031_drop_listening_tables",
+      "breakpoints": true
     }
   ]
 }

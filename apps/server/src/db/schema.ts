@@ -369,7 +369,8 @@ export const ticket = pgTable(
     snoozeVersion: integer("snooze_version").notNull().default(0),
     /**
      * An imported ticket (plan 5.1): its Zendesk ticket ID, which is also its Maane number (owner's decision,
-     * 2026-11-16). Null for a ticket Maane opened. An imported ticket is read-only until Maane first goes live.
+     * 2026-11-16). Null for a ticket Maane opened. An imported ticket is read-only for agents until an
+     * admin presses Finish import.
      */
     zendeskId: bigint("zendesk_id", { mode: "number" }).unique(),
     /**
@@ -532,13 +533,6 @@ export const message = pgTable(
      * the scanner is stored once a retry decides; processing waits while a field waits.
      */
     fieldScans: jsonb("field_scans").notNull().default(sql`'{}'::jsonb`),
-    /** Listening: the shadow conversation the message belongs to (live mode uses tickets). */
-    conversationId: uuid("conversation_id").references(() => intakeConversation.id, { onDelete: "restrict" }),
-    /**
-     * Listening: the existing ticket the message would have joined (review G4). The ticket itself is not changed; later
-     * listening replies to this message match that ticket too.
-     */
-    wouldTicketId: uuid("would_ticket_id").references(() => ticket.id, { onDelete: "restrict" }),
     /** From MAILER-DAEMON or postmaster without a sign of automated mail (classified at stage one, review G13). */
     possiblyAutomated: boolean("possibly_automated").notNull().default(false),
     /** Processing runs that failed on this message; after a few it is recorded for review instead. */
@@ -571,10 +565,18 @@ export const message = pgTable(
      * `message_id_header`, so intake's threading and copies never see it.
      */
     zendesk: jsonb("zendesk"),
+    /**
+     * An imported comment's Message-ID as Zendesk recorded it (also in `zendesk`), kept here only so the check for the
+     * same mail arriving through both intake and the import (phase 6) can use an index. Never used for threading or
+     * copies: intake's threading and copy queries read `message_id_header` only. A hash index: the check only compares
+     * for equality, and a Message-ID of 998 characters outside ASCII is larger than a btree entry may be.
+     */
+    zendeskMessageId: text("zendesk_message_id"),
     createdAt: createdAt(),
   },
   (t) => [
     uniqueIndex("message_source_graph").on(t.sourceId, t.graphId),
+    index("message_zendesk_message_id_idx").using("hash", t.zendeskMessageId),
     index("message_state_received_idx").on(t.state, t.receivedAt),
     index("message_message_id_idx").on(t.messageIdHeader),
     index("message_ticket_idx").on(t.ticketId),
@@ -677,36 +679,25 @@ export const ticketPendingReference = pgTable(
   ],
 )
 
-/**
- * What processing did with a message (live) or would have done (listening): one row per processed message. In
- * listening mode no ticket exists and `ticket_id` stays null; the ticket or message it would have matched is kept.
- */
+/** What processing did with a message: one row per processed message. */
 export const intakeRecord = pgTable(
   "intake_record",
   {
     messageId: uuid("message_id")
       .primaryKey()
       .references(() => message.id, { onDelete: "restrict" }),
-    /** The intake mode the processing read. */
-    mode: text("mode").notNull(),
     /** `@maane/shared` INTAKE_OUTCOMES. */
     outcome: text("outcome").notNull(),
     classification: text("classification"),
     /** The concrete support address and its organization (or the default's). */
     supportAddress: text("support_address"),
     organizationId: uuid("organization_id").references(() => organization.id, { onDelete: "restrict" }),
-    /** Live: the ticket the message opened or joined. */
+    /** The ticket the message opened or joined. */
     ticketId: uuid("ticket_id").references(() => ticket.id, { onDelete: "restrict" }),
-    /** The ticket it matched (live) or would have matched (listening). */
+    /** The ticket it matched. */
     matchedTicketId: uuid("matched_ticket_id").references(() => ticket.id, { onDelete: "restrict" }),
-    /** Listening: the earlier message whose conversation it would have joined (unused since conversations). */
+    /** A copy: the earlier message it repeats; a delivery report: the reply it is about. */
     matchedMessageId: uuid("matched_message_id").references(() => message.id, { onDelete: "restrict" }),
-    /** Listening: the shadow conversation the message opened or joined. */
-    conversationId: uuid("conversation_id").references(() => intakeConversation.id, { onDelete: "restrict" }),
-    /** Listening: the conversation it matched. */
-    matchedConversationId: uuid("matched_conversation_id").references(() => intakeConversation.id, {
-      onDelete: "restrict",
-    }),
     /** `@maane/shared` MATCH_LAYERS. */
     matchLayer: text("match_layer"),
     /** A short reason in the code's words (`sender_not_participant`, `auto_submitted`, ...). */
@@ -715,114 +706,11 @@ export const intakeRecord = pgTable(
   },
   (t) => [
     index("intake_record_created_idx").on(t.createdAt),
-    check("intake_record_mode", sql`${t.mode} in ('listening', 'live')`),
     check(
       "intake_record_outcome",
       sql`${t.outcome} in ('copy', 'automated', 'unreadable', 'no_address', 'new_ticket', 'joined', 'new_linked_ticket')`,
     ),
   ],
-)
-
-/**
- * Listening mode's shadow of a ticket: no number, no reference code, no status. Processing keeps it with the same code
- * path as tickets (participants, links, pending references), so a listening record says exactly what live mode would
- * have decided.
- */
-export const intakeConversation = pgTable(
-  "intake_conversation",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    organizationId: uuid("organization_id")
-      .notNull()
-      .references(() => organization.id, { onDelete: "restrict" }),
-    supportAddress: text("support_address").notNull(),
-    /** `@maane/shared` TICKET_FLAGS. */
-    reviewFlags: text("review_flags").array().notNull().default(sql`'{}'::text[]`),
-    createdAt: createdAt(),
-  },
-  (t) => [index("intake_conversation_organization_idx").on(t.organizationId)],
-)
-
-export const intakeConversationParticipant = pgTable(
-  "intake_conversation_participant",
-  {
-    conversationId: uuid("conversation_id")
-      .notNull()
-      .references(() => intakeConversation.id, { onDelete: "restrict" }),
-    address: text("address").notNull(),
-    name: text("name"),
-    createdAt: createdAt(),
-  },
-  (t) => [primaryKey({ columns: [t.conversationId, t.address] })],
-)
-
-export const intakeConversationLink = pgTable(
-  "intake_conversation_link",
-  {
-    conversationId: uuid("conversation_id")
-      .notNull()
-      .references(() => intakeConversation.id, { onDelete: "restrict" }),
-    linkedConversationId: uuid("linked_conversation_id")
-      .notNull()
-      .references(() => intakeConversation.id, { onDelete: "restrict" }),
-    reason: text("reason").notNull(),
-    createdAt: createdAt(),
-  },
-  (t) => [primaryKey({ columns: [t.conversationId, t.linkedConversationId] })],
-)
-
-export const intakeConversationPending = pgTable(
-  "intake_conversation_pending",
-  {
-    conversationId: uuid("conversation_id")
-      .notNull()
-      .references(() => intakeConversation.id, { onDelete: "restrict" }),
-    messageIdHeader: text("message_id_header").notNull(),
-    resolvedBy: uuid("resolved_by").references(() => message.id, { onDelete: "restrict" }),
-    createdAt: createdAt(),
-  },
-  (t) => [
-    primaryKey({ columns: [t.conversationId, t.messageIdHeader] }),
-    index("intake_conversation_pending_message_id_idx").on(t.messageIdHeader),
-  ],
-)
-
-/**
- * Listening mode's pending references owned by an existing ticket (review G4): a listening message that would join a
- * ticket and refers to a missing original keeps the reference here, never in the ticket's own pending references, so
- * a later listening message naming it, or the late original, would join that ticket as live mode would.
- */
-export const intakeTicketPending = pgTable(
-  "intake_ticket_pending",
-  {
-    ticketId: uuid("ticket_id")
-      .notNull()
-      .references(() => ticket.id, { onDelete: "restrict" }),
-    messageIdHeader: text("message_id_header").notNull(),
-    resolvedBy: uuid("resolved_by").references(() => message.id, { onDelete: "restrict" }),
-    createdAt: createdAt(),
-  },
-  (t) => [
-    primaryKey({ columns: [t.ticketId, t.messageIdHeader] }),
-    index("intake_ticket_pending_message_id_idx").on(t.messageIdHeader),
-  ],
-)
-
-/** A listening conversation opened beside existing tickets it matched (review G17): every candidate ticket is kept. */
-export const intakeConversationTicketLink = pgTable(
-  "intake_conversation_ticket_link",
-  {
-    conversationId: uuid("conversation_id")
-      .notNull()
-      .references(() => intakeConversation.id, { onDelete: "restrict" }),
-    ticketId: uuid("ticket_id")
-      .notNull()
-      .references(() => ticket.id, { onDelete: "restrict" }),
-    /** `sender_not_participant` or `ambiguous_original`. */
-    reason: text("reason").notNull(),
-    createdAt: createdAt(),
-  },
-  (t) => [primaryKey({ columns: [t.conversationId, t.ticketId] })],
 )
 
 // --- Replies that send (phase 3.1) ---
@@ -1227,16 +1115,17 @@ export const reminder = pgTable("reminder", {
 // --- The import from the Zendesk archive (plan 5.1) ---
 
 /**
- * The import's one row (made by a migration, so it always exists and a transaction can lock it): when Maane first went
- * live, which closes the import window for good (the first switch of the intake mode to live records it, under the
- * mode row's lock); the archive origin of the first run, which every later run must match; and the Maane user that
- * Zendesk agents' comments and notes are attributed to (owner's decision 2, 2026-11-16).
+ * The import's one row (made by a migration, so it always exists and a transaction can lock it): when an admin pressed
+ * Finish import, which closes the import window for good (phase 6); the archive origin of the first run, which every
+ * later run must match; and the Maane user that Zendesk agents' comments and notes are attributed to (owner's decision
+ * 2, 2026-11-16).
  */
 export const zendeskImport = pgTable(
   "zendesk_import",
   {
     id: integer("id").primaryKey(),
-    wentLiveAt: at("went_live_at"),
+    /** When an admin pressed Finish import (phase 6): the import window is closed for good from then on. */
+    finishedAt: at("finished_at"),
     origin: text("origin"),
     agentUserId: text("agent_user_id").references(() => authUser.id, { onDelete: "restrict" }),
     updatedAt: at("updated_at").notNull().defaultNow(),

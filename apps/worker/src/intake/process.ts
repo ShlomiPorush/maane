@@ -1,56 +1,49 @@
 // Stage two of intake (plan 2.3, P6, P7, P8, P11, P16): processes stored messages, oldest first by Graph's receive
-// time, each in its own transaction, idempotent by the message's state. Each transaction first locks the intake.mode
-// row FOR SHARE and reads it, so a switch (which updates that row) waits until every transaction that read the old mode
-// committed, and no transaction that starts after the switch reads the old mode. Messages already stored are processed
-// whatever the current source is: they are mail that really arrived, and the mode at processing time decides. A
-// message waits while one of its text fields waits for the scanner (content.ts), and while a message it refers to is
-// stored but not processed yet (review G15), for at most DEPENDENCY_WAIT_MS.
+// time, each in its own transaction, idempotent by the message's state. Maane is live from the first moment (phase 6):
+// every message is processed into tickets. Messages already stored are processed whatever the current source is: they
+// are mail that really arrived. A message waits while one of its text fields waits for the scanner (content.ts), and
+// while a message it refers to is stored but not processed yet (review G15), for at most DEPENDENCY_WAIT_MS. While no
+// default address exists, nothing is processed at all (no message is picked, no attempt counted): every waiting
+// message is processed once, in the usual order, after one exists (apps/server/src/organizations/intake.ts).
 //
 // For each message: a copy of an earlier one is recorded and changes nothing; automated mail opens, joins, and reopens
 // nothing; otherwise the support address (To, then Cc, then the default) and the threading layers decide between
-// joining a thread, a new thread, and a new thread linked to the ones it matched (plan 4.1: a participant's reply to a
-// closed ticket opens a follow-up linked to it; the closed ticket is not changed). Joining a ticket in live mode is a
-// customer reply, which takes effect in apps/server/src/tickets/customer-reply.ts; the ticket's row is locked after the
-// message's (lock order: mode row, message, ticket). One decision path serves both modes
-// over two stores (review G4): live mode keeps tickets; listening mode keeps shadow conversations (no number, no
-// reference code, no status) with the same participants, links, and pending references, and it matches existing
-// tickets too, without changing them, so a listening record says exactly what live mode would have done.
+// joining a ticket, a new ticket, and a new ticket linked to the ones it matched (plan 4.1: a participant's reply to a
+// closed ticket opens a follow-up linked to it; the closed ticket is not changed). Joining a ticket is a customer reply,
+// which takes effect in apps/server/src/tickets/customer-reply.ts. Lock order: the ticket number lock
+// (apps/server/src/tickets/numbers.ts), the message, then the ticket; the sender's participation and the ticket's
+// status are read under the ticket's lock (phase 6), so a rerun of the import that changed the participants just
+// before is never acted on with a stale answer.
 
 import type { Db } from "@maane/server/db/client"
 import {
-  intakeConversation,
-  intakeConversationLink,
-  intakeConversationParticipant,
-  intakeConversationPending,
-  intakeConversationTicketLink,
   intakeRecord,
-  intakeTicketPending,
   message,
   outbox,
-  setting,
   supportAddress,
   ticket,
   ticketLink,
   ticketParticipant,
   ticketPendingReference,
 } from "@maane/server/db/schema"
+import { flagSameMail } from "@maane/server/imports/overlap"
 import { type PushJob, transactionWithJobs } from "@maane/server/jobs/queue"
 import { errorFacts, log } from "@maane/server/log"
+import { hasDefaultAddress } from "@maane/server/organizations/intake"
 import { databaseError } from "@maane/server/organizations/refusal"
 import { customerReplied, type IntakeFacts, isCustomerReply } from "@maane/server/tickets/customer-reply"
+import { lockTicketNumbers } from "@maane/server/tickets/numbers"
 import { lockTicket } from "@maane/server/tickets/status"
 import {
-  type IntakeMode,
   type IntakeOutcome,
   type LinkReason,
   type MatchLayer,
   type MessageFlag,
   matchSupportAddress,
   resolveSupportAddress,
-  SETTINGS,
   type TicketFlag,
 } from "@maane/shared"
-import { and, asc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, isNull, ne, notInArray, sql } from "drizzle-orm"
 import type { Db as QueueDb } from "pg-boss"
 import { applyDeliveryReport } from "../delivery/reports.ts"
 import type { Tx } from "../files/types.ts"
@@ -63,8 +56,8 @@ type MessageRow = typeof message.$inferSelect
 type Rule = { kind: "exact" | "pattern"; value: string; isDefault: boolean; organizationId: string }
 
 export interface ProcessHooks {
-  /** Right after the transaction locked and read the intake mode: a test holds a transaction here. */
-  afterMode?: (mode: IntakeMode, messageId: string) => Promise<void>
+  /** Right after the transaction took the ticket number lock: a test holds a transaction here. */
+  afterLock?: (messageId: string) => Promise<void>
 }
 
 /** The most messages one run processes; the next run (every minute) goes on. */
@@ -77,46 +70,29 @@ export const MAX_PROCESS_ATTEMPTS = 3
  */
 export const DEPENDENCY_WAIT_MS = 60 * 60_000
 
-type Kind = "ticket" | "conversation"
-type Thread = { kind: Kind; id: string }
-
 type Match =
-  | { kind: "thread"; thread: Thread; layer: MatchLayer }
-  | { kind: "ambiguous"; holders: Thread[]; layer: "original" }
+  | { kind: "ticket"; ticketId: string; layer: MatchLayer }
+  | { kind: "ambiguous"; holders: string[]; layer: "original" }
   | { kind: "none" }
 
-type RecordFields = Omit<typeof intakeRecord.$inferInsert, "messageId" | "mode" | "outcome"> & {
-  outcome: IntakeOutcome
-}
+type RecordFields = Omit<typeof intakeRecord.$inferInsert, "messageId" | "outcome"> & { outcome: IntakeOutcome }
 
 /**
- * Whether a processed message notifies agents (plan 4.5), the one place that decides it: in live mode, a message that
- * opened a ticket (among them the follow-up a reply to a closed ticket opens, plan 4.1), and exactly what
- * `isCustomerReply` (apps/server/src/tickets/customer-reply.ts) counts as a customer reply. Automated mail, copies,
- * and listening mode never notify.
+ * Whether a processed message notifies agents (plan 4.5), the one place that decides it: a message that opened a
+ * ticket (among them the follow-up a reply to a closed ticket opens, plan 4.1), and exactly what `isCustomerReply`
+ * (apps/server/src/tickets/customer-reply.ts) counts as a customer reply. Automated mail and copies never notify.
  */
 export function notificationOf(record: IntakeFacts, messageId: string): PushJob | null {
   const ticketId = record.ticketId
   if (!ticketId) return null
   if (isCustomerReply(record)) return { kind: "customer_reply", ticketId, messageId }
-  if (record.mode === "live" && (record.outcome === "new_ticket" || record.outcome === "new_linked_ticket"))
+  if (record.outcome === "new_ticket" || record.outcome === "new_linked_ticket")
     return { kind: "new_ticket", ticketId, messageId }
   return null
 }
 
 /** Queues a notification inside the transaction that stores its message (pg-boss's documented `db` option). */
 export type Notify = (jobs: QueueDb, job: PushJob) => Promise<void>
-
-/** The intake mode, locked FOR SHARE until the transaction ends (P16). The migration made the row; it always exists. */
-export async function lockIntakeMode(tx: Pick<Tx, "select">): Promise<IntakeMode> {
-  const [row] = await tx
-    .select({ value: setting.value })
-    .from(setting)
-    .where(eq(setting.key, "intake.mode"))
-    .for("share")
-  const parsed = SETTINGS["intake.mode"].schema.safeParse(row?.value)
-  return parsed.success ? parsed.data : SETTINGS["intake.mode"].defaultValue
-}
 
 const sameTime = (a: Date | null, b: Date | null) => (a === null || b === null ? a === b : a.getTime() === b.getTime())
 
@@ -131,50 +107,11 @@ const FIELDS_WAITING = sql`(${message.content} = 'parsed' and jsonb_path_exists(
 /** A database error the message's own values caused (data exception, program limit, a protocol violation). */
 const isRefused = (error: unknown) => /^(22|54|08P01)/.test(databaseError(error)?.code ?? "")
 
-const key = (thread: Thread) => `${thread.kind}:${thread.id}`
-
-/**
- * Where threads live: tickets or shadow conversations. Live mode matches and keeps tickets; listening mode matches
- * tickets without changing them (a read-only ticket store) and keeps conversations. Only tickets have numbers and
- * reference codes.
- */
-interface ThreadStore {
-  kind: Kind
-  /** The threads of parsed messages carrying this Message-ID. */
-  threadsOf(tx: Tx, id: string): Promise<string[]>
-  /** The threads still waiting for this Message-ID, oldest first. */
-  waitingFor(tx: Tx, id: string): Promise<string[]>
-  /** The first of these codes, in their order, that names a thread. */
-  byReferenceCodes(tx: Tx, codes: string[]): Promise<string | null>
-  /** The first of these numbers, in their order, that names a thread. */
-  byNumbers(tx: Tx, numbers: number[]): Promise<string | null>
-  isParticipant(tx: Tx, thread: string, address: string): Promise<boolean>
-  /**
-   * Whether the thread is a closed ticket (plan 4.1): a customer reply to it opens a follow-up instead of joining it.
-   * Live mode reads the ticket locked FOR UPDATE, so a status change waits for this message's transaction.
-   */
-  isClosed(tx: Tx, thread: string): Promise<boolean>
-  open(
-    tx: Tx,
-    values: { organizationId: string; supportAddress: string; subject: string | null; flags: TicketFlag[] },
-  ): Promise<string>
-  addParticipant(tx: Tx, thread: string, address: string, name: string | null): Promise<void>
-  link(tx: Tx, thread: string, linked: string, reason: LinkReason): Promise<void>
-  keepPending(tx: Tx, thread: string, ids: string[]): Promise<void>
-  resolvePending(tx: Tx, thread: string, id: string, by: string): Promise<void>
-  /** The message's column for a thread it belongs to. */
-  messageColumn(thread: string): Partial<MessageRow>
-  /** The record's column for a thread the message opened or joined. */
-  recordThread(thread: string): Partial<RecordFields>
-  /** The record's column for a thread the message matched. */
-  recordMatched(thread: string): Partial<RecordFields>
-}
-
-/** The first `limit` items of a list that a query found, in the list's order. */
+/** The first item of a list that a query found, in the list's order. */
 const firstFound = <T>(order: readonly T[], found: Map<T, string>) => {
   for (const item of order) {
-    const thread = found.get(item)
-    if (thread) return thread
+    const ticketId = found.get(item)
+    if (ticketId) return ticketId
   }
   return null
 }
@@ -182,29 +119,25 @@ const firstFound = <T>(order: readonly T[], found: Map<T, string>) => {
 export class IntakeProcessor {
   readonly #db: Db
   readonly #now: () => Date
-  readonly #tickets: ThreadStore
-  readonly #ticketsReadOnly: ThreadStore
-  readonly #conversations: ThreadStore
   readonly #notify?: Notify
 
   constructor(options: { db: Db; now?: () => Date; notify?: Notify }) {
     this.#db = options.db
     this.#notify = options.notify
     this.#now = options.now ?? (() => new Date())
-    this.#tickets = this.#ticketStore(false)
-    this.#ticketsReadOnly = this.#ticketStore(true)
-    this.#conversations = this.#conversationStore()
   }
 
   /**
-   * Processes stored messages, oldest first. A message whose transaction fails stays stored and is skipped for the
-   * rest of this run; after MAX_PROCESS_ATTEMPTS failed runs, or at once when the database refuses one of its values,
-   * it is recorded for review, so no message is tried for ever.
+   * Processes stored messages, oldest first, while a default address exists. A message whose transaction fails stays
+   * stored and is skipped for the rest of this run; after MAX_PROCESS_ATTEMPTS failed runs, or at once when the
+   * database refuses one of its values, it is recorded for review, so no message is tried for ever.
    */
   async run(hooks: ProcessHooks = {}, limit = MAX_PER_RUN): Promise<{ processed: number; failed: number }> {
     const failed: string[] = []
     let processed = 0
     while (processed + failed.length < limit) {
+      // No default address: nothing is picked and no attempt is counted; the messages wait for one.
+      if (!(await hasDefaultAddress(this.#db))) break
       const since = new Date(this.#now().getTime() - DEPENDENCY_WAIT_MS)
       // A reply waits while a message it refers to was stored strictly before it and is not processed yet, and only
       // while the reply itself was stored less than the limit ago. Strictly earlier: two messages never wait for each
@@ -245,10 +178,9 @@ export class IntakeProcessor {
     return { processed, failed: failed.length }
   }
 
-  /** A message processing cannot finish: processed without a thread, flagged, and recorded. */
+  /** A message processing cannot finish: processed without a ticket, flagged, and recorded. */
   async #giveUp(id: string): Promise<boolean> {
     return this.#db.transaction(async (tx) => {
-      const mode = await lockIntakeMode(tx)
       const [row] = await tx
         .select({ id: message.id, reviewFlags: message.reviewFlags })
         .from(message)
@@ -263,24 +195,30 @@ export class IntakeProcessor {
           reviewFlags: [...new Set([...row.reviewFlags, "store_failed"])],
         })
         .where(eq(message.id, id))
-      await tx.insert(intakeRecord).values({ messageId: id, mode, outcome: "unreadable", reason: "process_failed" })
+      await tx.insert(intakeRecord).values({ messageId: id, outcome: "unreadable", reason: "process_failed" })
       return true
     })
   }
 
-  /** One message in its own transaction. Does nothing when it was processed already. */
+  /**
+   * One message in its own transaction. Does nothing when it was processed already, or while no default address
+   * exists (the message stays stored, and nothing counts as an attempt).
+   */
   async processOne(id: string, hooks: ProcessHooks = {}): Promise<void> {
     const work = async (tx: Tx, jobs: QueueDb | null) => {
-      const mode = await lockIntakeMode(tx)
-      await hooks.afterMode?.(mode, id)
+      // Before the message and any ticket: the same order as the import's (apps/server/src/tickets/numbers.ts).
+      await lockTicketNumbers(tx)
+      await hooks.afterLock?.(id)
       const [row] = await tx
         .select()
         .from(message)
         .where(and(eq(message.id, id), eq(message.state, "stored")))
         .for("update")
       if (!row) return
+      // A default address, once it exists, is only ever replaced, never removed (organizations/service.ts).
+      if (!(await hasDefaultAddress(tx))) return
       const notifications: PushJob[] = []
-      await this.#process(tx, row, mode, notifications)
+      await this.#process(tx, row, notifications)
       // The notification's job commits with the message, or neither does (plan 4.5).
       if (jobs && this.#notify) for (const job of notifications) await this.#notify(jobs, job)
     }
@@ -289,27 +227,22 @@ export class IntakeProcessor {
     else await this.#db.transaction((tx) => work(tx, null))
   }
 
-  async #process(tx: Tx, msg: MessageRow, mode: IntakeMode, notifications: PushJob[]): Promise<void> {
-    const live = mode === "live"
-    // New threads: tickets (live) or conversations (listening). Matching also sees tickets while listening.
-    const opens = live ? this.#tickets : this.#conversations
-    const stores = live ? [this.#tickets] : [this.#ticketsReadOnly, this.#conversations]
-    const storeOf = (kind: Kind) => stores.find((store) => store.kind === kind) ?? opens
+  async #process(tx: Tx, msg: MessageRow, notifications: PushJob[]): Promise<void> {
     const flags = new Set<string>(msg.reviewFlags)
     const finish = async (patch: Partial<MessageRow>, record: RecordFields) => {
       await tx
         .update(message)
         .set({ ...patch, reviewFlags: [...flags], state: "processed", processedAt: this.#now() })
         .where(eq(message.id, msg.id))
-      await tx.insert(intakeRecord).values({ messageId: msg.id, mode, ...record })
-      const notification = notificationOf({ mode, ...record }, msg.id)
+      await tx.insert(intakeRecord).values({ messageId: msg.id, ...record })
+      const notification = notificationOf(record, msg.id)
       if (notification) notifications.push(notification)
     }
 
     if (msg.content !== "parsed") return finish({}, { outcome: "unreadable", reason: msg.content })
 
     // Maane's own reply coming back into the mailbox (a support address among its recipients, a copy a provider kept):
-    // its own Message-ID from its own From address (plan 3.1). It opens, joins, and reopens nothing, in either mode.
+    // its own Message-ID from its own From address (plan 3.1). It opens, joins, and reopens nothing.
     if (msg.messageIdHeader && msg.fromAddress) {
       const [own] = await tx
         .select({ id: outbox.messageId, ticketId: message.ticketId })
@@ -332,7 +265,6 @@ export class IntakeProcessor {
           sentAt: message.sentAt,
           contentHash: message.contentHash,
           ticketId: message.ticketId,
-          conversationId: message.conversationId,
           duplicateOf: message.duplicateOf,
         })
         .from(message)
@@ -356,13 +288,7 @@ export class IntakeProcessor {
         const original = copy.duplicateOf ?? copy.id
         return finish(
           { duplicateOf: original },
-          {
-            outcome: "copy",
-            matchedMessageId: original,
-            matchedTicketId: copy.ticketId,
-            matchedConversationId: copy.conversationId,
-            reason: "copy",
-          },
+          { outcome: "copy", matchedMessageId: original, matchedTicketId: copy.ticketId, reason: "copy" },
         )
       }
       if (earlier.length > 0) flags.add("reused_message_id" satisfies MessageFlag)
@@ -391,26 +317,25 @@ export class IntakeProcessor {
       .from(supportAddress)) as Rule[]
     const to = addressesOf(msg.toAddresses)
     const cc = addressesOf(msg.ccAddresses)
-    // To, then Cc, against the address table; no match uses the default (P8). The concrete address is kept.
+    // To, then Cc, against the address table; no match uses the default (P8), which processOne checked exists. The
+    // concrete address is kept.
     const resolution = resolveSupportAddress(
       [...to, ...cc].map((entry) => entry.address),
       rules,
     )
-    const address =
-      resolution.via === "none"
-        ? null
-        : {
-            supportAddress: resolution.via === "default" ? resolution.rule.value : resolution.address,
-            organizationId: resolution.rule.organizationId,
-          }
+    if (resolution.via === "none") throw new Error("no support address matched and no default address exists")
+    const address = {
+      supportAddress: resolution.via === "default" ? resolution.rule.value : resolution.address,
+      organizationId: resolution.rule.organizationId,
+    }
 
-    const match = await this.#match(tx, stores, msg)
+    const match = await this.#match(tx, msg)
     const base: RecordFields = {
       outcome: "new_ticket",
       classification: classification.automated ? "automated" : "customer",
-      supportAddress: address?.supportAddress ?? null,
-      organizationId: address?.organizationId ?? null,
-      ...(match.kind === "thread" ? storeOf(match.thread.kind).recordMatched(match.thread.id) : {}),
+      supportAddress: address.supportAddress,
+      organizationId: address.organizationId,
+      ...(match.kind === "ticket" ? { matchedTicketId: match.ticketId } : {}),
       matchLayer: match.kind === "none" ? null : match.layer,
     }
     const patch: Partial<MessageRow> = {
@@ -418,9 +343,8 @@ export class IntakeProcessor {
       automatedReasons: classification.signs,
     }
 
-    // Automated mail never opens, joins, or reopens a thread (requirements 2.2). A report keeps its original Message-ID;
-    // a delivery report about one of Maane's replies updates its recipients' delivery status (plan 3.3), in either mode:
-    // it is delivery information about a reply that went out, not intake's threading.
+    // Automated mail never opens, joins, or reopens a ticket (requirements 2.2). A report keeps its original Message-ID;
+    // a delivery report about one of Maane's replies updates its recipients' delivery status (plan 3.3).
     if (classification.automated) {
       const report = await applyDeliveryReport(tx, msg)
       return finish(patch, {
@@ -432,114 +356,157 @@ export class IntakeProcessor {
     }
 
     const sender = msg.fromAddress
-    let links: Thread[] = []
+    let links: string[] = []
     let linkReason: LinkReason | null = null
-    if (match.kind === "thread") {
-      const store = storeOf(match.thread.kind)
-      const thread = match.thread.id
-      const participant = sender !== null && (await store.isParticipant(tx, thread, sender))
-      if (participant && !(await store.isClosed(tx, thread))) {
-        await this.#keepPending(tx, store, msg, thread)
-        // Only the thread the message joined stops waiting for it (review G3).
-        if (msg.messageIdHeader) await store.resolvePending(tx, thread, msg.messageIdHeader, msg.id)
-        const record: RecordFields = { ...base, ...store.recordThread(thread), outcome: "joined" }
+    if (match.kind === "ticket") {
+      const ticketId = match.ticketId
+      // The ticket's lock first, then what decides: its status and the sender's participation, read under the lock.
+      const locked = await lockTicket(tx, ticketId)
+      const participant = sender !== null && (await this.#isParticipant(tx, ticketId, sender))
+      if (participant && locked?.status !== "closed") {
+        await this.#keepPending(tx, msg, ticketId)
+        // Only the ticket the message joined stops waiting for it (review G3).
+        if (msg.messageIdHeader) await this.#resolvePending(tx, ticketId, msg.messageIdHeader, msg.id)
+        const record: RecordFields = { ...base, ticketId, outcome: "joined" }
         // The one place a customer reply takes effect (apps/server/src/tickets/customer-reply.ts).
-        if (isCustomerReply({ mode, ...record })) await customerReplied(tx, thread, this.#now())
-        return finish({ ...patch, ...store.messageColumn(thread) }, record)
+        if (isCustomerReply(record)) await customerReplied(tx, ticketId, this.#now())
+        await finish({ ...patch, ticketId }, record)
+        // The same mail may have come in through the import too (phase 6): both stay, the ticket is flagged.
+        await flagSameMail(tx, ticketId)
+        return
       }
-      // Every layer is only a hint: a sender who is not a participant opens a new thread, linked to the old one. A
+      // Every layer is only a hint: a sender who is not a participant opens a new ticket, linked to the old one. A
       // participant's reply to a closed ticket opens a follow-up linked to it, and the closed ticket stays as it is.
-      links = [match.thread]
+      links = [ticketId]
       linkReason = participant ? "follow_up" : "sender_not_participant"
     } else if (match.kind === "ambiguous") {
-      // A late original that more than one thread waits for: its own thread, linked to each, never one at random.
+      // A late original that more than one ticket waits for: its own ticket, linked to each, never one at random.
       links = match.holders
       linkReason = "ambiguous_original"
     }
 
     const outcome: IntakeOutcome = linkReason ? "new_linked_ticket" : "new_ticket"
-    if (!address) {
-      flags.add("no_default_address" satisfies MessageFlag)
-      return finish(patch, { ...base, outcome: "no_address", reason: linkReason ?? "no_default_address" })
-    }
-    const threadFlags: TicketFlag[] = []
-    if (classification.possiblyAutomated) threadFlags.push("possibly_automated")
+    const ticketFlags: TicketFlag[] = []
+    if (classification.possiblyAutomated) ticketFlags.push("possibly_automated")
     // A follow-up needs no review; the other links do.
-    if (linkReason && linkReason !== "follow_up") threadFlags.push(linkReason)
-    const opened = await opens.open(tx, {
+    if (linkReason && linkReason !== "follow_up") ticketFlags.push(linkReason)
+    const opened = await this.#open(tx, {
       organizationId: address.organizationId,
       supportAddress: address.supportAddress,
       subject: msg.subject,
-      flags: threadFlags,
+      flags: ticketFlags,
     })
     // Participants: From, and Cc addresses that are not support addresses.
-    if (msg.fromAddress) await opens.addParticipant(tx, opened, msg.fromAddress, msg.fromName)
+    if (msg.fromAddress) await this.#addParticipant(tx, opened, msg.fromAddress, msg.fromName)
     for (const entry of cc)
       if (entry.address !== msg.fromAddress && !matchSupportAddress(entry.address, rules))
-        await opens.addParticipant(tx, opened, entry.address, entry.name)
-    // Links join threads of one kind; a listening conversation keeps every ticket it was opened beside (review G17).
-    for (const linked of links) {
-      if (linked.kind === opens.kind) await opens.link(tx, opened, linked.id, linkReason ?? "sender_not_participant")
-      else if (opens.kind === "conversation")
-        await tx
-          .insert(intakeConversationTicketLink)
-          .values({ conversationId: opened, ticketId: linked.id, reason: linkReason ?? "sender_not_participant" })
-          .onConflictDoNothing()
-    }
-    await this.#keepPending(tx, opens, msg, opened)
-    const firstTicket = links.find((thread) => thread.kind === "ticket")
-    return finish(
-      { ...patch, ...opens.messageColumn(opened) },
-      {
-        ...base,
-        ...(firstTicket && !live ? { matchedTicketId: firstTicket.id } : {}),
-        ...opens.recordThread(opened),
-        outcome,
-        reason: linkReason,
-      },
-    )
+        await this.#addParticipant(tx, opened, entry.address, entry.name)
+    for (const linked of links)
+      await tx
+        .insert(ticketLink)
+        .values({ ticketId: opened, linkedTicketId: linked, reason: linkReason ?? "sender_not_participant" })
+        .onConflictDoNothing()
+    await this.#keepPending(tx, msg, opened)
+    return finish({ ...patch, ticketId: opened }, { ...base, ticketId: opened, outcome, reason: linkReason })
   }
 
-  /** The threading layers, in order, over every store the mode matches (requirements 2.2, P6, P7). */
-  async #match(tx: Tx, stores: ThreadStore[], msg: MessageRow): Promise<Match> {
-    const all = async (find: (store: ThreadStore) => Promise<string[]>) =>
-      (
-        await Promise.all(stores.map(async (store) => (await find(store)).map((id) => ({ kind: store.kind, id }))))
-      ).flat()
+  /** The threading layers, in order (requirements 2.2, P6, P7). */
+  async #match(tx: Tx, msg: MessageRow): Promise<Match> {
     for (const id of referencedIds(msg.inReplyTo, msg.references)) {
-      const byMessage = await all((store) => store.threadsOf(tx, id))
-      // A Message-ID on messages of more than one thread is ambiguous and matches nothing in this layer (P7).
+      const byMessage = await this.#ticketsOf(tx, id)
+      // A Message-ID on messages of more than one ticket is ambiguous and matches nothing in this layer (P7).
       if (byMessage.length > 1) continue
-      const threads = new Map<string, Thread>()
-      for (const thread of [...byMessage, ...(await all((store) => store.waitingFor(tx, id)))])
-        threads.set(key(thread), thread)
-      const [only] = threads.values()
-      if (threads.size === 1 && only) return { kind: "thread", thread: only, layer: "header" }
+      const tickets = new Set([...byMessage, ...(await this.#waitingFor(tx, id))])
+      const [only] = tickets
+      if (tickets.size === 1 && only) return { kind: "ticket", ticketId: only, layer: "header" }
     }
-    // A late original: the threads whose messages referred to it while it was missing (P6).
+    // A late original: the tickets whose messages referred to it while it was missing (P6).
     if (msg.messageIdHeader) {
-      const id = msg.messageIdHeader
-      const holders = await all((store) => store.waitingFor(tx, id))
+      const holders = await this.#waitingFor(tx, msg.messageIdHeader)
       const [only] = holders
-      if (holders.length === 1 && only) return { kind: "thread", thread: only, layer: "original" }
+      if (holders.length === 1 && only) return { kind: "ticket", ticketId: only, layer: "original" }
       if (holders.length > 1) return { kind: "ambiguous", holders, layer: "original" }
     }
     // The body reference code and the subject number (review G12: the first few, in one query each).
     const codes = referenceCodesIn(msg.textBody)
-    const numbers = ticketNumbersIn(msg.subject)
-    for (const store of stores) {
-      const found = codes.length ? await store.byReferenceCodes(tx, codes) : null
-      if (found) return { kind: "thread", thread: { kind: store.kind, id: found }, layer: "reference" }
+    if (codes.length) {
+      const rows = await tx
+        .select({ id: ticket.id, code: ticket.referenceCode })
+        .from(ticket)
+        .where(inArray(ticket.referenceCode, codes))
+      const found = firstFound(codes, new Map(rows.map((row) => [row.code, row.id])))
+      if (found) return { kind: "ticket", ticketId: found, layer: "reference" }
     }
-    for (const store of stores) {
-      const found = numbers.length ? await store.byNumbers(tx, numbers) : null
-      if (found) return { kind: "thread", thread: { kind: store.kind, id: found }, layer: "subject" }
+    const numbers = ticketNumbersIn(msg.subject)
+    if (numbers.length) {
+      const rows = await tx
+        .select({ id: ticket.id, number: ticket.number })
+        .from(ticket)
+        .where(inArray(ticket.number, numbers))
+      const found = firstFound(numbers, new Map(rows.map((row) => [row.number, row.id])))
+      if (found) return { kind: "ticket", ticketId: found, layer: "subject" }
     }
     return { kind: "none" }
   }
 
-  /** Each Message-ID the message refers to that no processed message carries waits on the thread (P6). */
-  async #keepPending(tx: Tx, store: ThreadStore, msg: MessageRow, thread: string): Promise<void> {
+  /** The tickets of parsed messages carrying this Message-ID. */
+  async #ticketsOf(tx: Tx, id: string): Promise<string[]> {
+    const rows = await tx
+      .selectDistinct({ ticketId: message.ticketId })
+      .from(message)
+      .where(and(eq(message.messageIdHeader, id), isNotNull(message.ticketId), eq(message.content, "parsed")))
+    return rows.flatMap((row) => (row.ticketId ? [row.ticketId] : []))
+  }
+
+  /** The tickets still waiting for this Message-ID, oldest first. */
+  async #waitingFor(tx: Tx, id: string): Promise<string[]> {
+    const rows = await tx
+      .select({ ticketId: ticketPendingReference.ticketId })
+      .from(ticketPendingReference)
+      .where(and(eq(ticketPendingReference.messageIdHeader, id), isNull(ticketPendingReference.resolvedBy)))
+      .orderBy(asc(ticketPendingReference.createdAt))
+    return [...new Set(rows.map((row) => row.ticketId))]
+  }
+
+  async #isParticipant(tx: Tx, ticketId: string, address: string): Promise<boolean> {
+    const rows = await tx
+      .select({ address: ticketParticipant.address })
+      .from(ticketParticipant)
+      .where(and(eq(ticketParticipant.ticketId, ticketId), eq(ticketParticipant.address, address)))
+    return rows.length > 0
+  }
+
+  /** A number from the sequence (under the ticket number lock), a reference code from the CSPRNG (drawn again on the rare collision). */
+  async #open(
+    tx: Tx,
+    values: { organizationId: string; supportAddress: string; subject: string | null; flags: TicketFlag[] },
+  ): Promise<string> {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const [row] = await tx
+        .insert(ticket)
+        .values({
+          referenceCode: newReferenceCode(),
+          organizationId: values.organizationId,
+          supportAddress: values.supportAddress,
+          subject: values.subject,
+          status: "new",
+          reviewFlags: values.flags,
+          createdAt: this.#now(),
+          lastActivityAt: this.#now(),
+        })
+        .onConflictDoNothing({ target: ticket.referenceCode })
+        .returning({ id: ticket.id })
+      if (row) return row.id
+    }
+    throw new Error("no free reference code after 8 draws")
+  }
+
+  async #addParticipant(tx: Tx, ticketId: string, address: string, name: string | null): Promise<void> {
+    await tx.insert(ticketParticipant).values({ ticketId, address, name }).onConflictDoNothing()
+  }
+
+  /** Each Message-ID the message refers to that no processed message carries waits on the ticket (P6). */
+  async #keepPending(tx: Tx, msg: MessageRow, ticketId: string): Promise<void> {
     const ids = referencedIds(msg.inReplyTo, msg.references).filter((id) => id !== msg.messageIdHeader)
     if (ids.length === 0) return
     const known = await tx
@@ -547,232 +514,24 @@ export class IntakeProcessor {
       .from(message)
       .where(and(inArray(message.messageIdHeader, ids), eq(message.state, "processed"), eq(message.content, "parsed")))
     const present = new Set(known.map((row) => row.id))
-    await store.keepPending(
-      tx,
-      thread,
-      ids.filter((candidate) => !present.has(candidate)),
-    )
+    const missing = ids.filter((candidate) => !present.has(candidate))
+    if (missing.length)
+      await tx
+        .insert(ticketPendingReference)
+        .values(missing.map((id) => ({ ticketId, messageIdHeader: id })))
+        .onConflictDoNothing()
   }
 
-  /**
-   * Tickets. Read only (listening): matched, never changed; a message that would join one names it in
-   * `would_ticket_id`, which later listening replies match like a ticket's own messages.
-   */
-  #ticketStore(readOnly: boolean): ThreadStore {
-    const now = () => this.#now()
-    const ticketOfMessage = sql<string>`coalesce(${message.ticketId}, ${message.wouldTicketId})`
-    return {
-      kind: "ticket",
-      async threadsOf(tx, id) {
-        const rows = await tx
-          .selectDistinct({ thread: ticketOfMessage })
-          .from(message)
-          .where(
-            and(
-              eq(message.messageIdHeader, id),
-              or(isNotNull(message.ticketId), isNotNull(message.wouldTicketId)),
-              eq(message.content, "parsed"),
-            ),
-          )
-        return rows.map((row) => row.thread)
-      },
-      async waitingFor(tx, id) {
-        const rows = await tx
-          .select({ thread: ticketPendingReference.ticketId, at: ticketPendingReference.createdAt })
-          .from(ticketPendingReference)
-          .where(and(eq(ticketPendingReference.messageIdHeader, id), isNull(ticketPendingReference.resolvedBy)))
-        // Listening also counts the references its own messages left for the ticket (shadow, review G4).
-        if (readOnly)
-          rows.push(
-            ...(await tx
-              .select({ thread: intakeTicketPending.ticketId, at: intakeTicketPending.createdAt })
-              .from(intakeTicketPending)
-              .where(and(eq(intakeTicketPending.messageIdHeader, id), isNull(intakeTicketPending.resolvedBy)))),
-          )
-        rows.sort((a, b) => a.at.getTime() - b.at.getTime())
-        return [...new Set(rows.map((row) => row.thread))]
-      },
-      async byReferenceCodes(tx, codes) {
-        const rows = await tx
-          .select({ id: ticket.id, code: ticket.referenceCode })
-          .from(ticket)
-          .where(inArray(ticket.referenceCode, codes))
-        return firstFound(codes, new Map(rows.map((row) => [row.code, row.id])))
-      },
-      async byNumbers(tx, numbers) {
-        const rows = await tx
-          .select({ id: ticket.id, number: ticket.number })
-          .from(ticket)
-          .where(inArray(ticket.number, numbers))
-        return firstFound(numbers, new Map(rows.map((row) => [row.number, row.id])))
-      },
-      async isParticipant(tx, thread, address) {
-        const rows = await tx
-          .select({ address: ticketParticipant.address })
-          .from(ticketParticipant)
-          .where(and(eq(ticketParticipant.ticketId, thread), eq(ticketParticipant.address, address)))
-        return rows.length > 0
-      },
-      // A number from the sequence, a reference code from the CSPRNG (drawn again on the rare collision).
-      async open(tx, values) {
-        if (readOnly) throw new Error("listening mode opens no ticket")
-        for (let attempt = 0; attempt < 8; attempt++) {
-          const [row] = await tx
-            .insert(ticket)
-            .values({
-              referenceCode: newReferenceCode(),
-              organizationId: values.organizationId,
-              supportAddress: values.supportAddress,
-              subject: values.subject,
-              status: "new",
-              reviewFlags: values.flags,
-              createdAt: now(),
-              lastActivityAt: now(),
-            })
-            .onConflictDoNothing({ target: ticket.referenceCode })
-            .returning({ id: ticket.id })
-          if (row) return row.id
-        }
-        throw new Error("no free reference code after 8 draws")
-      },
-      async isClosed(tx, thread) {
-        if (!readOnly) return (await lockTicket(tx, thread))?.status === "closed"
-        const [row] = await tx.select({ status: ticket.status }).from(ticket).where(eq(ticket.id, thread))
-        return row?.status === "closed"
-      },
-      async addParticipant(tx, thread, address, name) {
-        if (!readOnly)
-          await tx.insert(ticketParticipant).values({ ticketId: thread, address, name }).onConflictDoNothing()
-      },
-      async link(tx, thread, linked, reason) {
-        if (!readOnly)
-          await tx.insert(ticketLink).values({ ticketId: thread, linkedTicketId: linked, reason }).onConflictDoNothing()
-      },
-      async keepPending(tx, thread, ids) {
-        if (!ids.length) return
-        // Listening never touches the ticket's own pending references: its are kept in the shadow table.
-        if (readOnly)
-          await tx
-            .insert(intakeTicketPending)
-            .values(ids.map((id) => ({ ticketId: thread, messageIdHeader: id })))
-            .onConflictDoNothing()
-        else
-          await tx
-            .insert(ticketPendingReference)
-            .values(ids.map((id) => ({ ticketId: thread, messageIdHeader: id })))
-            .onConflictDoNothing()
-      },
-      async resolvePending(tx, thread, id, by) {
-        if (readOnly) {
-          await tx
-            .update(intakeTicketPending)
-            .set({ resolvedBy: by })
-            .where(
-              and(
-                eq(intakeTicketPending.ticketId, thread),
-                eq(intakeTicketPending.messageIdHeader, id),
-                isNull(intakeTicketPending.resolvedBy),
-              ),
-            )
-          return
-        }
-        await tx
-          .update(ticketPendingReference)
-          .set({ resolvedBy: by })
-          .where(
-            and(
-              eq(ticketPendingReference.ticketId, thread),
-              eq(ticketPendingReference.messageIdHeader, id),
-              isNull(ticketPendingReference.resolvedBy),
-            ),
-          )
-      },
-      messageColumn: (thread) => (readOnly ? { wouldTicketId: thread } : { ticketId: thread }),
-      recordThread: (thread) => (readOnly ? { matchedTicketId: thread } : { ticketId: thread }),
-      recordMatched: (thread) => ({ matchedTicketId: thread }),
-    }
-  }
-
-  #conversationStore(): ThreadStore {
-    return {
-      kind: "conversation",
-      async threadsOf(tx, id) {
-        const rows = await tx
-          .selectDistinct({ thread: message.conversationId })
-          .from(message)
-          .where(and(eq(message.messageIdHeader, id), isNotNull(message.conversationId), eq(message.content, "parsed")))
-        return rows.map((row) => row.thread).filter((thread): thread is string => thread !== null)
-      },
-      async waitingFor(tx, id) {
-        const rows = await tx
-          .select({ thread: intakeConversationPending.conversationId })
-          .from(intakeConversationPending)
-          .where(and(eq(intakeConversationPending.messageIdHeader, id), isNull(intakeConversationPending.resolvedBy)))
-          .orderBy(asc(intakeConversationPending.createdAt))
-        return rows.map((row) => row.thread)
-      },
-      // Conversations have no reference code and no number: Maane sends nothing while it listens.
-      byReferenceCodes: async () => null,
-      byNumbers: async () => null,
-      async isParticipant(tx, thread, address) {
-        const rows = await tx
-          .select({ address: intakeConversationParticipant.address })
-          .from(intakeConversationParticipant)
-          .where(
-            and(
-              eq(intakeConversationParticipant.conversationId, thread),
-              eq(intakeConversationParticipant.address, address),
-            ),
-          )
-        return rows.length > 0
-      },
-      async open(tx, values) {
-        const [row] = await tx
-          .insert(intakeConversation)
-          .values({
-            organizationId: values.organizationId,
-            supportAddress: values.supportAddress,
-            reviewFlags: values.flags,
-          })
-          .returning({ id: intakeConversation.id })
-        if (!row) throw new Error("the conversation was not written")
-        return row.id
-      },
-      async addParticipant(tx, thread, address, name) {
-        await tx
-          .insert(intakeConversationParticipant)
-          .values({ conversationId: thread, address, name })
-          .onConflictDoNothing()
-      },
-      async link(tx, thread, linked, reason) {
-        await tx
-          .insert(intakeConversationLink)
-          .values({ conversationId: thread, linkedConversationId: linked, reason })
-          .onConflictDoNothing()
-      },
-      isClosed: async () => false,
-      async keepPending(tx, thread, ids) {
-        if (ids.length)
-          await tx
-            .insert(intakeConversationPending)
-            .values(ids.map((id) => ({ conversationId: thread, messageIdHeader: id })))
-            .onConflictDoNothing()
-      },
-      async resolvePending(tx, thread, id, by) {
-        await tx
-          .update(intakeConversationPending)
-          .set({ resolvedBy: by })
-          .where(
-            and(
-              eq(intakeConversationPending.conversationId, thread),
-              eq(intakeConversationPending.messageIdHeader, id),
-              isNull(intakeConversationPending.resolvedBy),
-            ),
-          )
-      },
-      messageColumn: (thread) => ({ conversationId: thread }),
-      recordThread: (thread) => ({ conversationId: thread }),
-      recordMatched: (thread) => ({ matchedConversationId: thread }),
-    }
+  async #resolvePending(tx: Tx, ticketId: string, id: string, by: string): Promise<void> {
+    await tx
+      .update(ticketPendingReference)
+      .set({ resolvedBy: by })
+      .where(
+        and(
+          eq(ticketPendingReference.ticketId, ticketId),
+          eq(ticketPendingReference.messageIdHeader, id),
+          isNull(ticketPendingReference.resolvedBy),
+        ),
+      )
   }
 }

@@ -60,7 +60,6 @@ beforeEach(async () => {
   h = await startIntake(clamd)
   org = await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
   other = await h.organization("Example Other", [{ value: OTHER }])
-  await h.mode("live")
   queue = await openJobQueue(h.database.url)
   app = createTestApp(h.database, {}, queue, h.dir)
   await app.ready
@@ -288,7 +287,7 @@ describe("a scheduled reply", () => {
 
   it("sets pending only when it goes: a cancel or a failed check at the send point leaves the status (review T1, T7)", async () => {
     const admin = await firstAdmin()
-    const { b: agent } = await newAgent(admin, "an.agent", [org])
+    const { b: agent, id: agentId } = await newAgent(admin, "an.agent", [org])
     const t = await customerTicket()
     const cancelled = await schedule(agent, t.number, { setPending: true })
     const refused = await schedule(agent, t.number, { setPending: true })
@@ -300,23 +299,22 @@ describe("a scheduled reply", () => {
     const [first] = await outboxOfAction(cancelled)
     expect(await sender().send(first?.messageId ?? "")).toBe("failed")
     expect(await statusOf(t.id)).toBe("new")
-    // The send point's own check fails (intake listens): the action ends there, and the status stays.
-    await h.mode("listening")
+    // The send point's own check fails (the author lost the organization): the action ends there, and the status stays.
+    await new Organizations(db()).removeMember(org, agentId, { actor: SYSTEM, ipAddress: null })
     const [second] = await outboxOfAction(refused)
     expect(await sender().send(second?.messageId ?? "")).toBe("failed")
-    expect((await outboxOfAction(refused))[0]?.problem).toBe("listening")
-    expect(await scheduledOf(agent, t.number, refused)).toMatchObject({ state: "ended", reason: "listening" })
+    expect((await outboxOfAction(refused))[0]?.problem).toBe("author_not_allowed")
+    expect(await scheduledOf(admin, t.number, refused)).toMatchObject({ state: "ended", reason: "author_not_allowed" })
     expect(await statusOf(t.id)).toBe("new")
     expect(smtp2go.received.length).toBe(before)
     // Send again is never offered for a scheduled reply that ended before it went out, and the server refuses it.
-    await h.mode("live")
-    const shown = await view(agent, t.number)
+    const shown = await view(admin, t.number)
     for (const made of [first, second])
       expect(shown.messages.find((m) => m.id === made?.messageId)?.delivery).toMatchObject({
         state: "failed",
         scheduledEnded: true,
       })
-    const resend = await agent.call("POST", `/api/v1/messages/${second?.messageId}/resend`)
+    const resend = await admin.call("POST", `/api/v1/messages/${second?.messageId}/resend`)
     expect(resend.json).toEqual({ error: "reply_not_retryable" })
   })
 

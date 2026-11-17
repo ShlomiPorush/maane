@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   authUser,
   category,
-  intakeConversation,
   intakeRecord,
   intakeSource,
   message,
@@ -234,8 +233,8 @@ describe("scope", () => {
   it("answers 404 to a number or an id that names nothing, and to a message without a ticket", async () => {
     const admin = await firstAdmin()
     const a = await newOrganization("Alpha")
-    const listening = await newMessage(null, { htmlBody: "<p>x</p>" })
-    const part = await pngPart(listening)
+    const ticketless = await newMessage(null, { htmlBody: "<p>x</p>" })
+    const part = await pngPart(ticketless)
     await newTicket(a)
     for (const path of [
       "/api/v1/tickets/abc",
@@ -246,7 +245,7 @@ describe("scope", () => {
       "/api/v1/messages/not-a-uuid/body",
       `/api/v1/messages/${randomBytes(16).toString("hex")}/body`,
       "/api/v1/messages/00000000-0000-4000-8000-000000000000/body",
-      `/api/v1/messages/${listening}/body`,
+      `/api/v1/messages/${ticketless}/body`,
       "/api/v1/files/xyz",
       "/api/v1/files/00000000-0000-4000-8000-000000000000/preview",
       `/api/v1/files/${part}`,
@@ -893,17 +892,14 @@ describe("search (plan 4.4)", () => {
 })
 
 describe("the intake log", () => {
-  it("is for admins: records of both modes, filtered by mode and by review", async () => {
+  it("is for admins: every record, filtered by review, with no listening view", async () => {
     const admin = await firstAdmin()
     const agent = await newAgent(admin, "agent.one")
     const a = await newOrganization("Alpha")
     const t = await newTicket(a)
     const live = await newMessage(t.id, { subject: "Live one" })
-    const [conversation] = await db()
-      .insert(intakeConversation)
-      .values({ organizationId: a, supportAddress: "help@example.com", reviewFlags: ["sender_not_participant"] })
-      .returning({ id: intakeConversation.id })
-    const listening = await newMessage(null, { subject: "Heard one" })
+    const t2 = await newTicket(a, { reviewFlags: ["sender_not_participant"] })
+    const linked = await newMessage(t2.id, { subject: "Linked one" })
     const unreadable = await newMessage(null, {
       content: "unavailable",
       subject: null,
@@ -917,7 +913,6 @@ describe("the intake log", () => {
       .values([
         {
           messageId: live,
-          mode: "live",
           outcome: "new_ticket",
           organizationId: a,
           ticketId: t.id,
@@ -925,18 +920,16 @@ describe("the intake log", () => {
           createdAt: new Date(Date.UTC(2026, 10, 12, 10, 0)),
         },
         {
-          messageId: listening,
-          mode: "listening",
+          messageId: linked,
           outcome: "new_linked_ticket",
           organizationId: a,
-          conversationId: conversation?.id,
+          ticketId: t2.id,
           matchedTicketId: t.id,
           reason: "sender_not_participant",
           createdAt: new Date(Date.UTC(2026, 10, 12, 10, 1)),
         },
         {
           messageId: unreadable,
-          mode: "listening",
           outcome: "unreadable",
           reason: "unavailable",
           createdAt: new Date(Date.UTC(2026, 10, 12, 10, 2)),
@@ -945,7 +938,7 @@ describe("the intake log", () => {
 
     expect((await agent.b.call("GET", "/api/v1/intake")).json).toEqual({ error: "forbidden" })
     const all = (await admin.call("GET", "/api/v1/intake")).json
-    expect(all.entries.map((e: { messageId: string }) => e.messageId)).toEqual([unreadable, listening, live])
+    expect(all.entries.map((e: { messageId: string }) => e.messageId)).toEqual([unreadable, linked, live])
     expect(all.entries[0]).toMatchObject({
       outcome: "unreadable",
       subject: "From Graph",
@@ -953,25 +946,23 @@ describe("the intake log", () => {
       flags: ["unavailable"],
       organization: null,
     })
+    expect(all.entries[1]).not.toHaveProperty("mode")
     expect(all.entries[1]).toMatchObject({
-      mode: "listening",
       matchedTicket: t.number,
-      ticket: null,
+      ticket: t2.number,
       reasons: ["sender_not_participant"],
       flags: ["sender_not_participant"],
       organization: { id: a, name: "Alpha" },
     })
-    expect(all.entries[2]).toMatchObject({ mode: "live", ticket: t.number, flags: [], reasons: [] })
-    const listeningOnly = (await admin.call("GET", "/api/v1/intake?mode=listening")).json.entries
-    expect(listeningOnly).toHaveLength(2)
+    expect(all.entries[2]).toMatchObject({ ticket: t.number, flags: [], reasons: [] })
     const flagged = (await admin.call("GET", "/api/v1/intake?flagged=1")).json.entries
-    expect(flagged.map((e: { messageId: string }) => e.messageId)).toEqual([unreadable, listening])
-    expect((await admin.call("GET", "/api/v1/intake?mode=other")).status).toBe(400)
+    expect(flagged.map((e: { messageId: string }) => e.messageId)).toEqual([unreadable, linked])
+    expect((await admin.call("GET", "/api/v1/intake?flagged=2")).status).toBe(400)
 
     const tickets = new Tickets(db(), filesDir)
     const first = await tickets.intake({ limit: 2 })
     const second = await tickets.intake({ limit: 2, cursor: first.next ?? undefined })
-    expect([...first.entries, ...second.entries].map((e) => e.messageId)).toEqual([unreadable, listening, live])
+    expect([...first.entries, ...second.entries].map((e) => e.messageId)).toEqual([unreadable, linked, live])
     expect(second.next).toBeNull()
   })
 })

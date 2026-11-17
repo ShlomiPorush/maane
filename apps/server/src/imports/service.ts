@@ -1,6 +1,7 @@
 // The import page (plan 5.1, admins only): the archive at its read-only mount, the brand and tag mappings, the Maane
-// user Zendesk agents' comments are attributed to, starting a run, and the newest run with its paged report. The
-// server only reads the archive to show it and queues the run; the worker imports (apps/worker/src/import/run.ts).
+// user Zendesk agents' comments are attributed to, starting a run, the newest run with its paged report, and Finish
+// import (phase 6), which closes the import window for good. The server only reads the archive to show it and queues
+// the run; the worker imports (apps/worker/src/import/run.ts).
 
 import {
   emptyImportCounts,
@@ -37,7 +38,7 @@ import { type JobQueue, transactionWithJobs, ZENDESK_IMPORT, ZENDESK_IMPORT_HEAR
 import { log } from "../log.ts"
 import { Refusal } from "../organizations/refusal.ts"
 import type { Acting } from "../organizations/service.ts"
-import { importWindow } from "./window.ts"
+import { finishImport, importWindow } from "./window.ts"
 
 /** A brand ID or a tag as the archive holds them, bounded. */
 const BRAND_ID = /^\d{1,20}$/
@@ -152,7 +153,7 @@ export class Imports {
       .orderBy(asc(sql`lower(coalesce(nullif(${authUser.name}, ''), ${authUser.username}))`))
     const [run] = await this.db.select().from(importRun).orderBy(desc(importRun.createdAt)).limit(1)
     return {
-      window: { open: window.open, mode: window.mode, wentLiveAt: window.wentLiveAt?.toISOString() ?? null },
+      window: { open: window.open, finishedAt: window.finishedAt?.toISOString() ?? null },
       archive: {
         ...summary.archive,
         otherOrigin: summary.archive.present && origin !== null && origin !== summary.archive.origin,
@@ -222,9 +223,8 @@ export class Imports {
     if (tags.some(([tag, cat]) => tag === "" || tag.length > TAG_MAX || (cat !== null && !UUID.test(cat))))
       throw new Refusal("request_invalid", 400)
     await this.db.transaction(async (tx) => {
-      const window = await importWindow(tx, true)
+      const window = await importWindow(tx, "update")
       if (!window.open) throw new Refusal("import_closed", 409)
-      await tx.select({ id: zendeskImport.id }).from(zendeskImport).where(eq(zendeskImport.id, 1)).for("update")
       const [open] = await tx.select({ id: importRun.id }).from(importRun).where(eq(importRun.state, "running"))
       if (open) throw new Refusal("import_running", 409)
       const organizations = brands.flatMap(([, org]) => (org ? [org] : []))
@@ -268,13 +268,14 @@ export class Imports {
   }
 
   /**
-   * Starts a run, or goes on with the open one (its job queued again; the worker's lock runs one job at a time). Under the mode row's lock, so a switch to live waits for it and then sees the run.
+   * Starts a run, or goes on with the open one (its job queued again; the worker's lock runs one job at a time). Under
+   * the import's row, so Finish import waits for it and then sees the run.
    */
   async start(userId: string): Promise<ImportRunView> {
     const runId = await transactionWithJobs(this.db, async (tx, jobs) => {
-      const window = await importWindow(tx, true)
+      const window = await importWindow(tx, "update")
       if (!window.open) throw new Refusal("import_closed", 409)
-      const [config] = await tx.select().from(zendeskImport).where(eq(zendeskImport.id, 1)).for("update")
+      const [config] = await tx.select().from(zendeskImport).where(eq(zendeskImport.id, 1))
       if (!config?.agentUserId) throw new Refusal("import_no_agent", 409)
       const [open] = await tx.select({ id: importRun.id }).from(importRun).where(eq(importRun.state, "running"))
       if (open) {
@@ -319,6 +320,23 @@ export class Imports {
       return true
     })
     return { run: await this.latest(), cancelled }
+  }
+
+  /**
+   * Finish import (phase 6): final, audited, refused while a run is open. From then on imports are refused and
+   * imported tickets are ordinary tickets. Pressing it again once finished changes nothing.
+   */
+  async finish(acting: Acting): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      if (!(await finishImport(tx))) return
+      await writeAudit(tx, acting.actor, {
+        action: "import.finish",
+        entityType: "zendesk_import",
+        entityId: "1",
+        details: {},
+        ipAddress: acting.ipAddress,
+      })
+    })
   }
 
   /** A run's report, by a cursor after the last row shown. */
