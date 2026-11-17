@@ -2217,7 +2217,7 @@
           ],
           "isUnique": false,
           "with": {},
-          "method": "btree",
+          "method": "hash",
           "concurrently": false
         },
         "message_state_received_idx": {

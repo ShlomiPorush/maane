@@ -1760,7 +1760,7 @@
           ],
           "isUnique": false,
           "concurrently": false,
-          "method": "btree",
+          "method": "hash",
           "with": {}
         },
         "message_state_received_idx": {
