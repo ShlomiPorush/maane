@@ -234,7 +234,7 @@ No tracked file holds a working value for a secret-like setting, also not for de
 | SMTP2GO webhook secret | Not needed. | New for each run. | Generated in the admin UI by a cryptographically secure generator, stored encrypted, and entered at SMTP2GO as the path and the `Authorization` header. The admin UI can replace it. |
 | SMTP2GO API key and failover SMTP credentials | A stand-in API and a local SMTP server, with no real credentials. Real test sends use a separate key from the local secret store. | A stand-in API and SMTP server. | Entered in the admin UI and stored encrypted, or set through an environment variable that locks the field. The SMTP2GO key has the least permissions: send and read activity. |
 | VAPID key for browser notifications | Generated once on the machine with the Web Push library's tool, into an ignored owner-only file, never overwritten. | New for each run. | Generated once on the server the same way, and backed up. Replacing it disconnects every notification subscription, so it is never generated again on start. |
-| Zendesk API token | Not needed. Tests use a stand-in API. | A stand-in API. | Entered at run time through a secure prompt, and stored encrypted only while the old-replies job is active. Never written to a file. |
+| Zendesk API token | Not needed. Tests use a stand-in API. | A stand-in API. | Entered at run time through the backup tool's secure prompt. Never stored, and never written to a file. |
 
 ## 8. Security
 
