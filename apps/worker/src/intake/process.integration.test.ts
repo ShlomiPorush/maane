@@ -2,14 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SYSTEM } from "@maane/server/audit"
-import {
-  intakeConversation,
-  intakeConversationTicketLink,
-  intakeRecord,
-  message,
-  ticket,
-  ticketPendingReference,
-} from "@maane/server/db/schema"
+import { intakeRecord, message, supportAddress, ticket, ticketPendingReference } from "@maane/server/db/schema"
 import { INTAKE_PROCESS } from "@maane/server/jobs/queue"
 import { REFERENCE_CODE } from "@maane/shared"
 import { eq, inArray, sql } from "drizzle-orm"
@@ -39,17 +32,16 @@ afterEach(async () => {
 
 const SUPPORT = "support@example.com"
 
-/** A harness with one organization whose exact address is the default, in live mode. */
+/** A harness with one organization whose exact address is the default. */
 async function live(): Promise<IntakeHarness & { org: string }> {
   intake = await startIntake(clamd)
   const org = await intake.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
-  await intake.mode("live")
   return Object.assign(intake, { org })
 }
 
 const at = (minutes: number) => new Date(Date.UTC(2026, 10, 12, 8, minutes))
 
-describe("tickets in live mode", () => {
+describe("tickets", () => {
   it("opens a ticket with a number, a reference code, the concrete address, its organization, and its participants", async () => {
     const h = await live()
     const other = await h.organization("Other", [
@@ -72,7 +64,8 @@ describe("tickets in live mode", () => {
     expect(await h.ticketOf(fallback)).toMatchObject({ organizationId: h.org, supportAddress: SUPPORT })
     const numbers = (await h.tickets()).map((row) => row.number)
     expect(numbers).toEqual([numbers[0], (numbers[0] ?? 0) + 1, (numbers[0] ?? 0) + 2])
-    expect(await h.recordOf(first)).toMatchObject({ mode: "live", outcome: "new_ticket", ticketId: one?.id })
+    expect(await h.recordOf(first)).toMatchObject({ outcome: "new_ticket", ticketId: one?.id })
+    expect(await h.recordOf(first)).not.toHaveProperty("mode")
   })
 
   it("threads a reply by its headers, then by the body reference code, then by the subject number, and reopens", async () => {
@@ -318,157 +311,40 @@ describe("missing originals", () => {
   })
 })
 
-describe("listening mode", () => {
-  it("records what it would have done, opens no ticket, and takes no number", async () => {
+describe("no default address", () => {
+  it("processes nothing and counts no attempt while none exists, then each waiting message once, in order", async () => {
     intake = await startIntake(clamd)
     const h = intake
-    const org = await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
-    const sequence = async () =>
-      (await h.database.pool.query("select last_value, is_called from ticket_number_seq")).rows[0]
-    const before = await sequence()
-    const original = h.graph.add(mime({ messageId: "l1@example.com" }), { receivedAt: at(1) })
-    const reply = h.graph.add(mime({ inReplyTo: "l1@example.com" }), { receivedAt: at(2) })
-    const stranger = h.graph.add(mime({ from: "Mallory <mallory@example.com>", inReplyTo: "l1@example.com" }), {
-      receivedAt: at(3),
-    })
-    const bounce = h.graph.add(mime({ headers: [["Auto-Submitted", "auto-generated"]] }), { receivedAt: at(4) })
+    const org = await h.organization("Example Support", [{ value: SUPPORT }])
+    const ids = [
+      h.graph.add(mime({ messageId: "w1@example.com", to: "nobody@example.com" }), { receivedAt: at(1) }),
+      h.graph.add(mime({ headers: [["Auto-Submitted", "auto-replied"]] }), { receivedAt: at(2) }),
+      h.graph.add(mime({ inReplyTo: "w1@example.com", references: ["w1@example.com"] }), { receivedAt: at(3) }),
+    ]
     await h.round()
+    expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
+    for (const id of ids) expect(await h.messageOf(id)).toMatchObject({ state: "stored", processAttempts: 0 })
+    // Calling one message directly does nothing either: it stays stored, with no record.
+    await h.processor.processOne((await h.messageOf(ids[0] ?? "")).id)
+    expect(await h.database.db.select().from(intakeRecord)).toEqual([])
     expect(await h.tickets()).toEqual([])
-    expect(await sequence()).toEqual(before)
-    expect(await h.recordOf(original)).toMatchObject({
-      mode: "listening",
-      outcome: "new_ticket",
-      supportAddress: SUPPORT,
-      organizationId: org,
-      ticketId: null,
-    })
-    const conversation = (await h.messageOf(original)).conversationId
-    expect(conversation).not.toBeNull()
-    expect(await h.recordOf(original)).toMatchObject({ conversationId: conversation })
-    expect(await h.recordOf(reply)).toMatchObject({
-      outcome: "joined",
-      conversationId: conversation,
-      matchedConversationId: conversation,
-      matchLayer: "header",
-    })
-    expect(await h.recordOf(stranger)).toMatchObject({ outcome: "new_linked_ticket", reason: "sender_not_participant" })
-    expect(await h.recordOf(bounce)).toMatchObject({ outcome: "automated" })
-    // Switching to live does not turn records into tickets.
-    await h.mode("live")
-    await h.processor.run()
-    expect(await h.tickets()).toEqual([])
-  })
 
-  /** Listening mode with a default address, no tickets. */
-  async function listening() {
-    intake = await startIntake(clamd)
-    await intake.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
-    return intake
-  }
-
-  it("puts two replies to one missing original in one conversation, as live mode would", async () => {
-    const h = await listening()
-    const first = h.graph.add(mime({ inReplyTo: "lost@example.com" }), { receivedAt: at(1) })
-    const second = h.graph.add(mime({ inReplyTo: "lost@example.com" }), { receivedAt: at(2) })
-    await h.round()
-    const conversation = (await h.messageOf(first)).conversationId
-    expect(await h.recordOf(first)).toMatchObject({ outcome: "new_ticket", conversationId: conversation })
-    expect(await h.recordOf(second)).toMatchObject({ outcome: "joined", conversationId: conversation })
-    const original = h.graph.add(mime({ messageId: "lost@example.com" }), { receivedAt: at(0) })
-    await h.round()
-    expect(await h.recordOf(original)).toMatchObject({
-      outcome: "joined",
-      matchLayer: "original",
-      conversationId: conversation,
-    })
-  })
-
-  it("treats a Message-ID in two conversations as ambiguous, as live mode would", async () => {
-    const h = await listening()
-    h.graph.add(mime({ messageId: "twice@example.com", text: { content: "one" } }), { receivedAt: at(1) })
-    h.graph.add(mime({ messageId: "twice@example.com", from: "Ron <ron@example.com>", text: { content: "two" } }), {
-      receivedAt: at(2),
-    })
-    await h.round()
-    const reply = h.graph.add(mime({ inReplyTo: "twice@example.com" }), { receivedAt: at(3) })
-    await h.round()
-    expect(await h.recordOf(reply)).toMatchObject({ outcome: "new_ticket", matchedConversationId: null })
-  })
-
-  it("counts everyone of the conversation as a participant, not only the sender of the message replied to", async () => {
-    const h = await listening()
-    const opened = h.graph.add(mime({ messageId: "o@example.com", cc: "Ron <ron@example.com>" }), { receivedAt: at(1) })
-    const ron = h.graph.add(
-      mime({ messageId: "r@example.com", from: "Ron <ron@example.com>", inReplyTo: "o@example.com" }),
-      {
-        receivedAt: at(2),
-      },
-    )
-    const dana = h.graph.add(mime({ inReplyTo: "r@example.com" }), { receivedAt: at(3) })
-    await h.round()
-    const conversation = (await h.messageOf(opened)).conversationId
-    expect(await h.recordOf(ron)).toMatchObject({ outcome: "joined", conversationId: conversation })
-    expect(await h.recordOf(dana)).toMatchObject({ outcome: "joined", conversationId: conversation })
-  })
-
-  it("records a message with no support address and no default for review", async () => {
-    intake = await startIntake(clamd)
-    const h = intake
-    const id = h.graph.add(mime({ to: "nobody@example.com" }))
-    await h.round()
-    expect(await h.recordOf(id)).toMatchObject({ outcome: "no_address", supportAddress: null })
-    expect((await h.messageOf(id)).reviewFlags).toEqual(["no_default_address"])
+    await h.database.db.update(supportAddress).set({ isDefault: true }).where(eq(supportAddress.value, SUPPORT))
+    expect(await h.processor.run()).toEqual({ processed: 3, failed: 0 })
+    const [first, automated, reply] = ids
+    const opened = await h.ticketOf(first ?? "")
+    expect(opened).toMatchObject({ organizationId: org, supportAddress: SUPPORT })
+    expect(await h.recordOf(first ?? "")).toMatchObject({ outcome: "new_ticket", ticketId: opened?.id })
+    expect(await h.recordOf(automated ?? "")).toMatchObject({ outcome: "automated", ticketId: null })
+    expect(await h.recordOf(reply ?? "")).toMatchObject({ outcome: "joined", ticketId: opened?.id })
+    for (const id of ids) expect(await h.messageOf(id)).toMatchObject({ state: "processed", processAttempts: 0 })
+    expect(await h.database.db.select().from(intakeRecord)).toHaveLength(3)
+    expect(await h.tickets()).toHaveLength(1)
+    expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
   })
 })
 
 describe("review round 2", () => {
-  it("in listening mode, says a participant's reply would join an existing ticket, and leaves the ticket as it was (G4)", async () => {
-    const h = await live()
-    const original = h.graph.add(mime({ messageId: "t1@example.com", subject: "Printer" }), { receivedAt: at(1) })
-    await h.round()
-    const opened = await h.ticketOf(original)
-    await h.mode("listening")
-    const byHeader = h.graph.add(mime({ messageId: "t2@example.com", inReplyTo: "t1@example.com" }), {
-      receivedAt: at(2),
-    })
-    const byCode = h.graph.add(mime({ subject: "no headers", text: { content: `Ref: ${opened?.referenceCode}` } }), {
-      receivedAt: at(3),
-    })
-    const bySubject = h.graph.add(mime({ subject: `Re: [#${opened?.number}]` }), { receivedAt: at(4) })
-    // A listening reply to the listening reply: it still reaches the ticket.
-    const deeper = h.graph.add(mime({ inReplyTo: "t2@example.com" }), { receivedAt: at(5) })
-    const stranger = h.graph.add(mime({ from: "Mallory <mallory@example.com>", inReplyTo: "t1@example.com" }), {
-      receivedAt: at(6),
-    })
-    await h.round()
-    for (const [id, layer] of [
-      [byHeader, "header"],
-      [byCode, "reference"],
-      [bySubject, "subject"],
-      [deeper, "header"],
-    ] as const)
-      expect(await h.recordOf(id), layer).toMatchObject({
-        mode: "listening",
-        outcome: "joined",
-        ticketId: null,
-        matchedTicketId: opened?.id,
-        matchLayer: layer,
-      })
-    expect(await h.recordOf(stranger)).toMatchObject({
-      outcome: "new_linked_ticket",
-      matchedTicketId: opened?.id,
-      reason: "sender_not_participant",
-    })
-    // The ticket did not change: one message, still new, no ticket opened.
-    expect(await h.tickets()).toHaveLength(1)
-    expect((await h.ticketOf(original))?.status).toBe("new")
-    const onTicket = await h.database.db
-      .select()
-      .from(message)
-      .where(eq(message.ticketId, opened?.id ?? ""))
-    expect(onTicket).toHaveLength(1)
-  })
-
   it("looks at the first reference codes of a body only, in one query, and still finds a real one (G12)", async () => {
     const h = await live()
     const original = h.graph.add(mime({ messageId: "g12@example.com" }), { receivedAt: at(1) })
@@ -516,43 +392,34 @@ describe("review round 2", () => {
     expect((await h.ticketOf(original))?.status).toBe("new")
   })
 
-  it("makes a reply wait for its stored original that waits for the scanner, in live and listening mode (G15)", async () => {
-    for (const mode of ["live", "listening"] as const) {
-      const state = { down: true }
-      const scanner: Scanner = {
-        ...clamdScanner,
-        scan: async (address, bytes, deadline) =>
-          state.down && Buffer.from(bytes).includes("HOLD-ORIGINAL")
-            ? { kind: "error" }
-            : clamdScanner.scan(address, bytes, deadline),
-      }
-      intake = await startIntake(clamd, {}, { scanner })
-      const h = intake
-      await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
-      if (mode === "live") await h.mode("live")
-      const original = h.graph.add(
-        mime({ messageId: "dana@example.com", cc: "Ron <ron@example.com>", text: { content: "HOLD-ORIGINAL" } }),
-        { receivedAt: at(1) },
-      )
-      const ron = h.graph.add(mime({ from: "Ron <ron@example.com>", inReplyTo: "dana@example.com" }), {
-        receivedAt: at(2),
-      })
-      await h.round()
-      // The original waits for the scanner, and Ron's reply waits for the original.
-      expect((await h.messageOf(original)).state, mode).toBe("stored")
-      expect((await h.messageOf(ron)).state, mode).toBe("stored")
-      state.down = false
-      await h.retry.run()
-      await h.processor.run()
-      const thread = async (id: string) => {
-        const row = await h.messageOf(id)
-        return mode === "live" ? row.ticketId : row.conversationId
-      }
-      expect(await thread(ron), mode).toBe(await thread(original))
-      expect(await h.recordOf(ron), mode).toMatchObject({ outcome: "joined" })
-      await h.close()
-      intake = null
+  it("makes a reply wait for its stored original that waits for the scanner (G15)", async () => {
+    const state = { down: true }
+    const scanner: Scanner = {
+      ...clamdScanner,
+      scan: async (address, bytes, deadline) =>
+        state.down && Buffer.from(bytes).includes("HOLD-ORIGINAL")
+          ? { kind: "error" }
+          : clamdScanner.scan(address, bytes, deadline),
     }
+    intake = await startIntake(clamd, {}, { scanner })
+    const h = intake
+    await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
+    const original = h.graph.add(
+      mime({ messageId: "dana@example.com", cc: "Ron <ron@example.com>", text: { content: "HOLD-ORIGINAL" } }),
+      { receivedAt: at(1) },
+    )
+    const ron = h.graph.add(mime({ from: "Ron <ron@example.com>", inReplyTo: "dana@example.com" }), {
+      receivedAt: at(2),
+    })
+    await h.round()
+    // The original waits for the scanner, and Ron's reply waits for the original.
+    expect((await h.messageOf(original)).state).toBe("stored")
+    expect((await h.messageOf(ron)).state).toBe("stored")
+    state.down = false
+    await h.retry.run()
+    await h.processor.run()
+    expect((await h.messageOf(ron)).ticketId).toBe((await h.messageOf(original)).ticketId)
+    expect(await h.recordOf(ron)).toMatchObject({ outcome: "joined" })
   })
 
   it("stops a reply waiting an hour after the reply was stored, whatever an attacker keeps sending (G15, G16)", async () => {
@@ -567,7 +434,6 @@ describe("review round 2", () => {
     intake = await startIntake(clamd, {}, { scanner })
     const h = intake
     await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
-    await h.mode("live")
     const original = h.graph.add(mime({ messageId: "thread@example.com" }), { receivedAt: at(1) })
     await h.round()
     const opened = await h.ticketOf(original)
@@ -610,126 +476,9 @@ describe("review round 2", () => {
     expect((await h.messageOf(reply)).ticketId).toBe(opened?.id)
     for (const id of before) expect((await h.messageOf(id)).state).toBe("stored")
   })
-
-  it("keeps listening pending references of a ticket in the shadow, and matches them as live mode would (G4)", async () => {
-    const h = await live()
-    const original = h.graph.add(mime({ messageId: "g4-open@example.com" }), { receivedAt: at(1) })
-    await h.round()
-    const opened = await h.ticketOf(original)
-    await h.mode("listening")
-    // Dana's mail refers to a missing original M and carries the ticket's code: it would join the ticket.
-    const first = h.graph.add(
-      mime({ inReplyTo: "missing-m@example.com", text: { content: `Ref: ${opened?.referenceCode}` } }),
-      { receivedAt: at(2) },
-    )
-    await h.round()
-    expect(await h.recordOf(first)).toMatchObject({
-      outcome: "joined",
-      matchedTicketId: opened?.id,
-      matchLayer: "reference",
-    })
-    // A second mail from her names only M: it would join the ticket through the pending reference.
-    const second = h.graph.add(mime({ inReplyTo: "missing-m@example.com" }), { receivedAt: at(3) })
-    await h.round()
-    expect(await h.recordOf(second)).toMatchObject({
-      outcome: "joined",
-      matchedTicketId: opened?.id,
-      matchLayer: "header",
-    })
-    // The late original M would join the ticket too.
-    const late = h.graph.add(mime({ messageId: "missing-m@example.com" }), { receivedAt: at(4) })
-    await h.round()
-    expect(await h.recordOf(late)).toMatchObject({
-      outcome: "joined",
-      matchedTicketId: opened?.id,
-      matchLayer: "original",
-    })
-    // The ticket's own pending references were never touched, and no conversation was opened.
-    expect(await h.database.db.select().from(ticketPendingReference)).toEqual([])
-    expect(await h.database.db.select().from(intakeConversation)).toEqual([])
-  })
-
-  it("links a listening conversation to every ticket that waited for an ambiguous original (G17)", async () => {
-    const h = await live()
-    const fromDana = h.graph.add(mime({ inReplyTo: "g17@example.com" }), { receivedAt: at(1) })
-    await h.round()
-    const fromRon = h.graph.add(mime({ from: "Ron <ron@example.com>", inReplyTo: "g17@example.com" }), {
-      receivedAt: at(2),
-    })
-    await h.round()
-    const one = await h.ticketOf(fromDana)
-    const two = await h.ticketOf(fromRon)
-    await h.mode("listening")
-    const original = h.graph.add(mime({ messageId: "g17@example.com", from: "Gil <gil@example.com>" }), {
-      receivedAt: at(3),
-    })
-    await h.round()
-    const conversation = (await h.messageOf(original)).conversationId ?? ""
-    expect(await h.recordOf(original)).toMatchObject({
-      outcome: "new_linked_ticket",
-      reason: "ambiguous_original",
-      conversationId: conversation,
-    })
-    const [shadow] = await h.database.db
-      .select()
-      .from(intakeConversation)
-      .where(eq(intakeConversation.id, conversation))
-    expect(shadow?.reviewFlags).toEqual(["ambiguous_original"])
-    const links = await h.database.db
-      .select()
-      .from(intakeConversationTicketLink)
-      .where(eq(intakeConversationTicketLink.conversationId, conversation))
-    expect(links.map((link) => [link.ticketId, link.reason]).sort()).toEqual(
-      [
-        [one?.id, "ambiguous_original"],
-        [two?.id, "ambiguous_original"],
-      ].sort(),
-    )
-  })
 })
 
-describe("the mode, the source, and the queue", () => {
-  it("makes a mode switch wait for a processing transaction that read live, and nothing after it reads live", async () => {
-    const h = await live()
-    const a = h.graph.add(mime(), { receivedAt: at(1) })
-    const b = h.graph.add(mime({ from: "Ron <ron@example.com>" }), { receivedAt: at(2) })
-    await h.sync.run()
-    let release!: () => void
-    const held = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    let reached!: () => void
-    const reading = new Promise<void>((resolve) => {
-      reached = resolve
-    })
-    const modes: string[] = []
-    const run = h.processor.run({
-      afterMode: async (mode) => {
-        modes.push(mode)
-        if (modes.length === 1) {
-          reached()
-          await held
-        }
-      },
-    })
-    await reading
-    let switched = false
-    const change = h.mode("listening").then(() => {
-      switched = true
-    })
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    expect(switched).toBe(false)
-    release()
-    await change
-    await run
-    expect(switched).toBe(true)
-    expect(modes).toEqual(["live", "listening"])
-    expect((await h.ticketOf(a))?.id).toBeDefined()
-    expect((await h.messageOf(b)).ticketId).toBeNull()
-    expect(await h.recordOf(b)).toMatchObject({ mode: "listening", ticketId: null })
-    expect(await h.tickets()).toHaveLength(1)
-  })
-
+describe("the source and the queue", () => {
   it("processes stored messages after the mailbox changed", async () => {
     const h = await live()
     const id = h.graph.add(mime())

@@ -1,10 +1,10 @@
 // Sending a reply (plan 3.1), the `send-reply` job. The outbox row, not the queue, decides whether anything may go:
 //
-// 1. One transaction locks the intake mode (FOR SHARE) and the outbox row (FOR UPDATE). A row that is `sending` was
+// 1. One transaction locks the outbox row (FOR UPDATE). A row that is `sending` was
 //    left by a run that stopped halfway (a crash, or pg-boss expired the job while its handler still ran): it may have
 //    been sent, so every recipient not accepted becomes `unknown` and nothing is sent. Only a `pending` row goes on.
-//    The send point checks again what the server checked when the agent wrote the reply: intake is live, the From
-//    address still belongs to the ticket's organization, and the author may still answer the ticket. Then the row
+//    The send point checks again what the server checked when the agent wrote the reply: the From address still belongs
+//    to the ticket's organization, and the author may still answer the ticket. Then the row
 //    becomes `sending` and the transaction commits, before the first byte leaves.
 //    A row a timed action made (plan 4.2) is checked once more here, in this transaction, the first time it is
 //    claimed: its action must still be `handed` at the row's version (not cancelled or replaced), and the customer
@@ -60,7 +60,6 @@ import {
 import { and, eq, inArray, ne, sql } from "drizzle-orm"
 import type { Db as QueueDb } from "pg-boss"
 import type { Tx } from "../files/types.ts"
-import { lockIntakeMode } from "../intake/process.ts"
 import { type Delivery, deliver, SMTP_TIMEOUTS, type SmtpConfig, type SmtpTimeouts, smtpConfig } from "./smtp.ts"
 
 export interface ReplySenderOptions {
@@ -161,7 +160,6 @@ export class ReplySender {
   /** Step 1: the checks and the claim, committed before anything is sent. Null when nothing may be sent now. */
   async #claim(messageId: string): Promise<Claim | null> {
     return transactionWithJobs(this.#db, async (tx, jobs) => {
-      const mode = await lockIntakeMode(tx)
       const [row] = await tx
         .select({
           state: outbox.state,
@@ -225,7 +223,7 @@ export class ReplySender {
         if (ended) problem = "reminder_ended"
       } else if (handoff && row.actionId && (await customerWroteSince(tx, row.ticketId, row.actionId)))
         problem = "customer_reply"
-      problem ??= await sendProblem(tx, mode, { ...row, organizationId: held.organizationId, automated })
+      problem ??= await sendProblem(tx, { ...row, organizationId: held.organizationId, automated })
       if (problem) {
         if (handoff && action && (ended || problem !== "action_ended"))
           await setActionState(tx, action.id, "ended", ended ?? (problem as ActionReason))

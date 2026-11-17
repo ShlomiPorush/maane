@@ -17,17 +17,9 @@ import {
 import { and, asc, count, desc, eq, sql } from "drizzle-orm"
 import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
-import {
-  authUser,
-  intakeConversation,
-  intakeRecord,
-  organization,
-  organizationMember,
-  supportAddress,
-  ticket,
-} from "../db/schema.ts"
+import { authUser, intakeRecord, organization, organizationMember, supportAddress, ticket } from "../db/schema.ts"
 import { wellFormedText } from "../text.ts"
-import { intakeModeIn, lockIntakeConfig } from "./intake.ts"
+import { lockIntakeConfig } from "./intake.ts"
 import { databaseError, Refusal } from "./refusal.ts"
 
 export const NAME_MAX = ORGANIZATION_NAME_MAX
@@ -275,8 +267,8 @@ export class Organizations {
 
   /**
    * Refused while the organization has an address or a member (`organization_in_use`), and for good once it has mail
-   * history (`organization_has_mail`): tickets, intake records, or listening conversations keep it, so history is
-   * never lost. Their foreign keys restrict too.
+   * history (`organization_has_mail`): tickets or intake records keep it, so history is never lost. Their foreign keys
+   * restrict too.
    */
   async delete(id: string, acting: Acting): Promise<void> {
     try {
@@ -398,13 +390,13 @@ export class Organizations {
     }
   }
 
-  /** Refused for the default address while the intake mode is live: it can only be replaced (P17). */
+  /** Refused for the default address: it can only be replaced (P17, phase 6). */
   async removeAddress(id: string, addressId: string, acting: Acting): Promise<void> {
     await this.db.transaction(async (tx) => {
       await lockIntakeConfig(tx)
       const name = await organizationName(tx, id)
       const row = await addressOf(tx, id, addressId)
-      if (row.isDefault && (await intakeModeIn(tx)) === "live") throw new Refusal("intake_default_required", 409)
+      if (row.isDefault) throw new Refusal("intake_default_required", 409)
       await tx.delete(supportAddress).where(eq(supportAddress.id, addressId))
       await writeAudit(tx, acting.actor, {
         action: "organization.address_remove",
@@ -532,7 +524,6 @@ async function hasMail(tx: Pick<Db, "select">, id: string): Promise<boolean> {
   for (const [table, column] of [
     [ticket, ticket.organizationId],
     [intakeRecord, intakeRecord.organizationId],
-    [intakeConversation, intakeConversation.organizationId],
   ] as const) {
     const rows = await tx.select({ id: sql`1` }).from(table).where(eq(column, id)).limit(1)
     if (rows.length > 0) return true

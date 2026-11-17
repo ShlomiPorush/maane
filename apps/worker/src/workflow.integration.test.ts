@@ -3,7 +3,6 @@ import { SYSTEM } from "@maane/server/audit"
 import {
   auditLog,
   category,
-  intakeConversationTicketLink,
   intakeRecord,
   message,
   ticket,
@@ -66,7 +65,6 @@ beforeEach(async () => {
   h = await startIntake(clamd)
   org = await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
   other = await h.organization("Example Other", [{ value: OTHER }])
-  await h.mode("live")
   queue = await openJobQueue(h.database.url)
   app = createTestApp(h.database, {}, queue, h.dir)
   await app.ready
@@ -290,7 +288,7 @@ describe("a customer reply", () => {
       const answer = await customerAnswers(t)
       expect((await h.ticketOf(answer))?.id).toBe(t.id)
       const record = await h.recordOf(answer)
-      expect(record).toMatchObject({ outcome: "joined", mode: "live", classification: "customer" })
+      expect(record).toMatchObject({ outcome: "joined", classification: "customer" })
       expect(record && isCustomerReply(record)).toBe(true)
       expect(await statusOf(t.id), status).toBe("open")
     }
@@ -308,7 +306,7 @@ describe("a customer reply", () => {
     expect(found?.n).toBe(3)
   })
 
-  it("is never automated mail, Maane's own mail, a copy, or anything listening records: a pending ticket stays pending", async () => {
+  it("is never automated mail, Maane's own mail, or a copy: a pending ticket stays pending", async () => {
     const admin = await firstAdmin()
     const t = await customerTicket()
     const written = await admin.call("POST", `/api/v1/tickets/${t.number}/messages`, reply({ setPending: true }))
@@ -388,23 +386,9 @@ describe("a customer reply", () => {
     expect(await h.recordOf(dsn)).toMatchObject({ matchedTicketId: t.id })
     expect((await view(admin, t.number)).ticket.reviewFlags).toContain("delivery_failed")
 
-    // Listening: the customer's real reply is recorded as what live mode would do, and changes no ticket.
-    await h.mode("listening")
-    const heard = await customerAnswers(t)
-    const record = await h.recordOf(heard)
-    expect(record).toMatchObject({ mode: "listening", outcome: "joined", matchedTicketId: t.id, ticketId: null })
-    expect(record && isCustomerReply(record)).toBe(false)
-    expect(await statusOf(t.id)).toBe("pending")
-    const [found] = await db()
-      .select({ n: count() })
-      .from(intakeRecord)
-      .where(and(eq(intakeRecord.matchedTicketId, t.id), customerReplyCondition()))
-    expect(found?.n).toBe(0)
-
-    // Live again, the same kind of mail is a customer reply.
-    await h.mode("live")
+    // The customer's own mail is a customer reply.
     const answer = await customerAnswers(t)
-    expect(await h.recordOf(answer)).toMatchObject({ outcome: "joined", mode: "live" })
+    expect(await h.recordOf(answer)).toMatchObject({ outcome: "joined", classification: "customer" })
     expect(await statusOf(t.id)).toBe("open")
   })
 
@@ -437,16 +421,6 @@ describe("a customer reply", () => {
     const again = await customerAnswers({ messageId: (await h.messageOf(answer)).messageIdHeader ?? "" })
     expect((await h.ticketOf(again))?.id).toBe(followUp?.id)
     expect(await statusOf(t.id)).toBe("closed")
-
-    // Listening records the same decision without a ticket: a conversation linked to the closed ticket.
-    await h.mode("listening")
-    const heard = await customerAnswers(t)
-    expect(await h.recordOf(heard)).toMatchObject({ outcome: "new_linked_ticket", reason: "follow_up", ticketId: null })
-    const [link] = await db()
-      .select({ reason: intakeConversationTicketLink.reason })
-      .from(intakeConversationTicketLink)
-      .where(eq(intakeConversationTicketLink.ticketId, t.id))
-    expect(link?.reason).toBe("follow_up")
     expect(await h.tickets()).toHaveLength(2)
   })
 })

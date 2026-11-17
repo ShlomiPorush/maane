@@ -51,8 +51,6 @@ async function everythingStored(h: IntakeHarness): Promise<string> {
     "intake_record",
     "ticket",
     "ticket_participant",
-    "intake_conversation",
-    "intake_conversation_participant",
     "audit_log",
     "stored_file",
   ]
@@ -213,7 +211,6 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     expect(await h.messageOf(hostile)).toMatchObject({ content: "parsed", messageIdHeader: null, inReplyTo: [] })
     expect((await h.messageOf(hostile)).references.length).toBeLessThanOrEqual(50)
     expect((await h.messageOf(valid)).subject).toBe("after the long keys")
-    await h.mode("live")
     expect(await h.processor.run()).toEqual({ processed: 2, failed: 0 })
     expect((await h.ticketOf(hostile))?.id).toBeDefined()
   })
@@ -221,7 +218,6 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
   it("processes once a message whose In-Reply-To names 70,000 IDs, and goes on", async () => {
     const h = await start()
     await h.organization("Example Support", [{ value: "support@example.com", isDefault: true }])
-    await h.mode("live")
     const ids = Array.from({ length: 70_000 }, (_, i) => `<${i.toString(36)}@x>`).join(" ")
     const flood = h.graph.add(mime({ headers: [["In-Reply-To", ids]] }), {
       receivedAt: new Date(Date.UTC(2026, 10, 1)),
@@ -263,7 +259,8 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     expect(await h.messageOf(cesu)).toMatchObject({ subject: replacement, reviewFlags: ["invalid_characters"] })
     expect(await h.messageOf(afterNul)).toMatchObject({ subject: "after the nul", reviewFlags: [] })
     expect(await h.messageOf(afterCesu)).toMatchObject({ subject: "after the surrogate", reviewFlags: [] })
-    // Stage two takes them too.
+    // Stage two takes them too, once a default address exists.
+    await h.organization("Example Support", [{ value: "support@example.com", isDefault: true }])
     await h.processor.run()
     expect((await h.messageOf(cesu)).state).toBe("processed")
   })
@@ -485,7 +482,7 @@ describe("text fields scanned like files (review G1)", () => {
     expect(await h.messageOf(valid)).toMatchObject({ subject: "after the blocked fields", reviewFlags: [] })
     const audits = await h.database.db.select().from(auditLog).where(eq(auditLog.action, "message.content_blocked"))
     expect(audits).toHaveLength(5)
-    // Processing goes on, in listening and in live mode.
+    // Processing goes on.
     await h.organization("Example Support", [{ value: "support@example.com", isDefault: true }])
     await h.processor.run()
     const everything = await everythingStored(h)
@@ -495,6 +492,7 @@ describe("text fields scanned like files (review G1)", () => {
 
   it("waits to store and process text fields while the scanner is down, then stores them", async () => {
     const h = await start()
+    await h.organization("Example Support", [{ value: "support@example.com", isDefault: true }])
     await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
     const id = h.graph.add(mime({ subject: "later", text: { content: "body later" } }))
     await h.sync.run()

@@ -15,7 +15,7 @@ import {
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
 import { createTestDatabase, testKey } from "@maane/server/testing/db"
-import { type IntakeMode, MEGABYTE, type SettingKey } from "@maane/shared"
+import { MEGABYTE, type SettingKey } from "@maane/shared"
 import { asc, eq } from "drizzle-orm"
 import { clamdScanner, type Scanner } from "../files/scanner.ts"
 import { FileService } from "../files/service.ts"
@@ -47,7 +47,6 @@ export interface IntakeHarness {
     name: string,
     addresses: { value: string; kind?: "exact" | "pattern"; isDefault?: boolean }[],
   ): Promise<string>
-  mode(mode: IntakeMode): Promise<void>
   /** Stage one, then stage two. */
   round(): Promise<void>
   messageOf(graphId: string): Promise<typeof message.$inferSelect>
@@ -120,7 +119,6 @@ export async function startIntake(
         })
       return made.id
     },
-    mode: (mode) => settings.update({ "intake.mode": mode }, SYSTEM),
     async round() {
       await sync.run()
       await processor.run()

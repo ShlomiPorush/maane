@@ -6,6 +6,7 @@ import {
   messagePart,
   outbox,
   outboxRecipient,
+  setting,
   storedFile,
   supportAddress,
   ticket as ticketTable,
@@ -73,7 +74,6 @@ beforeEach(async () => {
   h = await startIntake(clamd)
   org = await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
   otherOrg = await h.organization("Example Other", [{ value: OTHER }])
-  await h.mode("live")
   queue = await openJobQueue(h.database.url)
   app = createTestApp(h.database, {}, queue, h.dir)
   await app.ready
@@ -220,8 +220,8 @@ describe("a reply, end to end", () => {
       to: [{ address: "dana@example.com", name: "Dana Customer" }],
       cc: [],
       senderName: "first.admin (Example Support)",
-      listening: false,
     })
+    expect(before.compose).not.toHaveProperty("listening")
     const file = await scanned(admin, "notes.txt", Buffer.from("The notes of the meeting.\n"))
     const html = `<p dir="auto">${SHALOM}, ${TODA}</p><p dir="auto">The English paragraph.</p>`
     const written = await admin.call(
@@ -562,24 +562,20 @@ describe("what a reply may carry and come from", () => {
     expect(smtp2go.received.length + failover.received.length).toBe(received)
   })
 
-  it("refuses replies while intake listens, at the composer and at the send point, and still writes notes", async () => {
+  it("has no listening refusal: with no intake mode at all, the send point sends, and the mode setting is gone (phase 6)", async () => {
     const admin = await firstAdmin()
     const ticket = await customerTicket()
+    expect(await h.database.db.select().from(setting).where(eq(setting.key, "intake.mode"))).toEqual([])
     const written = await admin.call("POST", `/api/v1/tickets/${ticket.number}/messages`, reply())
     expect(written.status).toBe(201)
-    await h.mode("listening")
-    expect((await view(admin, ticket.number)).compose.listening).toBe(true)
-    expect((await admin.call("POST", `/api/v1/tickets/${ticket.number}/messages`, reply())).json).toEqual({
-      error: "listening_mode",
-    })
     const note = await admin.call("POST", `/api/v1/tickets/${ticket.number}/messages`, reply({ kind: "note" }))
     expect(note.status).toBe(201)
     const received = smtp2go.received.length
-    expect(await sender().send(written.json.id)).toBe("failed")
+    expect(await sender().send(written.json.id)).toBe("accepted")
     const v = await view(admin, ticket.number)
-    expect(deliveryOf(v, written.json.id)).toMatchObject({ state: "failed", problem: "listening" })
+    expect(deliveryOf(v, written.json.id)).toMatchObject({ problem: null })
     expect(v.messages.find((m) => m.id === note.json.id)).toMatchObject({ direction: "note", delivery: null })
-    expect(smtp2go.received.length).toBe(received)
+    expect(smtp2go.received.length).toBe(received + 1)
   })
 
   it("refuses a reply whose author may no longer answer the ticket when it is sent", async () => {

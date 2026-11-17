@@ -78,7 +78,6 @@ beforeEach(async () => {
   h = await startIntake(clamd)
   org = await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
   other = await h.organization("Example Other", [{ value: OTHER }])
-  await h.mode("live")
   queue = await openJobQueue(h.database.url)
   app = createTestApp(h.database, {}, queue, h.dir)
   await app.ready
@@ -946,14 +945,6 @@ describe("no reminder", () => {
     // As phase 5 will mark one: the same period, recorded as imported.
     await db().update(waitingPeriod).set({ origin: "import" }).where(eq(waitingPeriod.messageId, started))
     expect(await actions().run(due.id, 1)).toBe("imported")
-    expect(await outboxOfAction(due.id)).toEqual([])
-  })
-
-  it("while intake listens: its job ends it without writing", async () => {
-    const { t } = await waiting()
-    const due = await onlyReminder(t.id)
-    await h.mode("listening")
-    expect(await actions().run(due.id, 1)).toBe("listening")
     expect(await outboxOfAction(due.id)).toEqual([])
   })
 })

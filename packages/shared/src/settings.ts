@@ -25,10 +25,6 @@ export interface SettingDefinition<T> {
   generated?: boolean
 }
 
-/** Listening records what intake would do and opens no ticket; live opens tickets (requirements 6.2). */
-export const INTAKE_MODES = ["listening", "live"] as const
-export type IntakeMode = (typeof INTAKE_MODES)[number]
-
 /**
  * What happens to a file while the scanner is unavailable (requirements 3.3): `block` keeps incoming files waiting
  * and scans them when the scanner is back; `allow` stores them marked "not scanned".
@@ -191,15 +187,6 @@ export const SETTINGS = {
     secret: false,
     env: "MAANE_SESSION_DAYS",
     fromEnv: (text) => Number(text),
-  }),
-  // No variable: the owner's operational switch. One stored row is the only truth the UI, the processing, and the
-  // default-address rule read, and the first migration of phase 2 creates it, so it can be locked (FOR SHARE).
-  "intake.mode": define({
-    schema: z.enum(INTAKE_MODES),
-    defaultValue: "listening" as IntakeMode,
-    secret: false,
-    env: null,
-    fromEnv: null,
   }),
   // The clamd the worker scans with: the bundled clamav service, or the owner's own (docs/deployment.md lists what an
   // outside clamd must be configured with).

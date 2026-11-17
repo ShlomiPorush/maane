@@ -36,13 +36,12 @@ describe("pushPayload", () => {
 
 describe("notificationOf", () => {
   const live = (outcome: string, classification: string | null = "customer", ticketId: string | null = "t") => ({
-    mode: "live",
     outcome,
     classification,
     ticketId,
   })
 
-  it("notifies for a ticket a message opened, and for exactly what 4.1 counts as a customer reply, in live mode only", () => {
+  it("notifies for a ticket a message opened, and for exactly what 4.1 counts as a customer reply", () => {
     expect(notificationOf(live("new_ticket"), "m")).toEqual({ kind: "new_ticket", ticketId: "t", messageId: "m" })
     // Among them the follow-up a reply to a closed ticket opens (plan 4.1).
     expect(notificationOf(live("new_linked_ticket"), "m")?.kind).toBe("new_ticket")
@@ -52,8 +51,6 @@ describe("notificationOf", () => {
       expect(notificationOf(live("joined", classification), "m")).toBeNull()
     for (const outcome of ["automated", "copy", "no_address", "unreadable"])
       expect(notificationOf(live(outcome), "m")).toBeNull()
-    expect(notificationOf({ ...live("new_ticket"), mode: "listening" }, "m")).toBeNull()
-    expect(notificationOf({ ...live("joined"), mode: "listening" }, "m")).toBeNull()
     expect(notificationOf(live("joined", "customer", null), "m")).toBeNull()
     expect(notificationOf(live("new_ticket", "customer", null), "m")).toBeNull()
   })

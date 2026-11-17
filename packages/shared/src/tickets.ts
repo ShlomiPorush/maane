@@ -179,12 +179,11 @@ export interface TicketView {
   reminder: ReminderView | null
 }
 
-/** A row of the intake log: what processing did (live) or would have done (listening) with one message. */
+/** A row of the intake log: what processing did with one message. */
 export interface IntakeEntry {
   messageId: string
   at: string
   receivedAt: string
-  mode: "listening" | "live"
   outcome: IntakeOutcome
   classification: string | null
   /** The record's reason codes (INTAKE_REASONS; an unknown one stays as it is): the intake log shows their words. */
@@ -194,11 +193,11 @@ export interface IntakeEntry {
   from: MailAddress | null
   supportAddress: string | null
   organization: OrganizationRef | null
-  /** Live: the ticket it opened or joined. */
+  /** The ticket it opened or joined. */
   ticket: number | null
-  /** The ticket it matched (live) or would have matched (listening). */
+  /** The ticket it matched. */
   matchedTicket: number | null
-  /** The message's review flags and those of its ticket or listening conversation. */
+  /** The message's review flags and those of its ticket. */
   flags: string[]
 }
 
@@ -206,6 +205,3 @@ export interface IntakeLog {
   entries: IntakeEntry[]
   next: string | null
 }
-
-/** The modes and the review choice the intake log filters by. */
-export const INTAKE_FILTER_MODES = ["listening", "live"] as const

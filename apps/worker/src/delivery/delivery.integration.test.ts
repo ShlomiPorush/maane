@@ -54,7 +54,6 @@ afterAll(async () => {
 beforeEach(async () => {
   h = await startIntake(clamd)
   await h.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
-  await h.mode("live")
   queue = await openJobQueue(h.database.url)
   app = createTestApp(h.database, {}, queue, h.dir)
   await app.ready
