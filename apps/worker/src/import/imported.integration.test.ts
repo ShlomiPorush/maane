@@ -40,7 +40,7 @@ import { BRANDS, backupInto, HEBREW_BODY, standInAccount } from "../testing/zend
 import { ZendeskImport } from "./run.ts"
 
 // Imported tickets through the API (plan 5.1): the import page (mapping, start, progress, report), imported tickets
-// read-only for every action until Maane goes live (deleting a category one carries too), their "From Zendesk" block,
+// read-only for every agent action until Finish import (deleting a category one carries too), their "From Zendesk" block,
 // their files and inline images (plan 5.2),
 // the organization scope of the list and search, and the quoted history of a later reply. The server app and the
 // import share one migrated database; the archive is an invented one, made by the phase 0 backup from its stand-in.
@@ -172,7 +172,7 @@ describe("imported tickets", () => {
     const page = await admin.b.call("GET", "/api/v1/admin/import")
     expect(page.status).toBe(200)
     const view = page.json as ImportView
-    expect(view.window).toMatchObject({ open: true, mode: "listening", wentLiveAt: null })
+    expect(view.window).toEqual({ open: true, finishedAt: null })
     expect(view.archive).toMatchObject({ present: true, backupRunning: false, otherOrigin: false, tickets: 6 })
     expect(view.brands.map((brand) => [brand.id, brand.name, brand.tickets])).toEqual([
       [String(BRANDS.mapped), "Example Store", 5],
@@ -218,12 +218,13 @@ describe("imported tickets", () => {
       agentUserId: admin.id,
     })
     expect(refused.json.error).toBe("import_running")
-    // Going live waits for the open run: refused.
-    expect((await admin.b.call("PUT", "/api/v1/settings", { "intake.mode": "live" })).json.error).toBe("import_running")
+    // Finish import waits for the open run: refused; an agent may not press it.
+    expect((await admin.b.call("POST", "/api/v1/admin/import/finish")).json.error).toBe("import_running")
+    expect((await agent.call("POST", "/api/v1/admin/import/finish")).status).toBe(403)
     expect(await importer.run(second)).toEqual({ state: "done", reason: null })
   })
 
-  it("keeps every imported ticket read-only until Maane goes live, then lets it be answered with its history", async () => {
+  it("keeps every imported ticket read-only for agents until Finish import, then lets it be answered with its history", async () => {
     const admin = await firstAdmin()
     await imported(admin)
     const b = admin.b
@@ -272,9 +273,13 @@ describe("imported tickets", () => {
       [7, "follow_up"],
     ])
 
-    // Going live opens it for good.
-    expect((await b.call("PUT", "/api/v1/settings", { "intake.mode": "live" })).status).toBe(200)
+    // Finish import opens it for good: an ordinary ticket, and the page shows the import finished.
+    const finished = await b.call("POST", "/api/v1/admin/import/finish")
+    expect(finished.status).toBe(200)
+    expect((finished.json as ImportView).window).toMatchObject({ open: false })
+    expect((finished.json as ImportView).window.finishedAt).not.toBeNull()
     expect(((await b.call("GET", "/api/v1/tickets/1")).json as TicketView).ticket.imported?.readOnly).toBe(false)
+    expect((await b.call("POST", "/api/v1/admin/import/start")).json.error).toBe("import_closed")
     const sent = await b.call("POST", "/api/v1/tickets/1/messages", reply())
     expect(sent.status, JSON.stringify(sent.json)).toBe(201)
     // The email quotes the imported history: the customer's comment and the agent's public reply, without any outbox
@@ -346,7 +351,7 @@ describe("imported tickets", () => {
       "file_infected",
       "virus.txt",
     ])
-    // Read-only until Maane goes live: a reply with an imported file is refused like any other change.
+    // Read-only until Finish import: a reply with an imported file is refused like any other change.
     const answer = await b.call("POST", "/api/v1/tickets/1/messages", reply({ parts: [image?.id] }))
     expect([answer.status, answer.json.error]).toEqual([409, "ticket_imported"])
   })
@@ -402,8 +407,8 @@ describe("imported tickets", () => {
     expect(report.json.rows.filter((row: { reason: string }) => row.reason === "ticket_failed")).toMatchObject([
       { zendeskId: 3, detail: "rule:test_refuses_three" },
     ])
-    // Going live stays refused while the run is open.
-    expect((await admin.b.call("PUT", "/api/v1/settings", { "intake.mode": "live" })).json.error).toBe("import_running")
+    // Finish import stays refused while the run is open.
+    expect((await admin.b.call("POST", "/api/v1/admin/import/finish")).json.error).toBe("import_running")
     // The cause fixed, Continue (the same Start) queues a job for the same run, which goes on from ticket 3.
     await database.db.execute(sql`alter table ticket drop constraint test_refuses_three`)
     const resumed = await admin.b.call("POST", "/api/v1/admin/import/start")

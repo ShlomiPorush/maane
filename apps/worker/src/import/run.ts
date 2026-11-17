@@ -4,8 +4,8 @@
 // notifies, reopens, reminds, snoozes, schedules, or checks a delivery. One audit row per run, beside the block events
 // of text the scanner refused.
 //
-// Before its first write a run checks, in this order: the window (intake listens and Maane never went live) and the
-// chosen Maane user; the archive's state (`state.json`'s run count and coverage) and that no backup holds its lock;
+// Before its first write a run checks, in this order: the window (no admin pressed Finish import) and the chosen Maane
+// user; the archive's state (`state.json`'s run count and coverage) and that no backup holds its lock;
 // the strict offline check of the whole archive; that its origin is the origin of earlier imports; and that the state
 // is still the same, with no lock (a change means a new full check). After each ticket it reads the state again: a
 // backup that ran or started meanwhile stops the run, and the next start is a full pass. A run that stopped otherwise
@@ -15,10 +15,18 @@
 // ticket caused records the stage it stopped in and the kind of error (`failure`), never its text. When its
 // job has used up its retries, the page offers Continue (the same Start) once the cause is fixed.
 //
-// Each ticket is one transaction, which first locks the intake mode row FOR SHARE and checks the window again: it
-// writes the ticket and replaces its imported comments, notes, participants, categories, and fields from the newest
-// version, with its position, counts, and report rows. A ticket counts as imported only once that committed. Each
-// imported row keeps its source key (unique), so a run again updates the same rows.
+// Each ticket is one transaction, which first locks the import's row FOR SHARE and checks the window again, then the
+// run's row, then the ticket number lock (apps/server/src/tickets/numbers.ts, before any ticket lock, as intake takes
+// it): it writes the ticket and replaces its imported comments, notes, participants, categories, and fields from the
+// newest version, with its position, counts, and report rows. A ticket counts as imported only once that committed.
+// Each imported row keeps its source key (unique), so a run again updates the same rows.
+//
+// Maane is live from the first moment (phase 6), so intake may attach mail to an imported ticket before the import is
+// finished. Under the ticket's lock (the lock intake attaches under), a rerun checks whether intake added a message to
+// the ticket since its import: if so, it still writes the imported comments, notes, and files, but leaves the ticket's
+// own fields (status, last activity, participants, organization, categories, subject, its waiting period) as they are
+// and reports `kept_live_changes`. When an imported comment and a message intake received on the ticket share their
+// Message-ID and sender, both stay and the ticket is flagged `possible_duplicate` (apps/server/src/imports/overlap.ts).
 //
 // Files (plan 5.2): each file the manifest holds is read from the archive (never from Zendesk), scanned like an intake
 // part before the ticket's transaction, and stored in it with its part (`message_part.zendesk_attachment_id`, unique),
@@ -53,9 +61,11 @@ import {
   zendeskImport,
   zendeskTagMap,
 } from "@maane/server/db/schema"
+import { flagSameMail } from "@maane/server/imports/overlap"
 import type { ImportedMessageSource, ImportedTicketSource } from "@maane/server/imports/source"
 import { importWindow } from "@maane/server/imports/window"
 import { errorFacts, log } from "@maane/server/log"
+import { lockTicketNumbers } from "@maane/server/tickets/numbers"
 import {
   emptyImportCounts,
   type FieldScan,
@@ -83,6 +93,7 @@ import { and, eq, inArray, isNotNull, isNull, notInArray, or, sql } from "drizzl
 import { auditBlockedPart, type FileService, FileTooLargeError, type ScanOutcome, sha256Of } from "../files/service.ts"
 import type { Tx } from "../files/types.ts"
 import { auditBlockedFields, refused, scanFields, storable } from "../intake/content.ts"
+import { messageIds } from "../intake/parse.ts"
 import { sanitizeMailHtml, textFromHtml } from "../intake/sanitize.ts"
 import { wellFormed } from "../intake/text.ts"
 import { newReferenceCode } from "../intake/threading.ts"
@@ -276,7 +287,7 @@ export class ZendeskImport {
     const reader = new ArchiveReader(this.#dir)
 
     const window = await importWindow(this.#db)
-    if (!window.open) return this.#finish(runId, "refused", window.wentLiveAt ? "went_live" : "not_listening")
+    if (!window.open) return this.#finish(runId, "refused", "finished")
     const [config] = await this.#db.select().from(zendeskImport).where(eq(zendeskImport.id, 1))
     if (!config?.agentUserId) return this.#finish(runId, "refused", "no_agent")
 
@@ -374,7 +385,7 @@ export class ZendeskImport {
       await this.#hooks.afterPlan?.(zendeskId)
       const written = await this.#write(reader, runId, zendeskId, record, planned, context)
       at.ticket = null
-      if (written === "closed") return this.#finish(runId, "stopped", "went_live")
+      if (written === "closed") return this.#finish(runId, "stopped", "finished")
       if (written === "cancelled") return CANCELLED
       await this.#hooks.afterTicket?.(zendeskId)
       if (!sameMark(mark, await reader.mark())) return this.#finish(runId, "stopped", "archive_changed")
@@ -383,14 +394,15 @@ export class ZendeskImport {
     // The links between imported tickets, once every ticket is in, and the numbers after the highest one.
     at.stage = "links"
     const linked = await this.#db.transaction(async (tx) => {
-      if (!(await importWindow(tx, true)).open) return "closed"
+      if (!(await importWindow(tx, "share")).open) return "closed"
       if (!(await stillRunning(tx, runId))) return "cancelled"
+      await lockTicketNumbers(tx)
       // Set, not added: a retry after a crash between this commit and the end computes the same links again.
       await addCounts(tx, runId, {}, { links: await this.#link(tx) })
       await continueNumbers(tx)
       return "linked"
     })
-    if (linked === "closed") return this.#finish(runId, "stopped", "went_live")
+    if (linked === "closed") return this.#finish(runId, "stopped", "finished")
     if (linked === "cancelled") return CANCELLED
     await this.#hooks.afterLinks?.()
     return this.#finish(runId, "done", null)
@@ -597,10 +609,10 @@ export class ZendeskImport {
   }
 
   /**
-   * One ticket's transaction: the window again under the mode row's lock, the run's row locked and still running, then
-   * the ticket and what belongs to it (its files stored under their hashes' locks, after the ticket's), the run's
-   * position, its counts, and its report rows. Returns "closed" when the window closed, and "cancelled" when an admin
-   * cancelled the run.
+   * One ticket's transaction: the window again under the import's row, the run's row locked and still running, the
+   * ticket number lock, then the ticket and what belongs to it (its files stored under their hashes' locks, after the
+   * ticket's), the run's position, its counts, and its report rows. Returns "closed" when the import was finished, and
+   * "cancelled" when an admin cancelled the run.
    */
   async #write(
     reader: ArchiveReader,
@@ -611,8 +623,9 @@ export class ZendeskImport {
     context: Context,
   ): Promise<"written" | "skipped" | "closed" | "cancelled"> {
     return this.#db.transaction(async (tx) => {
-      if (!(await importWindow(tx, true)).open) return "closed"
+      if (!(await importWindow(tx, "share")).open) return "closed"
       if (!(await stillRunning(tx, runId))) return "cancelled"
+      await lockTicketNumbers(tx)
       await this.#hooks.inTicket?.(zendeskId)
       const reports: Report[] = []
       const counts: Partial<ImportCounts> = {}
@@ -653,6 +666,16 @@ export class ZendeskImport {
           return done("skipped")
         }
       }
+      // Intake added a message to the ticket since its import (read under the ticket's lock, which intake attaches
+      // under): its own fields stay as live mail left them.
+      const [received] = existing
+        ? await tx
+            .select({ id: message.id })
+            .from(message)
+            .where(and(eq(message.ticketId, existing.id), isNull(message.zendeskKey)))
+            .limit(1)
+        : []
+      const keepLive = received !== undefined
 
       const status = statusOf(record.status)
       const tags = tagsOf(record)
@@ -690,8 +713,12 @@ export class ZendeskImport {
       let ticketId: string
       const blockedBefore = (existing?.zendesk as ImportedTicketSource | null | undefined)?.blocked === true
       if (existing) {
-        await tx.update(ticket).set(columns).where(eq(ticket.id, existing.id))
+        await tx
+          .update(ticket)
+          .set(keepLive ? { zendesk: columns.zendesk } : columns)
+          .where(eq(ticket.id, existing.id))
         ticketId = existing.id
+        if (keepLive) reports.push({ reason: "kept_live_changes", detail: null })
       } else {
         const [made] = await tx
           .insert(ticket)
@@ -709,33 +736,35 @@ export class ZendeskImport {
           details: { ticket: zendeskId, reason: planned.ticketScan?.status, signature: planned.ticketScan?.signature },
         })
 
-      // Participants (the requester and the CCs) and categories (from the tag mapping) are the source's. The composer
-      // takes the earliest participant as the recipient (then the address), so each is a millisecond after the one
-      // before it: the requester first, then the CCs in Zendesk's order.
-      await tx.delete(ticketParticipant).where(eq(ticketParticipant.ticketId, ticketId))
-      people = wellFormed(people).value
-      const since = Date.now()
-      if (people.length > 0)
-        await tx
-          .insert(ticketParticipant)
-          .values(people.map((person, index) => ({ ticketId, ...person, createdAt: new Date(since + index) })))
-      await tx.delete(ticketCategory).where(eq(ticketCategory.ticketId, ticketId))
-      const categories = [...new Set(tags.flatMap((tag) => context.tagMap.get(tag) ?? []))]
-      if (categories.length > 0)
-        await tx.insert(ticketCategory).values(categories.map((categoryId) => ({ ticketId, categoryId })))
+      if (!keepLive) {
+        // Participants (the requester and the CCs) and categories (from the tag mapping) are the source's. The
+        // composer takes the earliest participant as the recipient (then the address), so each is a millisecond after
+        // the one before it: the requester first, then the CCs in Zendesk's order.
+        await tx.delete(ticketParticipant).where(eq(ticketParticipant.ticketId, ticketId))
+        people = wellFormed(people).value
+        const since = Date.now()
+        if (people.length > 0)
+          await tx
+            .insert(ticketParticipant)
+            .values(people.map((person, index) => ({ ticketId, ...person, createdAt: new Date(since + index) })))
+        await tx.delete(ticketCategory).where(eq(ticketCategory.ticketId, ticketId))
+        const categories = [...new Set(tags.flatMap((tag) => context.tagMap.get(tag) ?? []))]
+        if (categories.length > 0)
+          await tx.insert(ticketCategory).values(categories.map((categoryId) => ({ ticketId, categoryId })))
 
-      // A pending ticket waits for its customer as Zendesk left it: an imported period never sends a reminder.
-      const [open] = await tx
-        .select({ id: waitingPeriod.id, origin: waitingPeriod.origin })
-        .from(waitingPeriod)
-        .where(and(eq(waitingPeriod.ticketId, ticketId), isNull(waitingPeriod.endedAt)))
-      if (status === "pending" && !open)
-        await tx.insert(waitingPeriod).values({ ticketId, origin: "import", startedAt: new Date(record.updated_at) })
-      if (status !== "pending" && open?.origin === "import")
-        await tx
-          .update(waitingPeriod)
-          .set({ endedAt: sql`now()`, endReason: "status_change" })
-          .where(eq(waitingPeriod.id, open.id))
+        // A pending ticket waits for its customer as Zendesk left it: an imported period never sends a reminder.
+        const [open] = await tx
+          .select({ id: waitingPeriod.id, origin: waitingPeriod.origin })
+          .from(waitingPeriod)
+          .where(and(eq(waitingPeriod.ticketId, ticketId), isNull(waitingPeriod.endedAt)))
+        if (status === "pending" && !open)
+          await tx.insert(waitingPeriod).values({ ticketId, origin: "import", startedAt: new Date(record.updated_at) })
+        if (status !== "pending" && open?.origin === "import")
+          await tx
+            .update(waitingPeriod)
+            .set({ endedAt: sql`now()`, endReason: "status_change" })
+            .where(eq(waitingPeriod.id, open.id))
+      }
 
       // The comments, notes, and side conversation messages, by their source keys.
       const before = new Map(
@@ -775,6 +804,9 @@ export class ZendeskImport {
           reviewFlags: flags,
           authorUserId: item.direction === "in" ? null : context.agentUserId,
           zendesk: headersOk ? item.source : withoutNames(item.source),
+          // Read only by the check for the same mail through both paths, normalized as intake reads a Message-ID.
+          zendeskMessageId:
+            item.source.email.kind === "recorded" ? (messageIds(item.source.email.messageId)[0] ?? null) : null,
         }
         // Every string of the row well formed, as intake's: a name or an address may hold U+0000 too.
         const clean = wellFormed(raw)
@@ -821,6 +853,9 @@ export class ZendeskImport {
           .where(inArray(messagePart.messageId, tx.select({ id: message.id }).from(message).where(left)))
         await tx.delete(message).where(left)
       }
+
+      // The same mail through intake and the import: both stay, the ticket is flagged (phase 6).
+      await flagSameMail(tx, ticketId)
 
       reports.push(...fileReports)
       counts.tickets = 1
@@ -945,7 +980,7 @@ function sameRecorded(run: { archiveRuns: number | null; coveredUntil: Date | nu
 
 /**
  * Locks a run's row and says whether it is still running. Every transaction of a run that writes calls it first (after
- * the mode row's lock), so a cancel, which updates that row, waits for it, and a transaction after a cancel writes
+ * the import's row), so a cancel, which updates that row, waits for it, and a transaction after a cancel writes
  * nothing.
  */
 async function stillRunning(tx: Tx, runId: string): Promise<boolean> {
@@ -972,14 +1007,19 @@ async function addCounts(
 }
 
 /**
- * The ticket numbers go on right after the highest ticket number, with no gap (owner's decision 1). `setval` is not
- * transactional: it is set to a number a ticket holds, so a rollback after it leaves a gap at worst, never a reuse.
- * Called after each ticket, so both reads use the number's unique index: `max` and `exists`, never a count.
+ * The ticket numbers go on right after the highest ticket number, with no gap (owner's decision 1), and never move
+ * back: the sequence is set to the highest ticket number or the last number it handed out, whichever is higher (its
+ * `last_value` and `is_called`, read from the sequence itself). Called under the ticket number lock, so no number intake
+ * drew is uncommitted meanwhile. `setval` is not transactional: a rollback after it leaves a gap at worst, never a
+ * reuse. Called after each ticket, so the read uses the number's unique index (`max`, never a count).
  */
 async function continueNumbers(tx: Tx): Promise<void> {
-  await tx.execute(
-    sql`select setval('ticket_number_seq', greatest((select coalesce(max(${ticket.number}), 0) from ${ticket}), 1), exists (select 1 from ${ticket}))`,
-  )
+  await tx.execute(sql`
+    select setval('ticket_number_seq', greatest(highest, 1), highest > 0)
+    from (select greatest(
+      (select coalesce(max(${ticket.number}), 0) from ${ticket}),
+      (select case when is_called then last_value else last_value - 1 end from ticket_number_seq)
+    ) as highest) as numbers`)
 }
 
 /** A list in batches of at most `size` items, in order. */

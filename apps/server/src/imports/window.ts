@@ -1,77 +1,68 @@
-// The import window (plan 5.1, "the rule that keeps it simple"): imports happen only while intake listens and Maane
-// has never gone live. The first switch of the intake mode to live records that fact in the import's row and closes
-// the window for good; a switch to live is refused while a run is open. Until then an imported ticket is read-only:
-// every action on it, and the deletion of a category one carries, is refused here.
+// The import window (plan 5.1, phase 6): imports happen until an admin presses Finish import, which records
+// `zendesk_import.finished_at` and closes the window for good; it is refused while a run is open. Until then an
+// imported ticket is read-only for agents: every action on it, and the deletion of a category one carries, is refused
+// here. Live intake may still attach mail to an imported ticket meanwhile (Maane is live from the first moment).
 //
-// Lock order: the intake mode row, then the import's row. A switch to live locks the mode row FOR UPDATE before it
-// reads the runs; a start and every ticket of a run lock it FOR SHARE first, so they serialize with a switch.
+// Lock order: the import's row, then the run's row. Finish, a start, and the mappings lock the import's row FOR UPDATE
+// before they read the window and the open run; every ticket of a run locks it FOR SHARE first, so they serialize.
 
-import { type IntakeMode, SETTINGS } from "@maane/shared"
 import { and, eq, isNotNull, sql } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
-import { importRun, setting, ticket, ticketCategory, zendeskImport } from "../db/schema.ts"
+import { importRun, ticket, ticketCategory, zendeskImport } from "../db/schema.ts"
 import { Refusal } from "../organizations/refusal.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
 export interface ImportWindow {
   open: boolean
-  mode: IntakeMode
-  wentLiveAt: Date | null
+  finishedAt: Date | null
 }
 
-const modeOf = (value: unknown): IntakeMode => {
-  const parsed = SETTINGS["intake.mode"].schema.safeParse(value)
-  return parsed.success ? parsed.data : SETTINGS["intake.mode"].defaultValue
-}
-
-/** When Maane first went live, or null. */
-export async function wentLiveAt(tx: Pick<Tx, "select">): Promise<Date | null> {
-  const [row] = await tx.select({ at: zendeskImport.wentLiveAt }).from(zendeskImport).where(eq(zendeskImport.id, 1))
+/** When an admin pressed Finish import, or null. */
+export async function finishedAt(tx: Pick<Tx, "select">): Promise<Date | null> {
+  const [row] = await tx.select({ at: zendeskImport.finishedAt }).from(zendeskImport).where(eq(zendeskImport.id, 1))
   return row?.at ?? null
 }
 
 /**
- * The window as this transaction sees it. With `lock`, the mode row is held FOR SHARE until the transaction ends, so
- * a switch to live waits for it (a start, and each ticket of a run).
+ * The window as this transaction sees it. With `lock`, the import's row is held (`update` for a change of the window
+ * or a start, `share` for a run's ticket) until the transaction ends.
  */
-export async function importWindow(tx: Pick<Tx, "select">, lock = false): Promise<ImportWindow> {
-  const query = tx.select({ value: setting.value }).from(setting).where(eq(setting.key, "intake.mode"))
-  const [row] = lock ? await query.for("share") : await query
-  const mode = modeOf(row?.value)
-  const at = await wentLiveAt(tx)
-  return { open: mode === "listening" && at === null, mode, wentLiveAt: at }
+export async function importWindow(tx: Pick<Tx, "select">, lock?: "update" | "share"): Promise<ImportWindow> {
+  const query = tx.select({ at: zendeskImport.finishedAt }).from(zendeskImport).where(eq(zendeskImport.id, 1))
+  const [row] = lock ? await query.for(lock) : await query
+  const at = row?.at ?? null
+  return { open: at === null, finishedAt: at }
 }
 
 /**
- * A switch of the intake mode to live (called by the settings service inside its transaction, before it writes):
- * locks the mode row FOR UPDATE, refuses while an import run is open, and records the first time Maane went live.
+ * Finish import (an admin's action, final): under the import's row, refused while a run is open; records when. Returns
+ * false when the import was already finished.
  */
-export async function goingLive(tx: Pick<Tx, "select" | "update">): Promise<void> {
-  await tx.select({ key: setting.key }).from(setting).where(eq(setting.key, "intake.mode")).for("update")
+export async function finishImport(tx: Pick<Tx, "select" | "update">): Promise<boolean> {
+  const window = await importWindow(tx, "update")
+  if (!window.open) return false
   const [open] = await tx.select({ id: importRun.id }).from(importRun).where(eq(importRun.state, "running")).limit(1)
-  if (open) throw new Refusal("import_running", 409, { key: "intake.mode" })
-  await tx
-    .update(zendeskImport)
-    .set({ wentLiveAt: sql`coalesce(${zendeskImport.wentLiveAt}, now())`, updatedAt: new Date() })
-    .where(eq(zendeskImport.id, 1))
+  if (open) throw new Refusal("import_running", 409)
+  await tx.update(zendeskImport).set({ finishedAt: sql`now()`, updatedAt: new Date() }).where(eq(zendeskImport.id, 1))
+  return true
 }
 
-/** Whether a ticket is imported and still read-only (Maane never went live). */
+/** Whether a ticket is imported and still read-only for agents (the import is not finished). */
 export async function importedReadOnly(tx: Pick<Tx, "select">, ticketId: string): Promise<boolean> {
   const [row] = await tx.select({ zendeskId: ticket.zendeskId }).from(ticket).where(eq(ticket.id, ticketId))
   if (row?.zendeskId === null || row?.zendeskId === undefined) return false
-  return (await wentLiveAt(tx)) === null
+  return (await finishedAt(tx)) === null
 }
 
-/** Refuses any change to an imported ticket until Maane goes live. */
+/** Refuses an agent's change to an imported ticket until the import is finished. */
 export async function refuseImported(tx: Pick<Tx, "select">, ticketId: string): Promise<void> {
   if (await importedReadOnly(tx, ticketId)) throw new Refusal("ticket_imported", 409)
 }
 
-/** Refuses deleting a category an imported ticket carries until Maane goes live (it would change that ticket). */
+/** Refuses deleting a category an imported ticket carries until the import is finished (it would change that ticket). */
 export async function refuseImportedCategory(tx: Pick<Tx, "select">, categoryId: string): Promise<void> {
-  if ((await wentLiveAt(tx)) !== null) return
+  if ((await finishedAt(tx)) !== null) return
   const [carried] = await tx
     .select({ one: sql<number>`1` })
     .from(ticketCategory)

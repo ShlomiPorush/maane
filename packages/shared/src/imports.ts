@@ -1,22 +1,20 @@
 // The words of the import from the Zendesk archive (plan 5.1) that the server, the worker, and the UI share: the states
 // of a run, why a run was refused or stopped, the reasons of the report, and the shapes of the import page.
 
-import type { IntakeMode } from "./settings.ts"
 import type { OrganizationRef } from "./tickets.ts"
 import type { CategoryRef } from "./workflow.ts"
 
 /**
  * A run's state: `running` (started, its job active or waiting to go on after a crash), `done`, `stopped` (the archive
- * changed under it, the window closed, or an admin cancelled it: the next start is a full pass), or `refused` (nothing
- * was written).
+ * changed under it, the import was finished, or an admin cancelled it: the next start is a full pass), or `refused`
+ * (nothing was written).
  */
 export const IMPORT_RUN_STATES = ["running", "done", "stopped", "refused"] as const
 export type ImportRunState = (typeof IMPORT_RUN_STATES)[number]
 
 /**
  * Why a run was refused or stopped, or a start refused:
- * - `went_live`: Maane went live; the import window is closed for good.
- * - `not_listening`: the intake mode is not listening.
+ * - `finished`: an admin pressed Finish import; the import window is closed for good.
  * - `no_agent`: no Maane user was chosen for the comments of Zendesk agents.
  * - `no_archive`: no archive at the mount.
  * - `backup_running`: the backup tool holds the archive's lock; finish the backup first.
@@ -30,8 +28,7 @@ export type ImportRunState = (typeof IMPORT_RUN_STATES)[number]
  * - `cancelled`: an admin cancelled the open run. What it imported stays; the next start is a full pass.
  */
 export const IMPORT_STOP_REASONS = [
-  "went_live",
-  "not_listening",
+  "finished",
   "no_agent",
   "no_archive",
   "backup_running",
@@ -58,6 +55,9 @@ export type ImportStopReason = (typeof IMPORT_STOP_REASONS)[number]
  *   `_`, and `-`), so it is not imported. Its detail is the file's name, or none when the scanner blocked the names of
  *   its comment.
  * - `blocked_content`: the scanner blocked a text of a comment, which was kept without it.
+ * - `kept_live_changes`: intake added a message to this imported ticket since its import (phase 6), so this run
+ *   updated its imported comments, notes, and files but left the ticket's own fields (status, last activity,
+ *   participants, organization, categories, subject) as they are.
  * - `ticket_failed`: the ticket could not be saved, so the run stopped there (the last such error of the run). Its
  *   detail is an IMPORT_FAILURES kind, then `:` and the database constraint's name when one was named; never the
  *   error's text, which may hold the row's values.
@@ -71,6 +71,7 @@ export const IMPORT_REPORT_REASONS = [
   "file_blocked",
   "file_unusable_id",
   "blocked_content",
+  "kept_live_changes",
   "ticket_failed",
 ] as const
 export type ImportReportReason = (typeof IMPORT_REPORT_REASONS)[number]
@@ -180,8 +181,8 @@ export interface ImportTagView {
 }
 
 export interface ImportView {
-  /** The import window: open while intake listens and Maane never went live. */
-  window: { open: boolean; mode: IntakeMode; wentLiveAt: string | null }
+  /** The import window: open until an admin presses Finish import (`finishedAt`). */
+  window: { open: boolean; finishedAt: string | null }
   archive: ImportArchiveView
   brands: ImportBrandView[]
   tags: ImportTagView[]
@@ -211,7 +212,7 @@ export interface ImportedField {
 /** What the ticket view shows of an imported ticket. */
 export interface ImportedTicketView {
   zendeskId: number
-  /** Read-only until Maane first goes live. */
+  /** Read-only for agents until an admin presses Finish import. */
   readOnly: boolean
   brand: string | null
   tags: string[]
