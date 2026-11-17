@@ -345,7 +345,7 @@ describe("an imported comment and a received message already on one ticket befor
       const [created] = await sql<{ id: string }>(
         `insert into ticket (number, reference_code, organization_id, support_address, status, zendesk_id, zendesk)
          values ($1, $2, $3, 'store@example.com', 'open', $1, '{}'::jsonb) returning id`,
-        [number, `AAAA-BBB${number}`, org?.id],
+        [number, `AAAA-BBB${number + 1}`, org?.id],
       )
       const ticketId = created?.id ?? ""
       const email = {
