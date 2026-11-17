@@ -255,11 +255,10 @@ run_file_checks() {
 # Intake end to end, as the worker runs it: apps/worker/src/testing/stack-intake.ts (bundled by run_file_checks) in a
 # container of the worker service, against the stack's database and the real ClamAV, with a stand-in Graph inside
 # that container. Runs before the end-to-end tests, which read the tickets it makes (e2e/tickets.spec.ts): messages
-# become tickets of two organizations in live mode and intake records in listening mode; the check leaves the intake
-# mode listening, no source current, and no default address.
+# become tickets of two organizations; the check leaves no source current and no default address.
 run_intake_checks() {
   local out
-  info "Intake: stand-in Graph to tickets and listening records, with the real ClamAV ($STACK_PROJECT)"
+  info "Intake: stand-in Graph to tickets, with the real ClamAV ($STACK_PROJECT)"
   local check=(stack run --rm --no-deps -T -v "$REPO_ROOT/apps/worker/dist/stack-check:/check:ro" worker)
   out="$("${check[@]}" node /check/stack-intake.js 2>&1)" || {
     echo "$out"

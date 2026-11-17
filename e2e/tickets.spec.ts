@@ -204,20 +204,17 @@ test.describe("desktop", () => {
     expect(violations).toEqual([])
   })
 
-  test("the intake log shows what intake did, and what it would have done while listening", async ({ page }) => {
+  test("the intake log shows what intake did, with no listening view", async ({ page }) => {
     await signIn(page)
     await page.goto("/intake")
-    // Rows are told apart by their mode and outcome: one word of an outcome can be part of another's.
-    const listeningJoined = page.locator('.ui-intake-row[data-mode="listening"][data-outcome="joined"]')
-    await expect(listeningJoined).toHaveCount(1)
-    await expect(listeningJoined).toContainText(he("intake.outcomeWould.joined"))
-    const automated = page.locator('.ui-intake-row[data-mode="live"][data-outcome="automated"]')
+    // Rows are told apart by their outcome: one word of an outcome can be part of another's.
+    const automated = page.locator('.ui-intake-row[data-outcome="automated"]')
     await expect(automated).toHaveCount(1)
     await expect(automated).toContainText(he("intake.outcome.automated"))
-    await page.getByRole("button", { name: he("intake.mode.listening"), exact: true }).click()
-    await expect(page).toHaveURL(/\/intake\?mode=listening$/)
-    await expect(page.locator('.ui-intake-row[data-mode="live"]')).toHaveCount(0)
-    await expect(listeningJoined).toHaveCount(1)
+    const opened = page.locator('.ui-intake-row[data-outcome="new_ticket"]')
+    await expect(opened.first()).toContainText(he("intake.outcome.new_ticket"))
+    // Maane is live from the first moment (phase 6): no row carries a mode.
+    await expect(page.locator(".ui-intake-row[data-mode]")).toHaveCount(0)
   })
 
   test("an agent of another organization gets 404 for a ticket, its body, and its files", async ({ page, browser }) => {
