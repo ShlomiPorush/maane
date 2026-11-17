@@ -245,8 +245,8 @@ describe("the removal of listening mode (migrations 0029 to 0031)", () => {
 })
 
 // Phase 6 keeps an imported comment's Message-ID in its own column (migration 0028), which a run writes. A comment
-// imported before that migration gets it from its `zendesk` JSON, read as messageIds() reads it, so a live message
-// with the same Message-ID and sender flags its ticket without a rerun.
+// imported before that migration gets it from its `zendesk` JSON in the custom migration 0029, read as messageIds()
+// reads it, so a live message with the same Message-ID and sender flags its ticket without a rerun.
 describe("the Message-ID of comments imported before migration 0028", () => {
   let older: Database
   const sql = queryOf(() => older)
