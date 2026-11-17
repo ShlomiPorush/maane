@@ -1306,6 +1306,7 @@
     "unknownHint": "The mail server stopped answering while it took the message. Maane does not send it again by itself. Send it again to the recipients not accepted, or mark each recipient you know received it as sent.",
     "refusedAll": "The mail servers refused every recipient.",
     "problem": {
+      "listening": "Intake was listening at the time, so Maane sent nothing.",
       "from_not_allowed": "The From address no longer belongs to this ticket's organization, so Maane sent nothing.",
       "author_not_allowed": "The author may no longer answer this ticket, so Maane sent nothing.",
       "not_configured": "No mail server is set up. Set SMTP2GO or the backup server in Settings.",
@@ -1431,6 +1432,7 @@
       "agent": "An agent cancelled it.",
       "customer_reply": "The customer wrote before it went out, so it was cancelled. You can write a new reply.",
       "move": "The ticket moved to another organization, so it was cancelled.",
+      "listening": "Intake was listening at its time, so Maane sent nothing.",
       "from_not_allowed": "At its time its From address no longer belonged to the ticket's organization, so Maane sent nothing.",
       "author_not_allowed": "At its time its author could no longer answer this ticket, so Maane sent nothing.",
       "status_change": "The ticket left pending, so it was cancelled.",
@@ -1513,6 +1515,8 @@
       },
       "reason": {
         "finished": "The import is finished, so nothing more can be imported.",
+        "went_live": "Maane had gone live, so the import was closed.",
+        "not_listening": "Intake was live, so the import was closed.",
         "no_agent": "No user was chosen for Zendesk agents' comments.",
         "no_archive": "No archive was found at the mount.",
         "backup_running": "A backup was running. Start again after it finishes.",

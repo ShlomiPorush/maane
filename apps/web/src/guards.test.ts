@@ -330,7 +330,9 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "ticket.link.": LINK_REASONS,
   "import.run.state.": IMPORT_RUN_STATES,
   "import.run.stage.": IMPORT_STAGES,
-  "import.run.reason.": IMPORT_STOP_REASONS,
+  // With went_live and not_listening here, and listening in delivery.problem and scheduled.reason below: values only
+  // rows from before phase 6 (listening mode) carry, still shown.
+  "import.run.reason.": [...IMPORT_STOP_REASONS, "went_live", "not_listening"],
   "import.run.counts.": Object.keys(emptyImportCounts()),
   "import.report.reason.": IMPORT_REPORT_REASONS,
   "import.report.failure.": IMPORT_FAILURES,
@@ -341,8 +343,8 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "delivery.state.": OUTBOX_STATES,
   "delivery.recipient.": RECIPIENT_STATES,
   "delivery.provider.": PROVIDERS,
-  "delivery.problem.": SEND_PROBLEMS,
-  "scheduled.reason.": ACTION_REASONS,
+  "delivery.problem.": [...SEND_PROBLEMS, "listening"],
+  "scheduled.reason.": [...ACTION_REASONS, "listening"],
   "audit.snoozeEnd.": ["agent", "time", "customer_reply"],
   "delivery.status.": DELIVERY_STATUSES,
   "settings.sending.": SETTING_ROWS.filter(
