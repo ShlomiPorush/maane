@@ -146,10 +146,8 @@
       "addressTaken": "This address or pattern already belongs to an organization.",
       "addressNotFound": "This address no longer exists. Reload the page.",
       "addressDefaultNotExact": "Only an exact address can be the default address.",
-      "intakeNoDefaultAddress": "Live intake needs a default address. Make an exact address the default under Organizations first.",
-      "intakeDefaultRequired": "Intake is live, so the default address cannot be removed. Make another address the default first, or switch intake to listening.",
+      "intakeDefaultRequired": "The default address cannot be removed: mail needs it. Make another address the default first.",
       "previewRefused": "This file cannot be previewed. Download it instead.",
-      "listeningMode": "Intake is listening, so Maane sends no replies. Add an internal note instead.",
       "fromNotAllowed": "Choose a From address of this ticket's organization.",
       "recipientsRequired": "Add at least one recipient in To.",
       "recipientInvalid": "One of the recipients is not a valid address. Check To and Cc.",
@@ -179,10 +177,10 @@
       "scheduledChanged": "This scheduled reply changed meanwhile. Open it again to change the newest version.",
       "scheduledNotAuthor": "Only the agent who wrote this scheduled reply can change it. You can still cancel it.",
       "submissionReused": "Your earlier request from this composer went through. Check the ticket, then send this one again.",
-      "ticketImported": "This ticket was imported from Zendesk. It is read-only until Maane goes live.",
-      "categoryImported": "An imported ticket carries this category. You can delete it after Maane goes live.",
+      "ticketImported": "This ticket was imported from Zendesk. It is read-only until an admin finishes the import.",
+      "categoryImported": "An imported ticket carries this category. You can delete it after the import is finished.",
       "importRunning": "An import from Zendesk is running. Wait until it finishes, then try again.",
-      "importClosed": "Maane has gone live, so the import from Zendesk is closed.",
+      "importClosed": "The import from Zendesk is finished, so nothing more can be imported.",
       "importNoAgent": "Choose who Zendesk agents' comments are written by, save the mapping, then start.",
       "importUserInvalid": "Choose an active admin or agent."
     }
@@ -429,9 +427,9 @@
       "tag": "Snoozed until {time}"
     },
     "imported": {
-      "readOnly": "Imported from Zendesk: read-only until Maane goes live",
-      "readOnlyHint": "Its status, categories, organization, and replies can change only after Maane goes live.",
-      "composerLocked": "Replies and notes open when Maane goes live",
+      "readOnly": "Imported from Zendesk: read-only until the import is finished",
+      "readOnlyHint": "Its status, categories, organization, and replies can change only after an admin finishes the import.",
+      "composerLocked": "Replies and notes open when the import is finished",
       "title": "From Zendesk",
       "number": "Zendesk number",
       "zendeskNumber": "Zendesk #{number}",
@@ -483,23 +481,19 @@
     "possibly_automated": "Possibly automated",
     "sender_not_participant": "Sender not a participant",
     "ambiguous_original": "Original of several tickets",
-    "delivery_failed": "Delivery failed"
+    "delivery_failed": "Delivery failed",
+    "possible_duplicate": "Possible duplicate"
   },
   "intake": {
     "title": "Intake log",
-    "description": "What Maane did with each message it read, or would have done while listening.",
+    "description": "What Maane did with each message it read.",
     "listTitle": "Messages read",
     "loading": "Loading the intake log",
     "failed": "Could not load the intake log",
     "empty": "No messages read yet",
     "emptyHint": "Entries appear here once Maane reads the shared mailbox.",
     "emptyFiltered": "No entries match these filters",
-    "modeLabel": "Mode",
     "all": "All",
-    "mode": {
-      "listening": "Listening",
-      "live": "Live"
-    },
     "review": "Review",
     "needsReview": "Needs review",
     "outcome": {
@@ -510,15 +504,6 @@
       "new_ticket": "New ticket",
       "joined": "Joined a ticket",
       "new_linked_ticket": "New linked ticket"
-    },
-    "outcomeWould": {
-      "copy": "Copy of an earlier message",
-      "automated": "Automated mail, no ticket",
-      "unreadable": "Content not read",
-      "no_address": "No support address, no ticket",
-      "new_ticket": "Would open a new ticket",
-      "joined": "Would join a ticket",
-      "new_linked_ticket": "Would open a linked ticket"
     },
     "ticket": "Ticket",
     "matched": "Matched",
@@ -726,18 +711,6 @@
     "invalid": "{field}: the value is not valid.",
     "refusedField": "{field}: {reason}",
     "saved": "The settings are saved.",
-    "intake": "Intake",
-    "intakeMode": {
-      "label": "Intake mode",
-      "mode": {
-        "listening": "Listening",
-        "live": "Live"
-      },
-      "explain": {
-        "listening": "Listening: Maane records each message and what it would have done, and opens no ticket. Use it until cutover.",
-        "live": "Live: each message opens a ticket or joins one. It needs a default address."
-      }
-    },
     "graphGroup": "Microsoft Graph",
     "graphIntro": "Maane reads the intake mailbox through Microsoft Graph, read only. It never moves, marks, or deletes mail.",
     "graphTenant": {
@@ -1076,7 +1049,8 @@
       "import": {
         "mapping": "Zendesk import mapping saved",
         "run": "Zendesk import run ended",
-        "cancel": "Zendesk import run cancelled"
+        "cancel": "Zendesk import run cancelled",
+        "finish": "Zendesk import finished"
       }
     },
     "change": "{from}, now {to}",
@@ -1245,7 +1219,6 @@
       "reply": "Reply",
       "note": "Internal note"
     },
-    "listening": "Intake is listening, so Maane sends no replies yet. You can still add internal notes.",
     "noteHint": "Only agents see an internal note. It is never sent to the customer.",
     "text": "Message",
     "format": "Formatting",
@@ -1333,7 +1306,6 @@
     "unknownHint": "The mail server stopped answering while it took the message. Maane does not send it again by itself. Send it again to the recipients not accepted, or mark each recipient you know received it as sent.",
     "refusedAll": "The mail servers refused every recipient.",
     "problem": {
-      "listening": "Intake is listening, so Maane sent nothing.",
       "from_not_allowed": "The From address no longer belongs to this ticket's organization, so Maane sent nothing.",
       "author_not_allowed": "The author may no longer answer this ticket, so Maane sent nothing.",
       "not_configured": "No mail server is set up. Set SMTP2GO or the backup server in Settings.",
@@ -1459,7 +1431,6 @@
       "agent": "An agent cancelled it.",
       "customer_reply": "The customer wrote before it went out, so it was cancelled. You can write a new reply.",
       "move": "The ticket moved to another organization, so it was cancelled.",
-      "listening": "Intake was listening at its time, so Maane sent nothing.",
       "from_not_allowed": "At its time its From address no longer belonged to the ticket's organization, so Maane sent nothing.",
       "author_not_allowed": "At its time its author could no longer answer this ticket, so Maane sent nothing.",
       "status_change": "The ticket left pending, so it was cancelled.",
@@ -1481,12 +1452,11 @@
   },
   "import": {
     "title": "Import from Zendesk",
-    "description": "Brings the Zendesk history in from the backup archive, before Maane goes live. Imported tickets stay read-only until then.",
+    "description": "Brings the Zendesk history in from the backup archive. Imported tickets stay read-only until an admin finishes the import.",
     "loading": "Loading the import",
     "failed": "Could not load the import",
-    "closed": "The import is closed for good",
-    "wentLive": "Maane went live on",
-    "notListening": "Intake is live, so nothing can be imported.",
+    "closed": "The import is finished",
+    "finishedOn": "Finished on",
     "zendeskNumber": "Zendesk #{number}",
     "ticketCount": {
       "one": "1 ticket",
@@ -1542,8 +1512,7 @@
         "refused": "Refused"
       },
       "reason": {
-        "went_live": "Maane went live, so the import is closed.",
-        "not_listening": "Intake is live, so the import is closed.",
+        "finished": "The import is finished, so nothing more can be imported.",
         "no_agent": "No user was chosen for Zendesk agents' comments.",
         "no_archive": "No archive was found at the mount.",
         "backup_running": "A backup was running. Start again after it finishes.",
@@ -1585,6 +1554,19 @@
       "waiting": "Nothing is working on this run now. Fix what stopped it, then press Continue import.",
       "retrying": "Maane will try this run again by itself. Nothing needs doing yet."
     },
+    "finish": {
+      "title": "Finish import",
+      "hint": "Press this once the last import after the mail rules changed is done. Imported tickets then become ordinary tickets, and nothing more can be imported. It cannot be undone.",
+      "button": "Finish import",
+      "busy": "Finishing",
+      "runOpen": "A run is open. Let it finish or cancel it first.",
+      "confirmTitle": "Finish the import for good?",
+      "confirmMessage": "Imported tickets become ordinary tickets, and no import can run again. This cannot be undone.",
+      "confirm": "Finish import",
+      "keep": "Not yet",
+      "done": "The import is finished. Imported tickets are ordinary tickets now.",
+      "failed": "Could not finish the import. {reason}"
+    },
     "report": {
       "title": "Report",
       "hint": "What the newest run did not import, or imported only in part.",
@@ -1604,6 +1586,7 @@
         "file_blocked": "A file of a blocked type: not stored",
         "file_unusable_id": "A file without an ID the import can use: not imported",
         "blocked_content": "The scanner blocked a text",
+        "kept_live_changes": "Mail arrived in Maane for this ticket: its comments were updated, its status and details kept",
         "ticket_failed": "Could not be saved, so the run stopped here"
       },
       "failure": {

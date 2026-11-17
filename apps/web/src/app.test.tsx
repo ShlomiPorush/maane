@@ -484,7 +484,6 @@ describe("settings", () => {
       settings: [
         view("general.defaultLocale", "he"),
         view("security.sessionDays", 14),
-        view("intake.mode", "listening"),
         view("scanner.address", "clamav:3310"),
         view("scanner.unavailablePolicy", "block"),
         view("files.maxBytes", 50 * 1024 * 1024),
@@ -776,7 +775,7 @@ describe("organizations", () => {
     expect(JSON.parse(sent?.body ?? "{}")).toEqual({ kind: "pattern", value: "support-*@example.com" })
   })
 
-  it("explains both intake modes in Settings, and points a refused switch to live at its field", async () => {
+  it("has no intake mode in Settings: Maane is live from the first moment", async () => {
     const view = (key: string, value: unknown) => ({
       key,
       value,
@@ -788,31 +787,13 @@ describe("organizations", () => {
     await renderAt("/settings", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
-      "/api/v1/settings": (request) =>
-        request.method === "PUT"
-          ? { status: 409, body: { error: "intake_no_default_address", key: "intake.mode" } }
-          : ok({
-              settings: [
-                view("general.defaultLocale", "he"),
-                view("security.sessionDays", 14),
-                view("intake.mode", "listening"),
-              ],
-            }),
+      "/api/v1/settings": ok({
+        settings: [view("general.defaultLocale", "he"), view("security.sessionDays", 14)],
+      }),
     })
-    await vi.waitFor(() => expect(text()).toContain(he("settings.intakeMode.explain.listening")))
-    expect(text()).toContain(he("settings.intakeMode.explain.live"))
-    expect(document.querySelector('button[data-mode="listening"]')?.getAttribute("aria-pressed")).toBe("true")
-    await act(async () => document.querySelector<HTMLButtonElement>('button[data-mode="live"]')?.click())
-    await act(async () => document.querySelector<HTMLButtonElement>(".ui-savebar-save")?.click())
-    await vi.waitFor(() =>
-      expect(text()).toContain(
-        he("settings.refusedField", {
-          field: he("settings.intakeMode.label"),
-          reason: he("errors.code.intakeNoDefaultAddress"),
-        }),
-      ),
-    )
-    expect(JSON.parse(requests.find((r) => r.method === "PUT")?.body ?? "{}")).toEqual({ "intake.mode": "live" })
+    await vi.waitFor(() => expect(text()).toContain(he("settings.defaultLocale.label")))
+    expect(document.querySelector("#settings-intake")).toBeNull()
+    expect(document.querySelector("button[data-mode]")).toBeNull()
   })
 
   it("makes SMTP2GO's webhook address and token, shows them once, and asks before replacing them", async () => {
@@ -1532,7 +1513,6 @@ describe("tickets", () => {
   const view = (
     version = "v1",
     replies: object[] = [],
-    listening = false,
     ticketOver: Record<string, unknown> = {},
     moveTargets: { id: string; name: string }[] = [{ id: ORG_B, name: "Beta" }],
     scheduled: object[] = [],
@@ -1597,7 +1577,6 @@ describe("tickets", () => {
         cc: [{ address: "ron@example.com", name: null }],
         signature: `Alpha support\n${SHALOM},\nThe Alpha team.`,
         senderName: "Agent Name (Alpha)",
-        listening,
       },
       categories: [
         { id: CATEGORY, name: "Billing" },
@@ -1764,7 +1743,7 @@ describe("tickets", () => {
     expect(statusFilter.value).toBe("open_work")
   })
 
-  it("shows an imported ticket read-only until go-live, with its From Zendesk block (plan 5.1)", async () => {
+  it("shows an imported ticket read-only until the import is finished, with its From Zendesk block (plan 5.1)", async () => {
     const imported = {
       zendeskId: 7,
       readOnly: true,
@@ -1803,7 +1782,6 @@ describe("tickets", () => {
             imported: { authorName: "Dana Customer", sideConversation: false },
           },
         ],
-        true,
         { imported },
       ),
     })
@@ -1891,7 +1869,7 @@ describe("tickets", () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
       "/api/v1/me": agent,
-      "/api/v1/tickets/7": view("v1", [], false, {}, []),
+      "/api/v1/tickets/7": view("v1", [], {}, []),
     })
     const select = await vi.waitFor(() => {
       const found = document.querySelector<HTMLSelectElement>('[data-testid="ticket-status"]')
@@ -1915,7 +1893,7 @@ describe("tickets", () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
       "/api/v1/me": agent,
-      "/api/v1/tickets/7": view("v1", [], false, { status: "closed" }, []),
+      "/api/v1/tickets/7": view("v1", [], { status: "closed" }, []),
     })
     await vi.waitFor(() => expect(text()).toContain(he("ticket.statusClosedHint")))
     expect(document.querySelector<HTMLSelectElement>('[data-testid="ticket-status"]')?.disabled).toBe(true)
@@ -1977,7 +1955,6 @@ describe("tickets", () => {
         cc: [],
         signature: "Beta support",
         senderName: "Agent Name (Beta)",
-        listening: false,
       },
     })
     await renderAt("/tickets/7", {
@@ -2095,7 +2072,7 @@ describe("tickets", () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
-      "/api/v1/tickets/7": view("v1", [], false, {}, [{ id: ORG_B, name: "Beta" }], scheduled),
+      "/api/v1/tickets/7": view("v1", [], {}, [{ id: ORG_B, name: "Beta" }], scheduled),
       [`/api/v1/scheduled/${SCHEDULED}/cancel`]: ok({ ok: true }),
       [`/api/v1/scheduled/${SCHEDULED}`]: ok({ ok: true }),
     })
@@ -2181,7 +2158,7 @@ describe("tickets", () => {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
       "/api/v1/tickets/7": () =>
-        view("v1", [], false, {}, [{ id: ORG_B, name: "Beta" }], [edited, entry(OTHER, { editable: false })]),
+        view("v1", [], {}, [{ id: ORG_B, name: "Beta" }], [edited, entry(OTHER, { editable: false })]),
       [`/api/v1/scheduled/${OTHER}/cancel`]: () => {
         // Meanwhile another tab saved a newer version of the reply being changed here.
         edited = entry(EDITED, { version: 4, text: "Newer", html: "<p>Newer</p>" })
@@ -2269,7 +2246,6 @@ describe("tickets", () => {
       "/api/v1/tickets/7": view(
         "v1",
         [],
-        false,
         {},
         [{ id: ORG_B, name: "Beta" }],
         [entry(FIRST, "dana@example.com"), entry(SECOND, "lee@example.com")],
@@ -2362,7 +2338,7 @@ describe("tickets", () => {
         scheduled: true,
         delivery: {
           state: "failed",
-          problem: "listening",
+          problem: "author_not_allowed",
           unmatchedDelivery: null,
           scheduledEnded,
           recipients: [
@@ -2383,7 +2359,7 @@ describe("tickets", () => {
       Array.from(card(id)?.querySelectorAll("button") ?? []).filter(
         (b) => b.textContent?.trim() === he("delivery.resend"),
       )
-    expect(card(ENDED)?.textContent).toContain(he("delivery.problem.listening"))
+    expect(card(ENDED)?.textContent).toContain(he("delivery.problem.author_not_allowed"))
     expect(resend(ENDED)).toHaveLength(0)
     expect(resend(PASSED)).toHaveLength(1)
   })
@@ -2410,7 +2386,7 @@ describe("tickets", () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
-      "/api/v1/tickets/7": view("v1", [sent], false, { status: "pending" }, undefined, [], {
+      "/api/v1/tickets/7": view("v1", [sent], { status: "pending" }, undefined, [], {
         id: "00000000-0000-4000-8000-0000000000b2",
         dueAt: due,
         state: "scheduled",
@@ -2459,7 +2435,7 @@ describe("tickets", () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
-      "/api/v1/tickets/7": view("v1", [failed(OPEN, true), failed(ENDED, false)], false, { status: "pending" }),
+      "/api/v1/tickets/7": view("v1", [failed(OPEN, true), failed(ENDED, false)], { status: "pending" }),
     })
     const card = (id: string) => document.querySelector<HTMLElement>(`[data-message="${id}"]`)
     await vi.waitFor(() => expect(card(ENDED)).not.toBeNull())
@@ -2501,7 +2477,6 @@ describe("tickets", () => {
       "/api/v1/tickets/7": view(
         "v1",
         [],
-        false,
         {},
         [{ id: ORG_B, name: "Beta" }],
         [entry(LATE, ago(45)), entry(RECENT, ago(10))],
@@ -2534,7 +2509,7 @@ describe("tickets", () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
-      "/api/v1/tickets/7": () => view("v1", [], false, { snoozedUntil: snoozed }),
+      "/api/v1/tickets/7": () => view("v1", [], { snoozedUntil: snoozed }),
       "/api/v1/tickets/7/snooze": (request) => {
         snoozed = request.method === "PUT" ? (JSON.parse(request.body ?? "{}") as { until: string }).until : null
         return ok({ ok: true })
@@ -2574,7 +2549,7 @@ describe("tickets", () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
-      "/api/v1/tickets/7": view("v1", [], false, { snoozedUntil: null, snoozeOverdue: true }),
+      "/api/v1/tickets/7": view("v1", [], { snoozedUntil: null, snoozeOverdue: true }),
       "/api/v1/tickets/7/snooze": ok({ ok: true }),
     })
     await vi.waitFor(() => expect(document.querySelector('[data-testid="ticket-snooze"]')).not.toBeNull())
@@ -2703,7 +2678,7 @@ describe("tickets", () => {
     ...over,
   })
 
-  it("starts the composer from the participants and the ticket's address, and writes only notes while listening", async () => {
+  it("starts the composer from the participants and the ticket's address, as a reply", async () => {
     await renderAt("/tickets/7", { "/api/setup/status": status(), "/api/v1/me": admin, "/api/v1/tickets/7": view() })
     const composer = await vi.waitFor(() => {
       const found = document.querySelector<HTMLElement>(".ui-composer")
@@ -2728,23 +2703,8 @@ describe("tickets", () => {
       ["auto", `${SHALOM},`],
       ["auto", "The Alpha team."],
     ])
-    if (mounted) {
-      const { root, host } = mounted
-      await act(async () => root.unmount())
-      host.remove()
-      mounted = null
-    }
-
-    await renderAt("/tickets/7", {
-      "/api/setup/status": status(),
-      "/api/v1/me": admin,
-      "/api/v1/tickets/7": view("v1", [], true),
-    })
-    await vi.waitFor(() => expect(text()).toContain(he("compose.listening")))
-    const listening = document.querySelector<HTMLElement>(".ui-composer") as HTMLElement
-    expect(listening.getAttribute("data-kind")).toBe("note")
-    expect(listening.querySelector<HTMLButtonElement>('button[data-kind="reply"]')?.disabled).toBe(true)
-    expect(listening.querySelector(".ui-composer-fields")).toBeNull()
+    // No listening mode: a reply is always possible.
+    expect(composer.querySelector<HTMLButtonElement>('button[data-kind="reply"]')?.disabled).toBe(false)
   })
 
   it("starts a fresh composer for each ticket: another ticket's recipients and text never carry over (review R2)", async () => {
@@ -2805,7 +2765,7 @@ describe("tickets", () => {
     await renderAt("/tickets/8", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
-      "/api/v1/tickets/7": view("v1", [], false, {}, [{ id: ORG_B, name: "Beta" }], [scheduled]),
+      "/api/v1/tickets/7": view("v1", [], {}, [{ id: ORG_B, name: "Beta" }], [scheduled]),
       "/api/v1/tickets/8": ok({ ...body, ticket: { ...body.ticket, number: 8 } }),
     })
     await vi.waitFor(() => expect(document.querySelector(".ui-composer")).not.toBeNull())
@@ -3185,7 +3145,6 @@ describe("the intake log", () => {
     messageId: "m1",
     at: "2026-11-12T08:00:00.000Z",
     receivedAt: "2026-11-12T08:00:00.000Z",
-    mode: "live",
     outcome: "new_ticket",
     classification: "customer",
     reasons: [],
@@ -3200,7 +3159,7 @@ describe("the intake log", () => {
     ...over,
   })
 
-  it("shows what intake did, and what it would have done while listening", async () => {
+  it("shows what intake did, with no listening view", async () => {
     await renderAt("/intake", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
@@ -3208,9 +3167,8 @@ describe("the intake log", () => {
         entries: [
           entry({
             messageId: "m2",
-            mode: "listening",
-            outcome: "joined",
-            ticket: null,
+            outcome: "new_linked_ticket",
+            ticket: 8,
             matchedTicket: 7,
             reasons: ["sender_not_participant"],
             flags: ["sender_not_participant"],
@@ -3225,10 +3183,11 @@ describe("the intake log", () => {
       expect(found).not.toBeNull()
       return found as HTMLElement
     })
-    expect(heard.textContent).toContain(he("intake.outcomeWould.joined"))
-    expect(heard.textContent).toContain(he("intake.mode.listening"))
+    expect(heard.textContent).toContain(he("intake.outcome.new_linked_ticket"))
     expect(heard.textContent).toContain(he("flag.sender_not_participant"))
+    expect(heard.querySelector('a[href="/tickets/8"]')).not.toBeNull()
     expect(heard.querySelector('a[href="/tickets/7"]')).not.toBeNull()
+    expect(heard.hasAttribute("data-mode")).toBe(false)
     const live = document.querySelector('[data-message="m1"]') as HTMLElement
     expect(live.textContent).toContain(he("intake.outcome.automated"))
     // Every reason in words, never its code; a code the UI does not know yet shows as it is, left to right.
@@ -3240,9 +3199,9 @@ describe("the intake log", () => {
     expect(live.textContent).not.toContain("auto_submitted")
     expect(live.querySelector('[data-reason="planted_code"] bdi[dir="ltr"]')?.textContent).toBe("planted_code")
     expect(live.querySelector('.ui-item-meta bdi[dir="ltr"].ui-mono')?.textContent).toBe("dana@example.com")
-    await act(async () => button(he("intake.mode.listening"))?.click())
-    await vi.waitFor(() => expect(where()).toBe("/intake?mode=listening"))
-    expect(requests.some((r) => r.url === "/api/v1/intake?mode=listening")).toBe(true)
+    await act(async () => button(he("intake.needsReview"))?.click())
+    await vi.waitFor(() => expect(where()).toBe("/intake?review=1"))
+    expect(requests.some((r) => r.url === "/api/v1/intake?flagged=1")).toBe(true)
   })
 
   it("is locked for an agent, who never reads it", async () => {
@@ -3506,7 +3465,7 @@ describe("import from Zendesk", () => {
     Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
   const page = (over: Record<string, unknown> = {}) =>
     ok({
-      window: { open: true, mode: "listening", wentLiveAt: null },
+      window: { open: true, finishedAt: null },
       archive: {
         present: true,
         origin: "https://example.zendesk.com",
@@ -3766,13 +3725,63 @@ describe("import from Zendesk", () => {
     expect(text()).toContain(he("import.run.state.done"))
   })
 
-  it("says the import is closed for good once Maane went live", async () => {
+  it("finishes the import after asking once more, refuses it while a run is open, and then says it is finished", async () => {
+    const working = { ...run, state: "running", finishedAt: null, done: 2, jobActive: true }
+    let finished = false
+    let open = true
     await renderAt("/import", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
-      "/api/v1/admin/import": page({ window: { open: false, mode: "live", wentLiveAt: when } }),
+      "/api/v1/admin/import": () =>
+        page({
+          agentUserId: "u1",
+          run: open ? working : run,
+          window: finished ? { open: false, finishedAt: when } : { open: true, finishedAt: null },
+        }),
+      "/api/v1/admin/import/run": () => ok({ run: open ? working : run }),
+      "/api/v1/admin/import/finish": () => {
+        finished = true
+        return page({ agentUserId: "u1", run, window: { open: false, finishedAt: when } })
+      },
+      [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
     })
+    // While a run is open, Finish import waits for it.
+    await vi.waitFor(() => expect(button(he("import.finish.button"))?.disabled).toBe(true))
+    expect(text()).toContain(he("import.finish.runOpen"))
+    open = false
+    await act(async () => {
+      focusManager.setFocused(false)
+      focusManager.setFocused(true)
+    })
+    await vi.waitFor(() => expect(button(he("import.finish.button"))?.disabled).toBe(false))
+    focusManager.setFocused(undefined)
+    expect(text()).toContain(he("import.finish.hint"))
+    // It asks once more; "Not yet" sends nothing.
+    await act(async () => button(he("import.finish.button"))?.click())
+    const question = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[role=alertdialog]")
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(question.textContent).toContain(he("import.finish.confirmMessage"))
+    const choose = (label: string) =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>("[role=alertdialog] button")).find(
+        (b) => b.textContent?.trim() === label,
+      )
+    await act(async () => choose(he("import.finish.keep"))?.click())
+    await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).toBeNull())
+    expect(requests.some((r) => r.url === "/api/v1/admin/import/finish")).toBe(false)
+    await act(async () => button(he("import.finish.button"))?.click())
+    await vi.waitFor(() => expect(choose(he("import.finish.confirm"))).toBeDefined())
+    await act(async () => choose(he("import.finish.confirm"))?.click())
+    await vi.waitFor(() =>
+      expect(document.querySelector(".ui-toast-success")?.textContent).toContain(he("import.finish.done")),
+    )
+    expect(requests.filter((r) => r.method === "POST" && r.url === "/api/v1/admin/import/finish")).toHaveLength(1)
+    // Finished: the page says when, nothing more can start, and Finish import is gone.
     await vi.waitFor(() => expect(text()).toContain(he("import.closed")))
+    expect(text()).toContain(he("import.finishedOn"))
+    expect(button(he("import.finish.button"))).toBeUndefined()
     expect(button(he("import.run.start"))?.disabled).toBe(true)
     expect(document.querySelector<HTMLSelectElement>('[data-brand="100"] select')?.disabled).toBe(true)
   })

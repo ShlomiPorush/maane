@@ -37,7 +37,6 @@ const SERVER_CODES = {
     "address_taken",
     "address_not_found",
     "address_default_not_exact",
-    "intake_no_default_address",
     "intake_default_required",
   ],
   auth: [

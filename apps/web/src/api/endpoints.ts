@@ -121,7 +121,7 @@ export const qk = {
     ] as const,
   categories: ["categories"] as const,
   ticket: (number: number) => ["ticket", number] as const,
-  intake: (filters: IntakeFilters) => ["intake", filters.mode ?? "", filters.flagged ? 1 : 0] as const,
+  intake: (filters: IntakeFilters) => ["intake", filters.flagged ? 1 : 0] as const,
   importPage: ["import"] as const,
   importRun: ["import", "run"] as const,
   importReport: (runId: string) => ["import", "report", runId] as const,
@@ -137,7 +137,7 @@ export type TicketFilters = {
   q?: string
 }
 /** The intake log's filters. */
-export type IntakeFilters = { mode?: "listening" | "live"; flagged?: boolean }
+export type IntakeFilters = { flagged?: boolean }
 
 /**
  * Where a message body, a download, and a preview are served: the frame and the links use these addresses. The body's
@@ -214,6 +214,7 @@ export const api = {
   saveImportMapping: (input: ImportMappingInput) => request<{ ok: true }>("PUT", "/admin/import/mapping", input),
   importRun: () => request<{ run: ImportRunView | null }>("GET", "/admin/import/run"),
   startImport: () => request<{ run: ImportRunView }>("POST", "/admin/import/start"),
+  finishImport: () => request<ImportView>("POST", "/admin/import/finish"),
   cancelImport: (runId: string) =>
     request<{ run: ImportRunView | null; cancelled: boolean }>("POST", "/admin/import/cancel", { runId }),
   importReport: (runId: string, after: string | null) =>
@@ -222,10 +223,7 @@ export const api = {
       `/admin/import/runs/${encodeURIComponent(runId)}/report${query({ after: after ?? undefined })}`,
     ),
   intake: (filters: IntakeFilters, after: string | null) =>
-    request<IntakeLog>(
-      "GET",
-      `/intake${query({ mode: filters.mode, flagged: filters.flagged ? 1 : undefined, after })}`,
-    ),
+    request<IntakeLog>("GET", `/intake${query({ flagged: filters.flagged ? 1 : undefined, after })}`),
   /**
    * A reply or an internal note; the same submission ID again finds the same message. A reply with `sendAt` is
    * scheduled instead (plan 4.2), and the answer names the scheduled reply.

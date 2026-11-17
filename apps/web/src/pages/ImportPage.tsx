@@ -1,10 +1,11 @@
 // Import from Zendesk, /import, admins only (plan 5.1): the archive at its read-only mount, the brand and tag
 // mappings, the Maane user that Zendesk agents' comments and notes are attributed to, Start, the run's progress, and
-// the paged report of the newest run (GET /api/v1/admin/import). The import runs only before Maane first goes live;
-// after that the page says the import is closed for good. Imported tickets are read-only until then. A run that stopped
-// on an error stays open; once its job has used up its retries the page offers Continue (the same Start), and the
-// report names the ticket that stopped it and why. An open run can be cancelled: what it imported stays, and the next
-// start is a full pass.
+// the paged report of the newest run (GET /api/v1/admin/import). The import runs until an admin presses Finish import
+// (phase 6, refused while a run is open, asked once more, final); after that the page says when it finished, and
+// imported tickets are ordinary tickets. Until then they are read-only for agents. A run that stopped on an error stays
+// open; once its job has used up its retries the page offers Continue (the same Start), and the report names the
+// ticket that stopped it and why. An open run can be cancelled: what it imported stays, and the next start is a full
+// pass.
 
 import {
   IMPORT_FAILURES,
@@ -16,7 +17,7 @@ import {
   type ImportView,
 } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
-import { Play, Save, X } from "lucide-react"
+import { Flag, Play, Save, X } from "lucide-react"
 import { useEffect, useState } from "react"
 import { api, qk } from "../api/endpoints.ts"
 import { errorText } from "../api/errors.ts"
@@ -117,15 +118,9 @@ function ImportBody({ view }: { view: ImportView }) {
 
   return (
     <>
-      {!open ? (
+      {!open && view.window.finishedAt ? (
         <Banner tone="info" title={t("import.closed")}>
-          {view.window.wentLiveAt ? (
-            <>
-              {t("import.wentLive")} <Time value={view.window.wentLiveAt} mode="full" />
-            </>
-          ) : (
-            t("import.notListening")
-          )}
+          {t("import.finishedOn")} <Time value={view.window.finishedAt} mode="full" />
         </Banner>
       ) : null}
       <ArchivePanel view={view} />
@@ -138,6 +133,7 @@ function ImportBody({ view }: { view: ImportView }) {
         onSaved={() => setBase(mapping)}
       />
       <RunPanel run={run} canStart={open && !dirty && view.archive.present} />
+      {open ? <FinishPanel runOpen={runOpen} /> : null}
       {run ? <ReportPanel run={run} /> : null}
     </>
   )
@@ -421,6 +417,50 @@ function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: bool
         ) : null}
       </div>
       {!run ? <Empty title={t("import.run.none")} hint={t("import.run.noneHint")} /> : <RunView run={run} />}
+    </section>
+  )
+}
+
+/** Finish import (phase 6): final, so it asks once more; refused while a run is open. */
+function FinishPanel({ runOpen }: { runOpen: boolean }) {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const finish = async () => {
+    const yes = await confirmDialog({
+      title: t("import.finish.confirmTitle"),
+      message: t("import.finish.confirmMessage"),
+      confirmText: t("import.finish.confirm"),
+      cancelText: t("import.finish.keep"),
+      danger: true,
+    })
+    if (!yes) return
+    setBusy(true)
+    try {
+      queryClient.setQueryData(qk.importPage, await api.finishImport())
+      showToast(t("import.finish.done"), "success")
+    } catch (error) {
+      showToast(t("import.finish.failed", { reason: errorText(t, error) }), "error")
+    } finally {
+      await queryClient.invalidateQueries({ queryKey: qk.importPage })
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="ui-panel" aria-labelledby="import-finish" data-testid="import-finish">
+      <div className="ui-panel-head">
+        <h2 id="import-finish">{t("import.finish.title")}</h2>
+        <button
+          type="button"
+          className="ui-btn ui-btn-danger ui-btn-sm"
+          disabled={busy || runOpen}
+          onClick={() => void finish()}
+        >
+          <Flag aria-hidden="true" />
+          {busy ? t("import.finish.busy") : t("import.finish.button")}
+        </button>
+      </div>
+      <p className="ui-hint ui-import-hint">{runOpen ? t("import.finish.runOpen") : t("import.finish.hint")}</p>
     </section>
   )
 }

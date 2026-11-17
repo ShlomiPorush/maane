@@ -1,9 +1,7 @@
 // The intake log, /intake, admins only (plan 2.4): every message intake processed, newest first (GET /api/v1/intake),
-// with what Maane did (live) or would have done (listening): the outcome, the reason, the support address and its
-// organization, and the ticket it opened, joined, or would have joined. The review filter keeps the entries whose
-// message, ticket, or listening conversation carries a review flag. Both filters live in the address
-// (?mode=listening|live&review=1). "Show older entries" follows the cursor (TB-6); the page reads itself again every
-// 30 seconds (SV-10).
+// with what Maane did: the outcome, the reason, the support address and its organization, and the ticket it opened or
+// joined. The review filter keeps the entries whose message or ticket carries a review flag; it lives in the address
+// (?review=1). "Show older entries" follows the cursor (TB-6); the page reads itself again every 30 seconds (SV-10).
 
 import { INTAKE_REASONS, type IntakeEntry, type IntakeLog } from "@maane/shared"
 import { useId } from "react"
@@ -30,11 +28,7 @@ export function IntakePage() {
 }
 
 export function intakeFilters(search: URLSearchParams): IntakeFilters {
-  const mode = search.get("mode")
-  return {
-    mode: mode === "listening" || mode === "live" ? mode : undefined,
-    flagged: search.get("review") === "1",
-  }
+  return { flagged: search.get("review") === "1" }
 }
 
 function Intake() {
@@ -51,8 +45,8 @@ function Intake() {
     keepPrevious: true,
   })
   const entries = query.data?.pages.flatMap((page) => page.entries) ?? []
-  const filtered = Boolean(filters.mode || filters.flagged)
-  const setFilter = (name: "mode" | "review", value: string | null) => {
+  const filtered = Boolean(filters.flagged)
+  const setFilter = (name: "review", value: string | null) => {
     const next = new URLSearchParams(search)
     if (value) next.set(name, value)
     else next.delete(name)
@@ -63,26 +57,6 @@ function Intake() {
     <div className="ui-page">
       <PageHead title={t("intake.title")} description={t("intake.description")} />
       <div className="ui-filters">
-        <div className="ui-filter">
-          <span className="ui-label" id={`${ids}-mode`}>
-            {t("intake.modeLabel")}
-          </span>
-          <fieldset className="ui-seg" aria-labelledby={`${ids}-mode`}>
-            <button type="button" aria-pressed={!filters.mode} onClick={() => setFilter("mode", null)}>
-              {t("intake.all")}
-            </button>
-            {(["listening", "live"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                aria-pressed={filters.mode === mode}
-                onClick={() => setFilter("mode", mode)}
-              >
-                {t(`intake.mode.${mode}`)}
-              </button>
-            ))}
-          </fieldset>
-        </div>
         <div className="ui-filter">
           <span className="ui-label" id={`${ids}-review`}>
             {t("intake.review")}
@@ -149,19 +123,16 @@ function Intake() {
 /** One entry: it holds links to tickets, so the row itself opens nothing (AX-5). */
 function IntakeRow({ entry }: { entry: IntakeEntry }) {
   const { t } = useI18n()
-  const listening = entry.mode === "listening"
   return (
     <div
       className="ui-item ui-intake-row"
       data-message={entry.messageId}
-      data-mode={entry.mode}
       data-outcome={entry.outcome}
       data-tone={entry.flags.length > 0 ? "warn" : undefined}
     >
       <div className="ui-item-main">
         <span className="ui-item-title ui-item-tags">
           <bdi dir="auto">{entry.subject ?? t("intake.noSubject")}</bdi>
-          <Tag tone={listening ? "info" : "ok"}>{t(`intake.mode.${entry.mode}`)}</Tag>
           {entry.flags.map((flag) => (
             <Tag key={flag} tone="warn">
               {t(`flag.${flag}`)}
@@ -169,7 +140,7 @@ function IntakeRow({ entry }: { entry: IntakeEntry }) {
           ))}
         </span>
         <span className="ui-intake-outcome">
-          <b>{listening ? t(`intake.outcomeWould.${entry.outcome}`) : t(`intake.outcome.${entry.outcome}`)}</b>
+          <b>{t(`intake.outcome.${entry.outcome}`)}</b>
           {entry.ticket !== null ? (
             <span>
               {t("intake.ticket")}{" "}
