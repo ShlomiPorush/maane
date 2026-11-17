@@ -65,3 +65,16 @@ FROM (
     AND jsonb_typeof("zendesk"->'email'->'messageId') = 'string'
 ) AS "s"
 WHERE "m"."id" = "s"."id";
+--> statement-breakpoint
+-- A pair already in the database (an imported comment and a message intake received on the same ticket, with the same
+-- Message-ID and sender) flags its ticket now, as flagSameMail() in apps/server/src/imports/overlap.ts does when either
+-- one arrives; nothing else would look at it again.
+UPDATE "ticket" SET "review_flags" = array_append("review_flags", 'possible_duplicate')
+WHERE NOT ('possible_duplicate' = ANY("review_flags")) AND EXISTS (
+  SELECT 1 FROM "message" AS "received"
+  JOIN "message" AS "imported" ON "imported"."ticket_id" = "received"."ticket_id"
+    AND "imported"."zendesk_message_id" = "received"."message_id_header"
+    AND "imported"."from_address" = "received"."from_address"
+  WHERE "received"."ticket_id" = "ticket"."id" AND "received"."direction" = 'in' AND "received"."zendesk_key" IS NULL
+    AND "imported"."zendesk_key" IS NOT NULL
+);

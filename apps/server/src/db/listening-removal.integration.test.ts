@@ -322,3 +322,63 @@ describe("the Message-ID of comments imported before migration 0028", () => {
     expect(await live("dana@example.com")).toEqual(["possible_duplicate"])
   })
 })
+
+// A pair already in the database before phase 6 (an imported comment and a message intake received on the same ticket,
+// with the same Message-ID and sender) flags its ticket during the migration, since no later intake or run may look at
+// that ticket again.
+describe("an imported comment and a received message already on one ticket before migration 0028", () => {
+  let older: Database
+  const sql = queryOf(() => older)
+
+  beforeAll(async () => {
+    older = await migratedUpTo("0027_import_files")
+  })
+
+  it("flag the ticket when they share Message-ID and sender, and not when the sender differs", async () => {
+    const [org] = await sql<{ id: string }>(`insert into organization (name) values ('Example Store') returning id`)
+    const [source] = await sql<{ id: string }>(
+      `insert into intake_source (tenant_id, mailbox, current) values ('example.onmicrosoft.com', 'intake@example.com', true)
+       returning id`,
+    )
+    /** A ticket with an imported comment from dana@example.com and a received message from `from`, both before 0028. */
+    const ticketWith = async (number: number, from: string) => {
+      const [created] = await sql<{ id: string }>(
+        `insert into ticket (number, reference_code, organization_id, support_address, status, zendesk_id, zendesk)
+         values ($1, $2, $3, 'store@example.com', 'open', $1, '{}'::jsonb) returning id`,
+        [number, `AAAA-BBB${number}`, org?.id],
+      )
+      const ticketId = created?.id ?? ""
+      const email = {
+        kind: "recorded",
+        messageId: "<question@mail.example.com>",
+        from: { address: "dana@example.com", name: null },
+        to: null,
+        cc: [],
+        originalRecipients: [],
+      }
+      await sql(
+        `insert into message (direction, ticket_id, received_at, sent_at, state, processed_at, content, from_address,
+           zendesk_key, zendesk)
+         values ('in', $1, now(), now(), 'processed', now(), 'parsed', 'dana@example.com', $2, $3::jsonb)`,
+        [ticketId, `comment:${number}`, JSON.stringify({ zendeskTicketId: number, email })],
+      )
+      await sql(
+        `insert into message (direction, source_id, graph_id, folder, graph, received_at, state, content,
+           message_id_header, from_address, ticket_id)
+         values ('in', $1, $2, 'inbox', '{}'::jsonb, now(), 'processed', 'parsed', 'question@mail.example.com', $3, $4)`,
+        [source?.id, randomUUID(), from, ticketId],
+      )
+      return ticketId
+    }
+    const same = await ticketWith(1, "dana@example.com")
+    const other = await ticketWith(2, "someone@example.com")
+
+    await migrateDatabase(older.db, MIGRATIONS_DIR)
+
+    const flags = async (ticketId: string) =>
+      (await sql<{ review_flags: string[] }>(`select review_flags from ticket where id = $1`, [ticketId]))[0]
+        ?.review_flags
+    expect(await flags(same)).toEqual(["possible_duplicate"])
+    expect(await flags(other)).toEqual([])
+  })
+})
