@@ -3778,9 +3778,10 @@ describe("import from Zendesk", () => {
       expect(document.querySelector(".ui-toast-success")?.textContent).toContain(he("import.finish.done")),
     )
     expect(requests.filter((r) => r.method === "POST" && r.url === "/api/v1/admin/import/finish")).toHaveLength(1)
-    // Finished: the page says when, nothing more can start, and Finish import is gone.
-    await vi.waitFor(() => expect(text()).toContain(he("import.closed")))
-    expect(text()).toContain(he("import.finishedOn"))
+    // Finished: the page says when, nothing more can start, and Finish import is gone. It waits for the date's label,
+    // which only the page shows: the toast's words hold those of import.closed.
+    await vi.waitFor(() => expect(text()).toContain(he("import.finishedOn")))
+    expect(text()).toContain(he("import.closed"))
     expect(button(he("import.finish.button"))).toBeUndefined()
     expect(button(he("import.run.start"))?.disabled).toBe(true)
     expect(document.querySelector<HTMLSelectElement>('[data-brand="100"] select')?.disabled).toBe(true)
