@@ -394,6 +394,7 @@ Between steps 2 and 4 the import and live mail can meet on the same ticket:
 
 - A customer who answers an imported ticket by its number (`[#1234]` in the subject) joins it, and the ticket becomes open as for any customer reply. A run after that still updates the ticket's imported comments, notes, and files, but keeps the ticket's own status, last activity, participants, organization, categories, and subject as live mail left them; the report lists the ticket as "Mail arrived in Maane for this ticket".
 - The same mail can arrive both ways while the rules change: once through the intake mailbox and once as a Zendesk comment. Maane keeps both visible and flags the ticket **Possible duplicate** for you to look at.
+- A ticket Zendesk opened after the backup of step 1 can carry a number that Maane has since given a new ticket. The run then skips it, and the report lists it as "A Maane ticket has this number: not imported". After Finish import it cannot be imported, so check the report before step 4. To keep such tickets rare, run the backup and the import of step 1 right before step 2.
 - A reply to old Zendesk mail without Maane's `[#n]` opens a new ticket for now. Joining such replies to their imported tickets waits until you forward one or two old Zendesk emails with their full headers.
 
 ## 5. Back up
