@@ -3,6 +3,7 @@ import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { flagSameMail } from "../imports/overlap.ts"
 import { createTestDatabase, MIGRATIONS_DIR } from "../testing/db.ts"
 import { migrateDatabase } from "./client.ts"
 
@@ -14,29 +15,43 @@ import { migrateDatabase } from "./client.ts"
 
 const BEFORE = "0028_live_columns"
 
-let database: Awaited<ReturnType<typeof createTestDatabase>>
-let folder: string
+type Database = Awaited<ReturnType<typeof createTestDatabase>>
+const databases: Database[] = []
+const folders: string[] = []
 
-beforeAll(async () => {
-  // The migrations folder as it was before phase 6's removal: the journal stops at 0028.
-  folder = await mkdtemp(join(tmpdir(), "maane-migrations-"))
+/** A database migrated up to the migration named `last`, from a copy of the migrations folder whose journal ends there. */
+async function migratedUpTo(last: string): Promise<Database> {
+  const folder = await mkdtemp(join(tmpdir(), "maane-migrations-"))
+  folders.push(folder)
   await cp(MIGRATIONS_DIR, folder, { recursive: true })
   const journalPath = join(folder, "meta", "_journal.json")
   const journal = JSON.parse(await readFile(journalPath, "utf8")) as { entries: { tag: string }[] }
-  const last = journal.entries.findIndex((entry) => entry.tag === BEFORE)
-  if (last < 0) throw new Error(`no ${BEFORE} in the journal`)
-  journal.entries = journal.entries.slice(0, last + 1)
+  const index = journal.entries.findIndex((entry) => entry.tag === last)
+  if (index < 0) throw new Error(`no ${last} in the journal`)
+  journal.entries = journal.entries.slice(0, index + 1)
   await writeFile(journalPath, JSON.stringify(journal))
-  database = await createTestDatabase(folder)
+  const database = await createTestDatabase(folder)
+  databases.push(database)
+  return database
+}
+
+let database: Database
+
+beforeAll(async () => {
+  // The migrations folder as it was before phase 6's removal: the journal stops at 0028.
+  database = await migratedUpTo(BEFORE)
 })
 
 afterAll(async () => {
-  await database?.drop()
-  if (folder) await rm(folder, { recursive: true, force: true })
+  for (const each of databases) await each.drop()
+  for (const folder of folders) await rm(folder, { recursive: true, force: true })
 })
 
-const query = async <T = Record<string, unknown>>(text: string, values: unknown[] = []) =>
-  (await database.pool.query(text, values)).rows as T[]
+const queryOf =
+  (of: () => Database) =>
+  async <T = Record<string, unknown>>(text: string, values: unknown[] = []) =>
+    (await of().pool.query(text, values)).rows as T[]
+const query = queryOf(() => database)
 
 describe("the removal of listening mode (migrations 0029 to 0031)", () => {
   it("deletes listening data by its intake records and leaves live data, tickets or not, as it was", async () => {
@@ -226,5 +241,84 @@ describe("the removal of listening mode (migrations 0029 to 0031)", () => {
     expect(await query(`select 1 from setting where key = 'intake.mode'`)).toEqual([])
     // The import window is open: only Finish import closes it, and an earlier live use does not.
     expect(await query(`select finished_at from zendesk_import`)).toEqual([{ finished_at: null }])
+  })
+})
+
+// Phase 6 keeps an imported comment's Message-ID in its own column (migration 0028), which a run writes. A comment
+// imported before that migration gets it from its `zendesk` JSON, read as messageIds() reads it, so a live message
+// with the same Message-ID and sender flags its ticket without a rerun.
+describe("the Message-ID of comments imported before migration 0028", () => {
+  let older: Database
+  const sql = queryOf(() => older)
+
+  beforeAll(async () => {
+    older = await migratedUpTo("0027_import_files")
+  })
+
+  it("is read from the comment's source as a run reads it, and a live message with it and its sender flags the ticket", async () => {
+    const [org] = await sql<{ id: string }>(`insert into organization (name) values ('Example Store') returning id`)
+    const [created] = await sql<{ id: string }>(
+      `insert into ticket (number, reference_code, organization_id, support_address, status, zendesk_id, zendesk)
+       values (1, 'AAAA-BBBB', $1, 'store@example.com', 'open', 1, '{}'::jsonb) returning id`,
+      [org?.id],
+    )
+    const ticketId = created?.id ?? ""
+    /** An imported comment as 5.1 stored it, with what Zendesk recorded in its `zendesk` JSON. */
+    const imported = async (key: string, email: Record<string, unknown>) => {
+      await sql(
+        `insert into message (direction, ticket_id, received_at, sent_at, state, processed_at, content, from_address,
+           zendesk_key, zendesk)
+         values ('in', $1, now(), now(), 'processed', now(), 'parsed', 'dana@example.com', $2, $3::jsonb)`,
+        [ticketId, key, JSON.stringify({ zendeskTicketId: 1, email })],
+      )
+    }
+    const recorded = (messageId: unknown) => ({
+      kind: "recorded",
+      messageId,
+      from: { address: "dana@example.com", name: null },
+      to: null,
+      cc: [],
+      originalRecipients: [],
+    })
+    const space = String.fromCodePoint(0x3000)
+    // What messageIds() makes of each value: the first <...> without whitespace, else the trimmed value when it has
+    // none (JavaScript's whitespace, U+3000 included), the case kept.
+    const cases: [string, Record<string, unknown>, string | null][] = [
+      ["comment:1", recorded("question@mail.example.com"), "question@mail.example.com"],
+      ["comment:2", recorded(" <first@mail.example.com> <second@mail.example.com>"), "first@mail.example.com"],
+      ["comment:3", recorded(`${space}Spaced@Mail.Example.com\t${space}`), "Spaced@Mail.Example.com"],
+      ["comment:4", recorded("x <y z> w"), null],
+      ["comment:5", recorded("two words"), null],
+      ["comment:6", recorded("a> <b@mail.example.com"), null],
+      ["comment:7", recorded(null), null],
+      ["comment:8", { kind: "none" }, null],
+    ]
+    for (const [key, email] of cases) await imported(key, email)
+
+    await migrateDatabase(older.db, MIGRATIONS_DIR)
+
+    const rows = await sql<{ zendesk_key: string; zendesk_message_id: string | null }>(
+      `select zendesk_key, zendesk_message_id from message where zendesk_key is not null order by zendesk_key`,
+    )
+    expect(rows).toEqual(cases.map(([key, , id]) => ({ zendesk_key: key, zendesk_message_id: id })))
+
+    // A live message with the same Message-ID from another sender is not the same mail; from the same sender it is.
+    const [source] = await sql<{ id: string }>(
+      `insert into intake_source (tenant_id, mailbox, current) values ('example.onmicrosoft.com', 'intake@example.com', true)
+       returning id`,
+    )
+    const live = async (from: string) => {
+      await sql(
+        `insert into message (direction, source_id, graph_id, folder, graph, received_at, state, content,
+           message_id_header, from_address, ticket_id)
+         values ('in', $1, $2, 'inbox', '{}'::jsonb, now(), 'processed', 'parsed', 'question@mail.example.com', $3, $4)`,
+        [source?.id, randomUUID(), from, ticketId],
+      )
+      await older.db.transaction((tx) => flagSameMail(tx, ticketId))
+      const [row] = await sql<{ review_flags: string[] }>(`select review_flags from ticket where id = $1`, [ticketId])
+      return row?.review_flags
+    }
+    expect(await live("someone@example.com")).toEqual([])
+    expect(await live("dana@example.com")).toEqual(["possible_duplicate"])
   })
 })
