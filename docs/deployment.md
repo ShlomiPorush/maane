@@ -280,14 +280,14 @@ In Entra and Exchange Online (you do this; Maane changes nothing in Microsoft 36
 
 1. Register an application for Maane, add a client secret, and note the tenant ID, the application (client) ID, and the secret. Give the application **no** Microsoft Graph mail permission in Entra: permissions add up, and an Entra permission would bypass the limit of the next step.
 2. Limit the application to the intake mailbox with Exchange Online RBAC for Applications: a service principal for the application, a management scope that holds only the intake mailbox, and the role `Application Mail.Read` assigned to the application in that scope. Microsoft documents the cmdlets in "Role Based Access Control for Applications in Exchange Online".
-3. In Maane, open Settings, Microsoft Graph, and fill in the tenant (its ID or a domain such as `example.onmicrosoft.com`), the application ID, the client secret, and the intake mailbox; then Save changes. The secret is stored encrypted and never shown again; to replace it, type a new one. Each field can instead come from `app.env` (`MAANE_GRAPH_TENANT_ID`, `MAANE_GRAPH_CLIENT_ID`, `MAANE_GRAPH_CLIENT_SECRET`, `MAANE_GRAPH_MAILBOX`), which locks it in Settings; Maane refuses to start when the secret there reads as an example value. Keep the intake mode on Listening.
+3. In Maane, open Settings, Microsoft Graph, and fill in the tenant (its ID or a domain such as `example.onmicrosoft.com`), the application ID, the client secret, and the intake mailbox; then Save changes. The secret is stored encrypted and never shown again; to replace it, type a new one. Each field can instead come from `app.env` (`MAANE_GRAPH_TENANT_ID`, `MAANE_GRAPH_CLIENT_ID`, `MAANE_GRAPH_CLIENT_SECRET`, `MAANE_GRAPH_MAILBOX`), which locks it in Settings; Maane refuses to start when the secret there reads as an example value. Maane is live from the first moment: once a default address exists (Admin, Organizations), each message in the intake mailbox opens or joins a ticket, so keep the Microsoft 365 rules pointing at Zendesk until [setup day](#setup-day-from-zendesk-to-maane).
 4. Press Test Graph. It reads only the Inbox folder's details of the saved mailbox and shows Connected, or what failed with the code Entra or Graph gave (for example `AADSTS7000215` for a wrong secret, `ErrorAccessDenied` when the application may not read the mailbox).
 
 Within a minute the worker starts reading the mailbox. Changing the tenant or the mailbox later starts a new intake source: what Maane already took in from the old one stays, and its files that still wait for the scanner become unavailable once Graph refuses the old mailbox.
 
 #### Your checks against the real tenant
 
-A passing Test Graph shows that Maane can read the intake mailbox; it does not show that it can read nothing else. Do these checks once, before cutover, and again after any change to the application or its scope. They only read.
+A passing Test Graph shows that Maane can read the intake mailbox; it does not show that it can read nothing else. Do these checks once, before you point the Microsoft 365 rules at the intake mailbox, and again after any change to the application or its scope. They only read.
 
 1. **Access to the intake mailbox.** Settings, Microsoft Graph, Test Graph shows Connected for the intake mailbox.
 2. **Refusal on any other mailbox.** In Exchange Online PowerShell (`Connect-ExchangeOnline` first), set the three values in the first lines, then run the block. It stops before testing anything while a value is still the example, and it only reads:
@@ -307,13 +307,13 @@ A passing Test Graph shows that Maane can read the intake mailbox; it does not s
    ```
 
    The first table shows `Application Mail.Read` with `InScope` `True`; the second shows `InScope` `False` for every role. Also check in Entra, the application's API permissions, that it holds no Microsoft Graph `Mail.*` permission.
-3. **The routing cases of listening mode** (requirements 6.2). While the intake mode is Listening, send deliberate mail from an outside address to: an alias, an address that exists only in a transport rule, an address the wildcard rule catches, a support address as a blind copy, two support addresses in one message, an address that bounces, and a mailbox with an automatic reply. Maane opens no ticket in listening mode; for each message it records the support address and organization it chose, the ticket or conversation it would have matched, and its classification. Read those records on the Intake log page (admins; Listening filter): each entry shows the outcome Maane would have reached, the support address and organization, the ticket it would have joined, the reason, and the review flags. The same records, read on the server; this query only reads:
+3. **The routing cases** (requirements 6.1). Right after step 2 of [setup day](#setup-day-from-zendesk-to-maane), send deliberate mail from an outside address to: an alias, an address that exists only in a transport rule, an address the wildcard rule catches, a support address as a blind copy, two support addresses in one message, an address that bounces, and a mailbox with an automatic reply. Each message opens or joins a ticket like any customer's mail (solve the test tickets afterwards); automated mail opens none. Read what Maane did on the Intake log page (admins): each entry shows the outcome, the support address and organization, the ticket, the reason, and the review flags. The same records, read on the server; this query only reads:
 
    ```bash
    cd "$HOME/maane" && docker compose exec -T postgres psql -U maane -d maane -c "select m.received_at, m.from_address, m.subject, r.outcome, r.classification, r.support_address, r.reason, m.review_flags from intake_record r join message m on m.id = r.message_id order by m.received_at desc limit 50"
    ```
 
-   Each case passes when the address is the one the rule meant (or the default address where the original recipient is not kept), a message to two support addresses that arrives twice shows one record and one `copy`, and the bounce and the automatic reply show `automated`. Compare the records with what Zendesk did with the same messages.
+   Each case passes when the address is the one the rule meant (or the default address where the original recipient is not kept), a message to two support addresses that arrives twice shows one record and one `copy`, and the bounce and the automatic reply show `automated`. If a case went to the wrong organization, fix the addresses under Organizations and move the ticket.
 
 ### Connect SMTP2GO's delivery status
 
@@ -365,7 +365,7 @@ cd "$HOME/maane" && docker compose exec -T server ls -l /geoip
 
 ### Import from Zendesk
 
-Admin, Import brings the history of the phase 0 archive ([zendesk-backup.md](zendesk-backup.md)) into Maane, before Maane first goes live. It reads the archive and never calls Zendesk, so it needs no token. `docker-compose.yml` mounts the folder `ZENDESK_ARCHIVE_DIR` from `.env` (default `./zendesk-archive` next to it) read only at `/zendesk-archive` in `server` (the page shows the archive's brands, tags, and state) and in `worker` (the import reads it). Maane never writes to it. Set the folder:
+Admin, Import brings the history of the phase 0 archive ([zendesk-backup.md](zendesk-backup.md)) into Maane, on [setup day](#setup-day-from-zendesk-to-maane). It reads the archive and never calls Zendesk, so it needs no token. `docker-compose.yml` mounts the folder `ZENDESK_ARCHIVE_DIR` from `.env` (default `./zendesk-archive` next to it) read only at `/zendesk-archive` in `server` (the page shows the archive's brands, tags, and state) and in `worker` (the import reads it). Maane never writes to it. Set the folder:
 
 ```bash
 cd "$HOME/maane" && grep -E '^ZENDESK_ARCHIVE_DIR=' .env
@@ -379,7 +379,22 @@ cd "$HOME/maane" && docker compose exec -T worker ls -l /zendesk-archive/archive
 
 Then, on the Import page: map each brand to an organization (a brand without one is not imported), map the tags you want to categories (each ticket keeps its tags as they are), choose the Maane user that Zendesk agents' comments are written by, save, and start. A run refuses, and says why, while a backup holds the archive's lock, when the archive fails the strict check of `zendesk-backup check`, or when it comes from another Zendesk account than earlier imports. A backup that runs during an import stops it; start again afterwards, and the run goes over every ticket. Run the import again after each new backup: it updates the same tickets and adds no duplicate. Files come from the archive too, through the scanner, into `./data` like any attachment: the report lists each file the backup could not download, and each the scanner found infected or of a blocked type, which Maane does not store. A later backup that downloads a failed file lets the next run add it. While the scanner does not answer (with its unavailable policy `block`), the run stops and goes on by itself once it does.
 
-The import is open only while intake listens and Maane has never gone live. The first switch of the intake mode to live closes it for good, and that switch is refused while a run is open. Until then imported tickets are read-only. After each run, new Maane tickets continue right after the highest imported number.
+The import is open until an admin presses **Finish import** on the Import page (step 4 of setup day), which is final: it is refused while a run is open, recorded in the audit log, and afterwards every import is refused. Until then imported tickets are read-only for agents, while customer mail still joins them. After each run, new Maane tickets continue right after the highest imported number, and the numbering never moves back.
+
+### Setup day: from Zendesk to Maane
+
+Maane is live from the first moment (owner's decision, 2026-11-17): there is no listening period, no cutover, and no rollback. Do these steps in this order on one day:
+
+1. **Set Maane up.** Sections 1 to 4: the server, the domains, the organizations with their support addresses and a default address, SMTP2GO (Settings, Sending, and [its delivery status](#connect-smtp2gos-delivery-status)), Microsoft Graph, and the Zendesk archive mounted as above. Run the import.
+2. **Point the Microsoft 365 rules at the intake mailbox** instead of Zendesk. From here Maane receives and answers all new mail.
+3. **At least five minutes later, back up and import again.** Run the Zendesk backup again ([zendesk-backup.md](zendesk-backup.md); it continues where it stopped), then start the import again, so mail Zendesk received before the rules changed is in Maane too. Zendesk's API leaves out the most recent minute, so the wait is required.
+4. **Press Finish import** on the Import page once the last run is done. Imported tickets become ordinary tickets, and nothing more can be imported.
+
+Between steps 2 and 4 the import and live mail can meet on the same ticket:
+
+- A customer who answers an imported ticket by its number (`[#1234]` in the subject) joins it, and the ticket becomes open as for any customer reply. A run after that still updates the ticket's imported comments, notes, and files, but keeps the ticket's own status, last activity, participants, organization, categories, and subject as live mail left them; the report lists the ticket as "Mail arrived in Maane for this ticket".
+- The same mail can arrive both ways while the rules change: once through the intake mailbox and once as a Zendesk comment. Maane keeps both visible and flags the ticket **Possible duplicate** for you to look at.
+- A reply to old Zendesk mail without Maane's `[#n]` opens a new ticket for now. Joining such replies to their imported tickets waits until you forward one or two old Zendesk emails with their full headers.
 
 ## 5. Back up
 
@@ -441,7 +456,7 @@ Copy the dump, the data archive, `postgres.env`, `app.env`, and `.env` off the h
 
 ## 6. Test a restore
 
-Test a restore before the cutover from Zendesk, and again from time to time. Run it on another Docker host or virtual machine with its own Traefik, never beside production: `docker-compose.yml` names its project `maane` and its Traefik router `maane`, so a second copy on the production host would take them over.
+Test a restore before setup day, and again from time to time. Run it on another Docker host or virtual machine with its own Traefik, never beside production: `docker-compose.yml` names its project `maane` and its Traefik router `maane`, so a second copy on the production host would take them over.
 
 1. On the test host, create the folder `~/maane-restore` with the block of section 2, with `dir="$HOME/maane-restore"` and `version` set to the release the backup came from. Copy the backup's `.env`, `postgres.env`, and `app.env` into it (mode 600). Edit two lines of the copies: `DOMAIN` in `.env` to the test host name, for example `maane-restore.example.com`, and `MAANE_TRUSTED_PROXIES` in `app.env` to the subnets of the test host's `traefik` network. Leave every key and the password as they are: the test checks that they open the data.
 2. Put the database back, before `server` ever starts on this host:
@@ -542,6 +557,8 @@ Test a restore before the cutover from Zendesk, and again from time to time. Run
 To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported.
 
 ## What was verified
+
+Phase 6 (2026-11-17): live from the first moment, Finish import, and the overlap between the import and live mail ran only against stand-ins and invented archives, in the integration tests and the stack stage of `scripts/verify.sh`; the migrations that remove listening mode ran on a database filled with invented listening and live data. Nothing reached Microsoft, SMTP2GO, or Zendesk, and the steps of [setup day](#setup-day-from-zendesk-to-maane) have not run.
 
 Phase 5.1 (2026-11-16): the import ran only against invented archives that the phase 0 backup wrote from its stand-in Zendesk API: in the integration tests, and in a scratch stack from the development template with such an archive mounted read only at `/zendesk-archive` in `server` and `worker`, scanned by the real ClamAV, for the screenshots. `docker compose config` accepted `docker-compose.yml` with the new mount in the full `scripts/verify.sh` sweep. Nothing ran against your archive or a real Zendesk account, and section 3's block was not run again (it copies the new empty line of `.env.example` as it is). The field paths the import reads were taken from Zendesk's API reference; a comment's Message-ID in `metadata.system.message_id` is not in that reference and stays unchecked until your archive.
 

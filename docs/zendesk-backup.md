@@ -2,7 +2,7 @@
 
 `zendesk-backup` saves a Zendesk account into a local archive and checks that the archive is complete without access to Zendesk. It is phase 0 of [requirements.md](requirements.md#51-phase-0-zendesk-backup). The phase 5 import and the old-replies job after cutover read the same archive through `packages/zendesk`.
 
-A finished backup does not mean Zendesk can be closed. That happens only after the cutover.
+A finished backup does not mean Zendesk can be closed. That happens only after setup day (requirements section 6).
 
 ## Run a backup
 
