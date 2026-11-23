@@ -18,7 +18,7 @@ import { pushEndpointAllowed } from "@maane/server/notifications/push"
 import { inScope, visibleOrganizations } from "@maane/server/organizations/scope"
 import { type Locale, MESSAGES } from "@maane/shared"
 import { and, eq } from "drizzle-orm"
-import webpush from "web-push"
+import { sendNotification, WebPushError } from "web-push"
 
 /** How long one push may take, from the connection to the push service's answer. */
 export const PUSH_TIMEOUT_MS = 15_000
@@ -165,7 +165,7 @@ export class PushNotifier {
     payload: PushPayload,
   ): Promise<"sent" | "gone" | "failed"> {
     try {
-      await webpush.sendNotification(
+      await sendNotification(
         { endpoint: device.endpoint, keys: { p256dh: device.p256dh, auth: device.auth } },
         JSON.stringify(payload),
         {
@@ -182,7 +182,7 @@ export class PushNotifier {
       )
       return "sent"
     } catch (error) {
-      const status = error instanceof webpush.WebPushError ? error.statusCode : null
+      const status = error instanceof WebPushError ? error.statusCode : null
       // The browser or the user revoked the subscription: it will never take a push again.
       if (status === 404 || status === 410) return "gone"
       log.warn("a browser notification was not delivered to its push service", {

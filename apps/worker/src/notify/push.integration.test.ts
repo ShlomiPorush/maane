@@ -12,7 +12,7 @@ import { and, eq } from "drizzle-orm"
 import { decrypt } from "http_ece"
 import { PgBoss } from "pg-boss"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
-import webpush from "web-push"
+import { generateVAPIDKeys } from "web-push"
 import { IntakeProcessor } from "../intake/process.ts"
 import { type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
 import { type IntakeHarness, startIntake } from "../testing/intake.ts"
@@ -100,7 +100,7 @@ const subscriptions = async (userId: string) =>
 function notifier(options: { publicUrl?: string; standIn?: boolean } = {}) {
   return new PushNotifier({
     db: h.database.db,
-    vapid: webpush.generateVAPIDKeys(),
+    vapid: generateVAPIDKeys(),
     publicUrl: new URL(options.publicUrl ?? "https://maane.example.com"),
     ...(options.standIn === false
       ? {}
