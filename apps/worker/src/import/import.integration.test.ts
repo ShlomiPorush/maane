@@ -1281,10 +1281,10 @@ describe("live from day one (phase 6)", () => {
     expect((await ticketOf(h, 1))?.reviewFlags.filter((flag) => flag === "possible_duplicate")).toHaveLength(1)
   })
 
-  it("imports a comment whose Message-ID is 998 characters that do not compress, outside ASCII", async () => {
+  it("imports a comment whose Message-ID is too long in bytes, keeping it only in the comment's source", async () => {
     const h = await start()
     // Pseudo-random CJK ideographs (U+4E00 to U+9FFF, three bytes each in UTF-8), built from code points: about 3,000
-    // bytes that PostgreSQL cannot compress, more than one btree index entry may hold.
+    // bytes that PostgreSQL cannot compress.
     let seed = 0x2545f491
     const ideographs = Array.from({ length: 998 - "@mail.example.com".length }, () => {
       seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
@@ -1306,7 +1306,8 @@ describe("live from day one (phase 6)", () => {
     await h.backup()
     expect((await h.run()).outcome).toEqual(DONE)
     const [row] = (await messagesOf(h, 2)).filter((entry) => entry.zendeskKey === "comment:24")
-    expect(row?.zendeskMessageId).toBe(id)
+    expect(row?.zendeskMessageId).toBeNull()
+    expect(row?.zendesk).toMatchObject({ email: { messageId: id } })
   })
 
   it("reads the sender's participation under the ticket's lock while a rerun removes that participant", async () => {
