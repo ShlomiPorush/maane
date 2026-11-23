@@ -246,7 +246,7 @@ Notifications need `https`: the push services refuse a VAPID subject that is not
 The setup screen is open for 5 minutes after `server` starts, and only while no user exists. Have the authenticator app ready, then start:
 
 ```bash
-cd "$HOME/maane" && docker compose pull && docker compose up -d && docker compose ps
+cd "$HOME/maane" && test -f docker-compose.yml && docker compose pull && docker compose up -d && docker compose ps
 ```
 
 1. Within 5 minutes, open `https://maane.example.com`. The setup screen creates the first admin: a username and a password.
@@ -280,7 +280,7 @@ In Entra and Exchange Online (you do this; Maane changes nothing in Microsoft 36
 
 1. Register an application for Maane, add a client secret, and note the tenant ID, the application (client) ID, and the secret. Give the application **no** Microsoft Graph mail permission in Entra: permissions add up, and an Entra permission would bypass the limit of the next step.
 2. Limit the application to the intake mailbox with Exchange Online RBAC for Applications: a service principal for the application, a management scope that holds only the intake mailbox, and the role `Application Mail.Read` assigned to the application in that scope. Microsoft documents the cmdlets in "Role Based Access Control for Applications in Exchange Online".
-3. In Maane, open Settings, Microsoft Graph, and fill in the tenant (its ID or a domain such as `example.onmicrosoft.com`), the application ID, the client secret, and the intake mailbox; then Save changes. The secret is stored encrypted and never shown again; to replace it, type a new one. Each field can instead come from `app.env` (`MAANE_GRAPH_TENANT_ID`, `MAANE_GRAPH_CLIENT_ID`, `MAANE_GRAPH_CLIENT_SECRET`, `MAANE_GRAPH_MAILBOX`), which locks it in Settings; Maane refuses to start when the secret there reads as an example value. Maane is live from the first moment: once a default address exists (Admin, Organizations), each message in the intake mailbox opens or joins a ticket, so keep the Microsoft 365 rules pointing at Zendesk until [setup day](#setup-day-from-zendesk-to-maane).
+3. In Maane, open Settings, Microsoft Graph, and fill in the tenant (its ID or a domain such as `example.onmicrosoft.com`), the application ID, the client secret, and the intake mailbox; then Save changes. The secret is stored encrypted and never shown again; to replace it, type a new one. Each field can instead come from `app.env` (`MAANE_GRAPH_TENANT_ID`, `MAANE_GRAPH_CLIENT_ID`, `MAANE_GRAPH_CLIENT_SECRET`, `MAANE_GRAPH_MAILBOX`), which locks it in Settings; Maane refuses to start when the secret there reads as an example value. Maane is live from the first moment: once a default address exists (Admin, Organizations), each message in the intake mailbox opens or joins a ticket, so keep the Microsoft 365 rules pointing at Zendesk until [setup day](#setup-day-from-zendesk-to-maane), and connect Graph only after the first import.
 4. Press Test Graph. It reads only the Inbox folder's details of the saved mailbox and shows Connected, or what failed with the code Entra or Graph gave (for example `AADSTS7000215` for a wrong secret, `ErrorAccessDenied` when the application may not read the mailbox).
 
 Within a minute the worker starts reading the mailbox. Changing the tenant or the mailbox later starts a new intake source: what Maane already took in from the old one stays, and its files that still wait for the scanner become unavailable once Graph refuses the old mailbox.
@@ -307,7 +307,7 @@ A passing Test Graph shows that Maane can read the intake mailbox; it does not s
    ```
 
    The first table shows `Application Mail.Read` with `InScope` `True`; the second shows `InScope` `False` for every role. Also check in Entra, the application's API permissions, that it holds no Microsoft Graph `Mail.*` permission.
-3. **The routing cases** (requirements 6.1). Right after step 2 of [setup day](#setup-day-from-zendesk-to-maane), send deliberate mail from an outside address to: an alias, an address that exists only in a transport rule, an address the wildcard rule catches, a support address as a blind copy, two support addresses in one message, an address that bounces, and a mailbox with an automatic reply. Each message opens or joins a ticket like any customer's mail (solve the test tickets afterwards); automated mail opens none. Read what Maane did on the Intake log page (admins): each entry shows the outcome, the support address and organization, the ticket, the reason, and the review flags. The same records, read on the server; this query only reads:
+3. **The routing cases** (requirements 6.1). Right after step 4 of [setup day](#setup-day-from-zendesk-to-maane), never before it (each test ticket takes a number the last import may need), send deliberate mail from an outside address to: an alias, an address that exists only in a transport rule, an address the wildcard rule catches, a support address as a blind copy, two support addresses in one message, an address that bounces, and a mailbox with an automatic reply. Each message opens or joins a ticket like any customer's mail (solve the test tickets afterwards); automated mail opens none. Read what Maane did on the Intake log page (admins): each entry shows the outcome, the support address and organization, the ticket, the reason, and the review flags. The same records, read on the server; this query only reads:
 
    ```bash
    cd "$HOME/maane" && docker compose exec -T postgres psql -U maane -d maane -c "select m.received_at, m.from_address, m.subject, r.outcome, r.classification, r.support_address, r.reason, m.review_flags from intake_record r join message m on m.id = r.message_id order by m.received_at desc limit 50"
@@ -334,7 +334,7 @@ Maane learns what happened to a reply after SMTP2GO accepted it (delivered, boun
 
 Replies sent through the backup server have no webhook: their bounces come back to the bounce address, which reaches the intake mailbox, and Maane reads each delivery report there. Only the recipients a report names as `failed` count as bounced; a report that does not say which recipient failed shows on the reply.
 
-Check it once with a real send (your test, not part of Maane's verification): reply to a test ticket at an address of yours, and within a minute the reply's recipient shows Delivered. A reply to an address that does not exist shows Bounced, and the ticket shows Delivery failed until a later reply to that address is accepted.
+Check it with a real send, in the [rehearsal](#rehearsal) and after Finish import, never between the first import and Finish import of [setup day](#setup-day-from-zendesk-to-maane) (a test ticket takes a number): reply to a test ticket at an address of yours, and within a minute the reply's recipient shows Delivered. A reply to an address that does not exist shows Bounced, and the ticket shows Delivery failed until a later reply to that address is accepted.
 
 ### Link tracking
 
@@ -381,11 +381,64 @@ Then, on the Import page: map each brand to an organization (a brand without one
 
 The import is open until an admin presses **Finish import** on the Import page (step 4 of setup day), which is final: it is refused while a run is open, recorded in the audit log, and afterwards every import is refused. Until then imported tickets are read-only for agents, while customer mail still joins them. After each run, new Maane tickets continue right after the highest imported number, and the numbering never moves back.
 
+### Rehearsal
+
+Rehearse on the production server before setup day: the first deployment is a rehearsal with your real Zendesk archive, Microsoft 365, and SMTP2GO, and only your own test mail. When it ends, its whole folder is set aside and you deploy again from section 2, with a new database, new secrets, and the settings entered once more. A rehearsal's database can never become the real one: a ticket cannot be deleted, so each test ticket keeps a number, and the import skips the Zendesk ticket that gets the same number later.
+
+1. **Mark it.** After section 2 and before anything starts, run this block. It refuses once the deployment has ever started, so a deployment in use can never be marked:
+
+   ```bash
+   (
+     set -euo pipefail
+     cd "$HOME/maane"
+     [ -f docker-compose.yml ] || { echo "error: download the files first (section 2)" >&2; exit 1; }
+     [ ! -e postgres-data ] || { echo "error: this deployment has already started; nothing was changed" >&2; exit 1; }
+     touch REHEARSAL
+     echo "$HOME/maane is marked as a rehearsal"
+   )
+   ```
+
+2. **Deploy and configure it** with sections 3 and 4. Provider credentials come from your secret store and go into Settings. Keep the Zendesk archive outside `~/maane`, with an absolute path in `ZENDESK_ARCHIVE_DIR`.
+3. **Give it a mailbox of its own**, for example `maane-rehearsal@example.com`: a shared mailbox hidden from the address lists, added to the application's management scope while the rehearsal lasts. For mail to the support addresses, add one transport rule above the Zendesk rules that matches only your own test addresses as the sender, redirects to that mailbox (not a copy, so Zendesk opens no ticket), and stops processing more rules. Set the bounce address of the backup server to one that reaches only that mailbox.
+4. **Rehearse.** Run the Zendesk backup and the import, and read the report. Then connect Microsoft Graph to the rehearsal mailbox, send test mail, reply, and check the delivery status, the links, and notifications on your devices. The real transport rules are tested only after setup day's Finish import. Two rules:
+   - Write only from and to your own addresses, with nobody else in To or Cc.
+   - Never press Finish import. Until it is pressed, imported tickets are read-only for agents, so nobody can answer a real customer.
+
+   Upgrade with section 7 when a release fixes what you find.
+5. **End it.** Turn notifications off on your test devices (Account, Notifications), then run this block. It disables the rehearsal's Compose file first, so nothing can start the rehearsal again, then stops it and renames its folder; nothing in the folder is deleted. It refuses in a folder that is not marked, and can run again after it stopped halfway:
+
+   ```bash
+   (
+     set -euo pipefail
+     cd "$HOME/maane"
+     [ -f REHEARSAL ] || { echo "error: $HOME/maane is not a rehearsal; nothing was changed" >&2; exit 1; }
+     [ ! -e docker-compose.yml ] || mv -- docker-compose.yml docker-compose.yml.rehearsal
+     docker compose -f docker-compose.yml.rehearsal down
+     mv -T -- "$HOME/maane" "$HOME/maane-rehearsal"
+     echo "The rehearsal is stopped, in $HOME/maane-rehearsal"
+   )
+   ```
+
+   Remove the transport rule and take the rehearsal mailbox out of the application's scope. Do not answer the rehearsal's mail: its links no longer work, and its ticket numbers will belong to other tickets. Then do sections 2 to 4 again for the version the rehearsal ended on, without step 1, and go on with setup day. At SMTP2GO, change the rehearsal's webhook to the new address and token instead of adding a second one.
+6. **Remove it** after setup day, when you no longer need it. The folder holds customer data. This block deletes it for good, and refuses when a Zendesk archive is inside:
+
+   ```bash
+   (
+     set -euo pipefail
+     dir="$HOME/maane-rehearsal"
+     [ -f "$dir/REHEARSAL" ] && [ ! -L "$dir" ] || { echo "error: $dir is not a rehearsal; nothing was deleted" >&2; exit 1; }
+     archive="$(sudo find "$dir" -name archive.json -print -quit)"
+     [ -z "$archive" ] || { echo "error: a Zendesk archive is inside ($archive); move it out first. Nothing was deleted" >&2; exit 1; }
+     sudo rm -rf --one-file-system -- "$dir"
+     echo "Removed $dir"
+   )
+   ```
+
 ### Setup day: from Zendesk to Maane
 
 Maane is live from the first moment (owner's decision, 2026-11-17): there is no listening period, no cutover, and no rollback. Do these steps in this order on one day:
 
-1. **Set Maane up.** Sections 1 to 4: the server, the domains, the organizations with their support addresses and a default address, SMTP2GO (Settings, Sending, and [its delivery status](#connect-smtp2gos-delivery-status)), Microsoft Graph, and the Zendesk archive mounted as above. Run the import.
+1. **Set Maane up.** Sections 1 to 4: the server, the domains, the organizations with their support addresses and a default address, SMTP2GO (Settings, Sending, and [its delivery status](#connect-smtp2gos-delivery-status)), and the Zendesk archive mounted as above. Run the import. Only when it is done, connect Microsoft Graph: a message that already waits in the intake mailbox opens a ticket at once, and before the import it would take a number of a Zendesk ticket, which is then not imported.
 2. **Point the Microsoft 365 rules at the intake mailbox** instead of Zendesk. From here Maane receives and answers all new mail.
 3. **At least five minutes later, back up and import again.** Run the Zendesk backup again ([zendesk-backup.md](zendesk-backup.md); it continues where it stopped), then start the import again, so mail Zendesk received before the rules changed is in Maane too. Zendesk's API leaves out the most recent minute, so the wait is required.
 4. **Press Finish import** on the Import page once the last run is done. Imported tickets become ordinary tickets, and nothing more can be imported.
@@ -558,6 +611,8 @@ Test a restore before setup day, and again from time to time. Run it on another 
 To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported.
 
 ## What was verified
+
+Rehearsal (2026-11-24): its three blocks ran as written, as an unprivileged user with `sudo`, in a throwaway Docker-in-Docker container with the real `docker-compose.yml`, an image built from this repository, real PostgreSQL, and secrets made in it by the blocks of section 3 (`server` and `postgres` only; no `worker`, `clamav`, or Traefik). The mark refuses without the files and once the deployment started. The end disables the Compose file, stops the stack, and renames the folder; it changes nothing in a folder that is not marked, and when Docker does not answer or the target name is taken it leaves a rehearsal that section 4 cannot start, and finishes when run again. A deployment made again from sections 2 to 4 had new secrets, no organization, and an unused ticket number sequence. The removal refuses a folder that is not marked, a symbolic link, and a folder with a Zendesk archive, and leaves the running deployment as it was. The rehearsal itself, with a real mailbox and real providers, has not run.
 
 Phase 6 (2026-11-17): live from the first moment, Finish import, and the overlap between the import and live mail ran only against stand-ins and invented archives, in the integration tests and the stack stage of `scripts/verify.sh`; the migrations that remove listening mode ran on a database filled with invented listening and live data. Nothing reached Microsoft, SMTP2GO, or Zendesk, and the steps of [setup day](#setup-day-from-zendesk-to-maane) have not run.
 

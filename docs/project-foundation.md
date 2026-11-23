@@ -294,7 +294,7 @@ Decisions where the plan was silent (2.3, for the owner's review):
 
 Open for the owner after 2.3:
 
-- The checks against the real tenant in [deployment.md](deployment.md#your-checks-against-the-real-tenant): access to the intake mailbox, refusal on another mailbox, and the routing cases of requirements 6.2 with deliberate mail on setup day. Not run.
+- The checks against the real tenant in [deployment.md](deployment.md#your-checks-against-the-real-tenant): access to the intake mailbox, refusal on another mailbox, and the routing cases of requirements 6.2 with deliberate mail after Finish import. Not run.
 - Newer patches than the pinned ones: `mailparser` 3.14.2 and 3.14.3 (changelog: dependency updates) and `sanitize-html` 2.18.2 (released 2026-11-11; its published changelog has no entry for it). None was at least two weeks old; Dependabot will offer them.
 
 ### Tickets, files, and the intake log (2.4)

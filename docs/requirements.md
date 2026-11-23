@@ -203,13 +203,14 @@ The owner makes every change in Microsoft 365 and DNS. For each step, Maane's do
 
 There is no listening period, no cutover, and no rollback. Maane answers customers from the moment the Microsoft 365 rules point at its intake mailbox, and the import runs on the same day. The order on setup day:
 
-1. Set Maane up; configure domains, addresses, and SMTP2GO; mount the Zendesk archive; run the import.
+1. Set Maane up; configure domains, addresses, and SMTP2GO; mount the Zendesk archive; run the import; then connect Microsoft Graph, so no message takes a ticket number before the import.
 2. Point the Microsoft 365 rules at the intake mailbox instead of Zendesk. From here Maane receives and answers all new mail.
 3. At least 5 minutes later, run the Zendesk backup again (it continues from its saved position) and the import again, so mail Zendesk received before the rules changed is in Maane too. The Zendesk API does not return the last minute, so the gap is required.
 4. An admin presses **Finish import**.
 
 - **Default address.** Mail becomes tickets only while a default address exists. While none exists, intake processes nothing and counts no attempt; once one exists, every waiting message is processed once, in the usual order. The default address can be replaced but never removed.
-- **Rare cases** are tested with deliberate mail right after step 2: an alias, an address that exists only in a rule, the wildcard, a blind copy, two support addresses in one message, a bounce, and an auto-reply. Each opens or joins a ticket like any mail.
+- **Rehearsal.** Before setup day the owner rehearses on the production server with test mail only, then deploys again with a new database (owner's decision, 2026-11-24, instead of a development stack). See [deployment.md](deployment.md#rehearsal).
+- **Rare cases** are tested with deliberate mail right after step 4, never before it: a test ticket takes a number the last import may need. They are an alias, an address that exists only in a rule, the wildcard, a blind copy, two support addresses in one message, a bounce, and an auto-reply. Each opens or joins a ticket like any mail, except the bounce and the auto-reply, which open none.
 
 ### 6.3 The import window
 
