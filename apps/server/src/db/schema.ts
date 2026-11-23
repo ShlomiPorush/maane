@@ -569,7 +569,7 @@ export const message = pgTable(
      * An imported comment's Message-ID as Zendesk recorded it (also in `zendesk`), kept here only so the check for the
      * same mail arriving through both intake and the import (phase 6) can use an index. Never used for threading or
      * copies: intake's threading and copy queries read `message_id_header` only. A hash index: the check only compares
-     * for equality, and a Message-ID of 998 characters outside ASCII is larger than a btree entry may be.
+     * for equality.
      */
     zendeskMessageId: text("zendesk_message_id"),
     createdAt: createdAt(),
