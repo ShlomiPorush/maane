@@ -187,7 +187,7 @@ export class IntakeSync {
       await hooks.afterMessages?.(folder, page)
       const next = result.nextLink ?? result.deltaLink
       if (!next) throw new Error("Graph answered a delta page without a nextLink or a deltaLink")
-      await this.#saveCursor(source.id, folder, next, result.nextLink ? "next" : "delta")
+      await this.#saveCursor(source.id, folder, next)
       if (!result.nextLink) return
       link = next
     }
@@ -202,15 +202,15 @@ export class IntakeSync {
     return rows.length > 0
   }
 
-  async #saveCursor(sourceId: string, folder: GraphFolder, link: string, kind: "next" | "delta"): Promise<void> {
+  async #saveCursor(sourceId: string, folder: GraphFolder, link: string): Promise<void> {
     await this.#db.transaction(async (tx) => {
       if (!(await holdSourceIfCurrent(tx, sourceId))) throw new SourceChangedError()
       await tx
         .insert(intakeCursor)
-        .values({ sourceId, folder, link, kind })
+        .values({ sourceId, folder, link })
         .onConflictDoUpdate({
           target: [intakeCursor.sourceId, intakeCursor.folder],
-          set: { link, kind, updatedAt: this.#now() },
+          set: { link, updatedAt: this.#now() },
         })
     })
   }

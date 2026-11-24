@@ -320,14 +320,11 @@ export const intakeCursor = pgTable(
     /** A well-known folder (`@maane/shared` GRAPH_FOLDERS). */
     folder: text("folder").notNull(),
     link: text("link").notNull(),
-    /** `next` (a page of the round in progress) or `delta` (the round is done). */
-    kind: text("kind").notNull(),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [
     primaryKey({ columns: [t.sourceId, t.folder] }),
     check("intake_cursor_folder", sql`${t.folder} in ('inbox', 'junkemail')`),
-    check("intake_cursor_kind", sql`${t.kind} in ('next', 'delta')`),
   ],
 )
 
@@ -535,8 +532,7 @@ export const message = pgTable(
     possiblyAutomated: boolean("possibly_automated").notNull().default(false),
     /** Processing runs that failed on this message; after a few it is recorded for review instead. */
     processAttempts: integer("process_attempts").notNull().default(0),
-    /** Fetches of this message again for what waits for the scanner, and the last one. */
-    retryAttempts: integer("retry_attempts").notNull().default(0),
+    /** The last fetch of this message again for what waits for the scanner. */
     retryAt: at("retry_at"),
     /** `@maane/shared` MESSAGE_FLAGS. */
     reviewFlags: text("review_flags").array().notNull().default(sql`'{}'::text[]`),
@@ -731,8 +727,6 @@ export const outbox = pgTable(
     fromAddress: text("from_address").notNull(),
     state: text("state").notNull().default("pending"),
     problem: text("problem"),
-    /** Send attempts started: each tries the first provider, then the failover for what the first did not take. */
-    attempts: integer("attempts").notNull().default(0),
     /**
      * The attempt that owns the row while it is `sending`, a new ID for each claim. Every later step of an attempt
      * (each send, each result) goes on only while this is still its ID and the row still `sending`; a stale attempt

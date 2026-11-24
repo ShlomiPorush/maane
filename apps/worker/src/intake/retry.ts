@@ -89,10 +89,7 @@ export class WaitingFiles {
     const maxBytes = await this.#settings.get("files.maxBytes")
     for (const item of waiting) {
       summary.messages++
-      await this.#db
-        .update(message)
-        .set({ retryAttempts: sql`${message.retryAttempts} + 1`, retryAt: this.#now() })
-        .where(eq(message.id, item.id))
+      await this.#db.update(message).set({ retryAt: this.#now() }).where(eq(message.id, item.id))
       // A record kept only Graph's metadata: its header values come from that metadata, fetched again (review G14).
       if (item.content !== "parsed") {
         const result = await this.#retryRecord(config, item)

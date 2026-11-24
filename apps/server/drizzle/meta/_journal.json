@@ -232,6 +232,13 @@
       "when": 1795539900274,
       "tag": "0032_drop_snooze_version",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1795543282289,
+      "tag": "0033_drop_unread_columns",
+      "breakpoints": true
     }
   ]
 }

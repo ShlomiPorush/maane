@@ -257,7 +257,6 @@ export class ReplySender {
           state: "sending",
           attempt,
           problem: null,
-          attempts: sql`${outbox.attempts} + 1`,
           updatedAt: this.#now(),
         })
         .where(eq(outbox.messageId, messageId))
