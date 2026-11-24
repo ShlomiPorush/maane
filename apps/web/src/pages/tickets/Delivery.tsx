@@ -1,10 +1,3 @@
-// Where a reply's sending is (plan 3.1): its state, each recipient's (accepted, refused, unknown, or not sent yet) and
-// the server that answered, and, when its fate is unknown or nothing went out, what the agent can do: send it again
-// to the recipients not accepted, or mark one recipient whose fate is unknown as sent (each on its own: one of them
-// may have been refused before the connection dropped). Both ask first: a second copy cannot be called back. Once a
-// provider or a delivery report said what the recipient's server did (plan 3.3), that status shows with its time and the
-// provider's reason, and a delivery event Maane could not tie to one recipient shows above the list.
-
 import type { DeliveryStatus, DeliveryView, OutboxState, RecipientState } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
@@ -31,7 +24,6 @@ const RECIPIENT_TONE: Record<RecipientState, Tone> = {
   refused: "fail",
   unknown: "warn",
 }
-/** What the recipient's server did (plan 3.3): delivered, or a bounce, a rejection, or a spam report. */
 const STATUS_TONE: Record<DeliveryStatus, Tone> = {
   delivered: "ok",
   soft_bounce: "warn",
@@ -104,8 +96,6 @@ export function Delivery({
         <Banner
           tone="fail"
           title={delivery.problem ? t(`delivery.problem.${delivery.problem}`) : t("delivery.refusedAll")}
-          // A scheduled reply ended before it went out never goes again (plan 4.2), nor does an automatic reminder (plan
-          // 4.3) unless no provider accepted it and its waiting period still holds: the server refuses Send again.
           action={delivery.scheduledEnded || (delivery.reminder && !delivery.reminderResend) ? undefined : actions}
         />
       ) : null}

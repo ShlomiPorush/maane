@@ -1,12 +1,3 @@
-// The one menu builder (v3 MP-7, DS-24; the shape of n8n-ops' account menu, a Radix DropdownMenu, rebuilt on
-// Maane's layer owner). A menu is a layer of ui/layers.ts: Escape and Back close it and stay on the page, the
-// focus moves to its first item and back to its button, and the page behind is inert. It opens beside its
-// button, clamped 8px inside the screen, and a press beside it closes it. Up and Down move through the items
-// and wrap, Home and End jump, Tab closes it; choosing an item closes the menu first, then runs the item. A
-// link opens its page in place of the menu's history entry and the menu closes once the move is made, as the
-// More sheet does: so no stale step is left behind, and Stay in the Leave question keeps the menu open.
-// popups.guard.test.ts fails on a menu made anywhere else.
-
 import { Check } from "lucide-react"
 import {
   type CSSProperties,
@@ -33,7 +24,6 @@ export type MenuEntry =
 export type MenuRadio = {
   label: string
   icon?: ReactNode
-  /** The language of the label, when it is not the page's (a language's own name). */
   lang?: string
   checked: boolean
   onSelect: () => void
@@ -54,9 +44,7 @@ export function Menu({
   anchor: RefObject<HTMLElement | null>
   label: string
   entries: MenuEntry[]
-  /** Above the button (the sidebar foot) or under it (the phone top bar). */
   side: "top" | "bottom"
-  /** Which edge of the button the menu lines up with, in the reading direction. */
   align: "start" | "end"
   onClose: () => void
 }) {
@@ -71,7 +59,6 @@ export function Menu({
   const { pathname } = useLocation()
   const openedOn = useRef(pathname)
 
-  // A link took the menu's history entry: the menu closes once its page shows.
   useEffect(() => {
     if (pathname !== openedOn.current) closeRef.current()
   }, [pathname])
@@ -82,7 +69,6 @@ export function Menu({
     if (!rect || !panel) return
     const width = panel.offsetWidth
     const rtl = dir === "rtl"
-    // The start edge of the menu, measured from the start edge of the screen in the reading direction.
     const buttonStart = rtl ? window.innerWidth - rect.right : rect.left
     const buttonEnd = rtl ? window.innerWidth - rect.left : rect.right
     const wanted = align === "start" ? buttonStart : buttonEnd - width
@@ -94,7 +80,6 @@ export function Menu({
     setPlace({ ...vertical, insetInlineStart: start })
   }, [anchor, dir, side, align])
 
-  // The press beside the menu is the layer's root, portalled into <body> as the dialog builder does.
   useEffect(() => {
     const root = rootRef.current
     if (!root) return
@@ -105,7 +90,6 @@ export function Menu({
     })
   }, [])
 
-  // The button moves to the other bar at 760px: the menu that belongs to it closes.
   useEffect(() => {
     const media = matchMedia("(max-width: 760px)")
     const onChange = () => closeRef.current()
@@ -174,9 +158,7 @@ export function Menu({
             )
           if (entry.kind === "radios")
             return (
-              // A named group of choices, one of them checked (the theme). WAI-ARIA's menu pattern groups
-              // menuitemradio items with role group; a fieldset is not allowed inside a menu.
-              // biome-ignore lint/a11y/useSemanticElements: see above
+              // biome-ignore lint/a11y/useSemanticElements: the radio items form a group of the menu
               <div key={key} role="group" aria-label={entry.label}>
                 <div className="ui-menu-label" aria-hidden="true">
                   {entry.label}

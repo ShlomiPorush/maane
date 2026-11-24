@@ -1,13 +1,3 @@
-/*
- * Maane design system, after the v3 style (skill v3-ui-style): the text colour is the accent and
- * colour means status. Every visual value is a token below; light on :root, dark on .dark on <html>.
- * Every class starts with "ui-". Only logical properties, so right to left needs no second sheet.
- * Hover styles are gated by (hover: hover); focus styles are not. Animations stay under reduced
- * motion on purpose (v3 AX-8). Floating layers are listed in src/guards.test.ts.
- */
-
-/* ---------- Tokens ---------- */
-
 :root {
   --ui-font: "Onest Variable", "Noto Sans Hebrew Variable", system-ui, sans-serif;
   --ui-mono: "IBM Plex Mono", "Noto Sans Hebrew Variable", ui-monospace, monospace;
@@ -24,7 +14,6 @@
   --ui-fs-section: 22px;
   --ui-fs-caps: 11.5px;
   --ui-h1: 28px;
-  /* The page title on a phone, and on a very narrow one; phone fields stay 16px so iOS does not zoom (MO-2). */
   --ui-h1-phone: 24px;
   --ui-h1-xs: 21px;
   --ui-fs-field-phone: 16px;
@@ -55,7 +44,6 @@
   --ui-bg: #ffffff;
   --ui-panel: #f4f6f5;
   --ui-raise: #ffffff;
-  /* Paper behind incoming mail and PDF pages: white in both themes, as the sender wrote them for it. */
   --ui-paper: #ffffff;
   --ui-ink: #111814;
   --ui-muted: #5e6863;
@@ -69,7 +57,6 @@
   --ui-fail: #c42b1c;
   --ui-info: #1f5fbf;
 
-  /* The shell (n8n-ops Regular): the grey canvas under the page card, the soft fill of the current page. */
   --ui-canvas: var(--ui-panel);
   --ui-fill: color-mix(in srgb, var(--ui-ink) 8%, transparent);
   --ui-hover: color-mix(in srgb, var(--ui-ink) 5%, transparent);
@@ -99,8 +86,6 @@
 
   color-scheme: dark;
 }
-
-/* ---------- Base and app frame: the browser never scrolls, each page scrolls inside ---------- */
 
 *,
 *::before,
@@ -168,14 +153,6 @@ button {
   letter-spacing: -0.035em;
 }
 
-/* ---------- Shell ---------- */
-
-/*
- * Copied from n8n-ops' shell in its Regular design (apps/web/src/app/shell.tsx at afba697), with the tokens below:
- * the sidebar and the brand on a grey canvas, the top bar and the page in one floating card. The card is drawn
- * behind them (.ui-frame), so their order for the keyboard and screen readers stays as is. Above 1100px the
- * sidebar folds into the icon rail (html[data-nav="rail"], NL-7); from 761 to 1100px it is always the rail.
- */
 .ui-shell {
   display: grid;
   height: 100dvh;
@@ -223,7 +200,6 @@ button {
   height: 18px;
 }
 
-/* The top bar from 761px (NL-6): the brand over the sidebar's column, the bar over the page's. */
 .ui-topbar {
   grid-column: 1 / 3;
   grid-row: 1;
@@ -272,7 +248,6 @@ button {
   margin-inline-end: var(--ui-frame-gap);
   border-bottom: 1px solid var(--ui-line);
 }
-/* The fold toggle sits at the start of the bar behind a short divider, only where the full sidebar exists. */
 .ui-topbar-fold {
   display: none;
   align-items: center;
@@ -285,7 +260,6 @@ button {
   height: 16px;
   background: var(--ui-line);
 }
-/* The sidebar is on the right under RTL, so its fold icon points the other way. */
 [dir="rtl"] .ui-flip-rtl {
   transform: scaleX(-1);
 }
@@ -340,7 +314,6 @@ button {
 .ui-crumbs li + .ui-crumb-current h1 {
   font-weight: 600;
 }
-/* A page title that is not the last crumb is a link back, muted like a crumb. */
 .ui-crumbs li:not(.ui-crumb-current) h1 {
   color: var(--ui-muted);
 }
@@ -357,14 +330,12 @@ button {
   flex: none;
   align-items: center;
   gap: 8px;
-  /* As far from the panel's end edge as the trail's own end padding. */
   margin-inline: 12px 22px;
 }
 .ui-topbar-actions:empty {
   display: none;
 }
 
-/* The sidebar: on the canvas, the pages, then at its foot the account, the language and the theme. */
 .ui-sidenav {
   grid-column: 1;
   grid-row: 2;
@@ -483,7 +454,6 @@ button {
   font-size: var(--ui-fs-meta);
 }
 
-/* The page: in the card, under the bar; it scrolls inside (NL-1). */
 .ui-content {
   grid-column: 2;
   grid-row: 2;
@@ -512,7 +482,6 @@ button {
 .ui-page > * {
   flex: none;
 }
-/* A page's head: from 761px its icon, its name drawn large and its description; the h1 is in the top bar. */
 .ui-page-head {
   display: flex;
   align-items: flex-start;
@@ -576,8 +545,6 @@ button {
 .ui-tabbar {
   display: none;
 }
-
-/* ---------- The account menu (MP-7, DS-24): a layer of ui/layers.ts, built only by ui/Menu.tsx ---------- */
 
 .ui-menu-backdrop {
   position: fixed;
@@ -669,8 +636,6 @@ button {
   color: var(--ui-ink);
 }
 
-/* ---------- Wide screens: the full sidebar, or the rail it folds into ---------- */
-
 @media (min-width: 1101px) {
   .ui-topbar-fold {
     display: flex;
@@ -686,7 +651,6 @@ button {
   }
 }
 
-/* The icon rail (NL-7): always from 761 to 1100px, and above 1100px once the owner folds the sidebar. */
 @media (max-width: 1100px) {
   .ui-shell {
     grid-template-columns: var(--ui-rail-w) minmax(0, 1fr);
@@ -762,8 +726,6 @@ button {
   }
 }
 
-/* ---------- Panels, rows, figures ---------- */
-
 .ui-panel {
   background: var(--ui-panel);
   border-radius: var(--ui-radius);
@@ -789,7 +751,6 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-/* An item row: its status edge on the start side, the whole row opens it (TB-8) */
 .ui-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -850,7 +811,6 @@ button {
   gap: 6px 8px;
 }
 
-/* A row that is itself the link to what it names (an organization): the row's look, not a link's. */
 .ui-item.ui-item-link {
   color: inherit;
   text-decoration: none;
@@ -869,7 +829,6 @@ button {
 [dir="rtl"] .ui-item-chevron {
   transform: scaleX(-1);
 }
-/* A title line that holds a value and its tags: they wrap instead of being cut. */
 .ui-item-title.ui-item-tags {
   display: flex;
   flex-wrap: wrap;
@@ -877,14 +836,12 @@ button {
   gap: 4px 8px;
   white-space: normal;
 }
-/* Actions on a whole panel's list, at the end of its head. */
 .ui-panel-acts {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-inline-start: auto;
 }
-/* One muted line under a panel's head that says what the panel is for. */
 .ui-panel-intro {
   max-width: 75ch;
   margin: 0;
@@ -893,7 +850,6 @@ button {
   font-size: var(--ui-fs-sm);
   line-height: 1.5;
 }
-/* A one-field form in a panel: the field takes the room, its button stays beside it. */
 .ui-check-form {
   display: flex;
   gap: 8px;
@@ -908,20 +864,14 @@ button {
 .ui-check-result > :last-child {
   margin-bottom: 14px;
 }
-/* The note and the Show more button under a list that loads by pages. */
 .ui-agents-more {
   display: grid;
   justify-items: start;
   gap: 6px;
 }
-/* A setting's explanation in several lines, one per choice. */
 .ui-set-desc-line {
   display: block;
 }
-
-/* ---------- The filter bar (MP-6, TB-17, SR-10): built only by ui/FilterBar.tsx ---------- */
-
-/* ---------- Buttons ---------- */
 
 .ui-btn {
   display: inline-flex;
@@ -1017,8 +967,6 @@ button {
   }
 }
 
-/* ---------- Fields ---------- */
-
 .ui-field {
   display: grid;
   gap: 5px;
@@ -1062,8 +1010,7 @@ button {
 .ui-pass {
   position: relative;
 }
-/* The toggle sits at the page's inline end, but the field itself is left to right (a password is not
-   Hebrew), so its room for the toggle follows the page's direction, not the field's. */
+/* padding-inline-end would put the toggle over the typed password in Hebrew, where the field stays left to right. */
 .ui-pass .ui-input {
   padding-right: 44px;
 }
@@ -1099,25 +1046,16 @@ button {
   gap: 14px;
 }
 
-/*
- * Settings sections (FS-8, FS-10, SV-1): a sidebar of sections under group headings beside the open section. From
- * 1024px wide and 601px tall the sidebar and the fields scroll separately; otherwise the page scrolls as one. Below
- * 1024px the sidebar becomes one sticky picker. The fields end with room for the save bar.
- */
-/* A section that holds unsaved changes (SV-1). */
 .ui-account {
   display: grid;
   align-content: start;
   gap: var(--ui-gap);
   min-width: 0;
 }
-/* The Account page's groups are as wide as a Settings section's fields (1180px less the 220px sidebar and its 28px
-   gap): a row keeps its label and its control within one look. */
 .ui-account {
   width: 100%;
   max-width: 932px;
 }
-/* A group: a small panel with a 13px title; its first row needs no rule under the title. */
 .ui-set-group-head {
   display: flex;
   flex-wrap: wrap;
@@ -1136,7 +1074,6 @@ button {
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
-/* Actions on the whole list (Disconnect all, Remove all): at the end of the head, red text (S-12, DS-20). */
 .ui-set-group-acts {
   display: flex;
   flex-wrap: wrap;
@@ -1152,7 +1089,6 @@ button {
   line-height: 1.5;
 }
 
-/* Settings rows: label and explanation at the start, the control at the end (FS-8) */
 .ui-set-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
@@ -1178,7 +1114,6 @@ button {
   font-size: var(--ui-fs-sm);
   line-height: 1.5;
 }
-/* The control fills its column; a segmented control, a button and a plain value sit at its end edge. */
 .ui-set-control {
   display: grid;
   gap: 6px;
@@ -1197,8 +1132,6 @@ button {
   align-items: center;
   font-weight: 600;
 }
-
-/* ---------- Tags, chips, segmented control ---------- */
 
 .ui-tag {
   display: inline-block;
@@ -1240,7 +1173,6 @@ button {
   border-radius: var(--ui-radius-sm);
   background: var(--ui-panel);
 }
-/* On a panel the track is a shade of it, so the lifted segment shows in both themes (S-10). */
 .ui-panel .ui-seg {
   background: color-mix(in srgb, var(--ui-ink) 6%, var(--ui-panel));
 }
@@ -1265,7 +1197,6 @@ button {
   cursor: not-allowed;
 }
 
-/* Click to copy (FB-12) */
 .ui-copy {
   display: inline-flex;
   align-items: center;
@@ -1303,8 +1234,6 @@ button {
   opacity: 1;
   color: var(--ui-ok);
 }
-
-/* ---------- States ---------- */
 
 .ui-loading {
   display: grid;
@@ -1402,8 +1331,6 @@ button {
   background: color-mix(in srgb, var(--ui-fail) 13%, transparent);
 }
 
-/* ---------- Dialog and phone sheet (DS-1 to DS-4, DS-16, DS-24) ---------- */
-
 html.ui-layer-on .ui-page {
   overflow: hidden;
 }
@@ -1484,7 +1411,6 @@ html.ui-layer-on .ui-page {
 .ui-dialog[role="alertdialog"] .ui-dialog-foot {
   border-top: 0;
 }
-/* A question goes over everything but the toast, the save bar included (v3 ui.css:2408). */
 .ui-dialog-backdrop.ui-confirm {
   z-index: 99999;
 }
@@ -1493,8 +1419,6 @@ html.ui-layer-on .ui-page {
   line-height: 1.55;
   white-space: pre-line;
 }
-
-/* ---------- Toast (FB-2) ---------- */
 
 .ui-toast {
   position: fixed;
@@ -1554,8 +1478,6 @@ html.ui-layer-on .ui-page {
   color: var(--ui-warn);
 }
 
-/* ---------- Save bar (SV-1) ---------- */
-
 .ui-savebar {
   position: fixed;
   inset: auto 0 18px 0;
@@ -1591,8 +1513,6 @@ html.ui-layer-on .ui-page {
   cursor: wait;
 }
 
-/* ---------- Sign-in and setup pages (FS-23: a column on the page, no card) ---------- */
-
 .ui-auth {
   display: grid;
   place-items: center;
@@ -1606,7 +1526,6 @@ html.ui-layer-on .ui-page {
   width: 100%;
   max-width: 400px;
 }
-/* Nothing inside may widen the column past a phone screen. */
 .ui-auth-col > * {
   min-width: 0;
 }
@@ -1641,7 +1560,6 @@ html.ui-layer-on .ui-page {
   max-width: 100%;
   text-align: start;
 }
-/* A long key or command wraps instead of being cut: it is read and typed, not only copied. */
 .ui-auth-note .ui-copy bdi,
 .ui-secret .ui-copy bdi,
 .ui-item-tags .ui-copy bdi {
@@ -1665,7 +1583,6 @@ html.ui-layer-on .ui-page {
   display: grid;
   place-items: center;
 }
-/* The code stays dark on white in both themes: authenticator apps read it that way. */
 .ui-qr img,
 .ui-qr-wait {
   width: 220px;
@@ -1715,19 +1632,11 @@ html.ui-layer-on .ui-page {
   color: var(--ui-ok);
 }
 
-/* ---------- Account (Settings) ---------- */
-
 .ui-account-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
-
-/* ---------- Rail: 761 to 1100px (icon rail, dot counters) ---------- */
-
-/* ---------- One column below 1000px ---------- */
-
-/* ---------- Phone: slim top bar, bottom tab bar, sheets ---------- */
 
 @media (max-width: 760px) {
   .ui-shell {
@@ -1842,7 +1751,6 @@ html.ui-layer-on .ui-page {
     color: var(--ui-ink);
     font-weight: 650;
   }
-  /* The More sheet sits on top of the tab bar, so no page hides behind it (NL-9) */
   .ui-menu-item {
     min-height: var(--ui-touch);
   }
@@ -1853,7 +1761,6 @@ html.ui-layer-on .ui-page {
     display: grid;
     gap: 6px;
   }
-  /* The main action on the title's line, without its icon, so the title keeps its room (NL-14). */
   .ui-page-head-row .ui-page-actions .ui-btn > svg {
     display: none;
   }
@@ -1875,7 +1782,6 @@ html.ui-layer-on .ui-page {
   .ui-item-end {
     justify-content: flex-start;
   }
-  /* A row that is itself a link keeps its chevron at the end of the row's line (it has no other control). */
   .ui-item.ui-item-link {
     grid-template-columns: minmax(0, 1fr) auto;
   }
@@ -1892,7 +1798,6 @@ html.ui-layer-on .ui-page {
     grid-column: 2;
     justify-self: start;
   }
-  /* Phone tables stack into rows with inline labels (TB-14) */
   .ui-toast {
     bottom: calc(var(--ui-tabbar-h) + 12px + env(safe-area-inset-bottom));
   }
@@ -1904,8 +1809,6 @@ html.ui-layer-on .ui-page {
     flex: 1;
   }
 
-  /* Every dialog is a bottom sheet: four fifths high, grows with the scroll (DS-1) */
-  /* A sheet opens over the save bar, as v3's .ui-sheet does (z-index 70 against 60). */
   .ui-dialog-backdrop {
     z-index: 70;
     align-items: flex-end;
@@ -1987,19 +1890,17 @@ html.ui-layer-on .ui-page {
   cursor: pointer;
 }
 
-/* User text keeps its own direction (dir="auto") but lines up with the page (v3 RT-2) */
+/* text-align: start would follow each text's own direction and move an English subject across a Hebrew row. */
 [dir="rtl"] [dir="auto"] {
   text-align: right;
 }
 [dir="ltr"] [dir="auto"] {
   text-align: left;
 }
-/* A title that is a button keeps to its column, so a long title ends in an ellipsis instead of overflowing */
 button.ui-item-title {
   width: 100%;
 }
 
-/* ---------- Settings: switches, environment locks, stored secrets (v3 FS-1, FS-2, FS-3, FS-6) ---------- */
 .ui-set-pill {
   display: inline-flex;
   align-items: center;
@@ -2026,7 +1927,6 @@ button.ui-item-title {
   color: var(--ui-muted);
   font-size: var(--ui-fs-meta);
 }
-/* A value the environment sets stays in place, disabled (FS-6). */
 .ui-set-control :is(input, select, .ui-btn):disabled {
   opacity: 0.7;
   cursor: not-allowed;
@@ -2046,13 +1946,10 @@ button.ui-item-title {
     text-decoration: underline;
   }
 }
-/* The field takes the row; named by its place, not by .ui-input, so no field rule above is outranked. */
 .ui-set-group > .ui-empty,
 .ui-set-group > .ui-loading {
   border-top: 1px solid var(--ui-line);
 }
-
-/* ---------- Sign-in: other second factors, backup codes ---------- */
 
 .ui-auth-alt {
   display: flex;
@@ -2072,9 +1969,6 @@ button.ui-item-title {
   list-style: none;
 }
 
-/* ---------- Maane: the sign-in pages' tools, choices, list ends, audit facts ---------- */
-
-/* The brand at the start, the language and theme buttons at the end of the sign-in column. */
 .ui-auth-top {
   display: flex;
   align-items: center;
@@ -2086,7 +1980,6 @@ button.ui-item-title {
   align-items: center;
   gap: 4px;
 }
-/* A choice of one (the role of a new user): its options stacked under the label. */
 .ui-choice {
   display: grid;
   gap: 8px;
@@ -2097,7 +1990,6 @@ button.ui-item-title {
 .ui-choice .ui-hint {
   display: block;
 }
-/* The field of a one-field form (the address check) takes the room beside its button. */
 .ui-check-input {
   flex: 1;
   min-width: 0;
@@ -2106,7 +1998,6 @@ button.ui-item-title {
   max-width: 120px;
   font-variant-numeric: tabular-nums;
 }
-/* The end of a list: a count note, or the button that reads the next page by its cursor (TB-6). */
 .ui-list-note {
   margin: 0;
   padding: var(--ui-pad-y) var(--ui-pad-x) 13px;
@@ -2125,7 +2016,6 @@ button.ui-item-title {
 .ui-list-more .ui-hint {
   margin: 0;
 }
-/* An audit entry's facts after its action: each a muted name and its value. */
 .ui-audit-facts {
   display: inline-flex;
   flex-wrap: wrap;
@@ -2139,13 +2029,11 @@ button.ui-item-title {
   color: var(--ui-ink);
   font-weight: 600;
 }
-/* The segmented control as a fieldset (a named group of choices): no frame of its own. */
 fieldset.ui-seg {
   min-inline-size: 0;
   margin: 0;
   border: 0;
 }
-/* "Reset to default (value)" under a setting's explanation, in the info colour (FS-6). */
 .ui-set-clear {
   display: inline-flex;
   align-items: center;
@@ -2162,7 +2050,6 @@ fieldset.ui-seg {
 .ui-set-clear.is-reset {
   color: var(--ui-info);
 }
-/* A list typed as text (the blocked file types): a field that grows downward, one entry per line or comma. */
 textarea.ui-input.ui-textarea {
   height: auto;
   min-height: calc(var(--ui-ctl-h) * 3);
@@ -2170,8 +2057,6 @@ textarea.ui-input.ui-textarea {
   line-height: 1.5;
   resize: vertical;
 }
-/* The scanner's latest self-test and the Graph connection test on the Settings page: the status tag and when, then
-   what failed and what was tested, at the end of the row like the other controls. */
 .ui-scanner {
   display: grid;
   gap: 4px;
@@ -2212,15 +2097,11 @@ textarea.ui-input.ui-textarea {
   }
 }
 
-/* ---------- Tickets, the ticket view, file preview, the intake log (plan 2.4) ---------- */
-
-/* A list that reads its next filter keeps its rows, dimmed only when the answer takes longer than 200ms (TB-5). */
 .ui-panel[data-reloading] .ui-item {
   opacity: 0.55;
   transition: opacity 0.15s ease 0.2s;
 }
 
-/* Filters above a list: each a muted label over its control; they wrap on narrow screens. */
 .ui-filters {
   display: flex;
   flex-wrap: wrap;
@@ -2239,7 +2120,6 @@ textarea.ui-input.ui-textarea {
   cursor: pointer;
 }
 
-/* The ticket list's search (plan 4.4): a label over the box and its button; the box takes the room the row has. */
 .ui-search {
   display: grid;
   gap: 5px;
@@ -2253,7 +2133,6 @@ textarea.ui-input.ui-textarea {
 .ui-search-row .ui-input {
   flex: 1 1 auto;
   min-width: 0;
-  /* As tall as its button: 40px on a phone, where buttons grow for the finger. */
   height: auto;
   min-height: var(--ui-ctl-h);
 }
@@ -2261,7 +2140,6 @@ textarea.ui-input.ui-textarea {
   flex: none;
 }
 
-/* A ticket row: its number in mono before the subject, which keeps its own direction. */
 .ui-ticket-num {
   color: var(--ui-muted);
   font-weight: 600;
@@ -2283,7 +2161,6 @@ textarea.ui-input.ui-textarea {
   gap: 4px 8px;
 }
 
-/* Key and value facts of one item: the key muted at the start, the value after it. */
 .ui-facts {
   display: grid;
   margin: 0;
@@ -2312,7 +2189,6 @@ textarea.ui-input.ui-textarea {
   gap: 4px 14px;
 }
 
-/* The workflow of a ticket (plan 4.1): its status, categories, and organization, each with its control. */
 .ui-workflow-field {
   display: grid;
   gap: 4px;
@@ -2344,7 +2220,6 @@ textarea.ui-input.ui-textarea {
   font-weight: 650;
 }
 
-/* An address with its name: the address in mono, isolated left to right. */
 .ui-address {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -2354,7 +2229,6 @@ textarea.ui-input.ui-textarea {
   font-size: 0.92em;
 }
 
-/* One message: who and when, to whom, notices, the framed body, its files. */
 .ui-message {
   display: grid;
   gap: 10px;
@@ -2407,8 +2281,6 @@ textarea.ui-input.ui-textarea {
   font-size: var(--ui-fs-sm);
 }
 
-/* The body's frame: white like the mail it shows, in both themes; its height follows the text, and the agent may
-   make it taller. */
 .ui-mail {
   display: grid;
   gap: 8px;
@@ -2439,7 +2311,6 @@ textarea.ui-input.ui-textarea {
   overflow: auto;
 }
 
-/* A message's files: name, status in words, size, and what can be done with each. */
 .ui-files {
   display: grid;
   gap: 4px;
@@ -2506,7 +2377,6 @@ textarea.ui-input.ui-textarea {
   text-decoration: none;
 }
 
-/* A preview in the dialog. */
 .ui-preview {
   display: grid;
   justify-items: center;
@@ -2529,7 +2399,6 @@ textarea.ui-input.ui-textarea {
   font-size: var(--ui-fs-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  /* Each line takes the direction of its own first strong character. */
   unicode-bidi: plaintext;
   text-align: start;
 }
@@ -2564,7 +2433,6 @@ textarea.ui-input.ui-textarea {
   box-shadow: 0 0 0 1px var(--ui-line);
 }
 
-/* An intake log entry: what was done or would be done, its tickets and reason. */
 .ui-intake-outcome {
   display: flex;
   flex-wrap: wrap;
@@ -2610,14 +2478,10 @@ textarea.ui-input.ui-textarea {
   }
 }
 
-/* ---------- Replies and notes (plan 3.1) ---------- */
-
-/* An internal note: never sent, so it reads apart from mail on a faint warning tint. */
 .ui-message[data-direction="note"] {
   background: color-mix(in srgb, var(--ui-warn) 7%, var(--ui-panel));
 }
 
-/* Where a reply's sending is: its state, then each recipient with its own. */
 .ui-delivery {
   display: grid;
   gap: 8px;
@@ -2654,7 +2518,6 @@ textarea.ui-input.ui-textarea {
   color: var(--ui-muted);
   font-weight: 600;
 }
-/* What the recipient's server did: the status, its time, and the provider's reason, which may be long. */
 .ui-delivery-status {
   display: inline-flex;
   flex-wrap: wrap;
@@ -2669,8 +2532,6 @@ textarea.ui-input.ui-textarea {
   min-width: 0;
 }
 
-/* Clicks and downloads of a reply (plan 3.4): each link or file with its count and last time, then its clicks, the flag
-   first in reading order, the address left to right. */
 .ui-clicks {
   display: grid;
   gap: 8px;
@@ -2732,7 +2593,6 @@ textarea.ui-input.ui-textarea {
   padding-inline-start: 30px;
 }
 
-/* The composer: the fields, the editor with its tools, the signature, files, and the actions at its end. */
 .ui-composer-body {
   display: grid;
   gap: 12px;
@@ -2788,7 +2648,6 @@ textarea.ui-input.ui-textarea {
   background: var(--ui-fill);
   color: var(--ui-ink);
 }
-/* TipTap's own stylesheet is off (the UI's policy allows no inline style element): ProseMirror's needs, here. */
 .ui-editor-text {
   min-height: 160px;
   max-height: 60dvh;
@@ -2850,7 +2709,6 @@ textarea.ui-input.ui-textarea {
   padding: 0;
   list-style: none;
 }
-/* Scheduled replies (plan 4.2): a card per reply above the composer, its time at the end of its head. */
 .ui-scheduled-list {
   display: grid;
   gap: var(--ui-gap);
@@ -2918,7 +2776,6 @@ textarea.ui-input.ui-textarea {
   gap: 8px;
 }
 
-/* A date and a time side by side (plan 4.2: send later, snooze), one under the other on a phone. */
 .ui-when {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2957,13 +2814,11 @@ textarea.ui-input.ui-textarea {
   margin-inline-start: auto;
 }
 
-/* An organization's signature as the customer reads it. */
 .ui-signature {
   margin: 0;
   padding: 4px var(--ui-pad-x) 16px;
   white-space: pre-wrap;
 }
-/* An organization's automatic reminder (plan 4.3): when it goes, above its text. */
 .ui-reminder-after {
   margin: 0;
   padding: 4px var(--ui-pad-x) 0;
@@ -2973,7 +2828,6 @@ textarea.ui-input.ui-textarea {
 .ui-input-days {
   max-width: 7ch;
 }
-/* A ticket's reminder that has not gone yet (plan 4.3): the scheduled card's layout, its title in the line. */
 .ui-reminder-title {
   margin: 0;
   font-size: inherit;
@@ -2993,8 +2847,6 @@ textarea.ui-input.ui-textarea {
   }
 }
 
-/* The import from Zendesk (plan 5.1): the mapping's groups and rows, the run's progress, and the archive check's
-   problems. */
 .ui-import-group {
   display: grid;
   gap: 6px;

@@ -1,9 +1,3 @@
-// Organizations, /organizations, admins only (plan 2.1): every organization Maane answers for, with how many support
-// addresses and agents each has and which one holds the default address (GET /api/v1/admin/organizations). A row
-// opens the organization (/organizations/:id). Add organization asks for a name and opens the new organization. The
-// panel "Which organization gets this address?" asks the server, which answers with the same function the intake
-// uses: an exact address first, then the most specific pattern, then the default address.
-
 import { ORGANIZATION_NAME_MAX, parseExactAddress } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { ChevronRight, Plus } from "lucide-react"
@@ -77,7 +71,6 @@ function Organizations() {
   )
 }
 
-/** The whole row is the link to the organization (TB-8); it holds no control of its own. */
 function OrganizationRow({ organization }: { organization: OrganizationSummary }) {
   const { t, tc } = useI18n()
   return (
@@ -105,7 +98,6 @@ function OrganizationRow({ organization }: { organization: OrganizationSummary }
   )
 }
 
-/** A name for a new organization; once added, its page opens so its addresses and agents can be added. */
 function CreateOrganizationDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
@@ -130,7 +122,6 @@ function CreateOrganizationDialog({ onClose }: { onClose: () => void }) {
       const { organization } = await api.createOrganization(trimmed)
       showToast(t("organizations.createDone", { name: organization.name }), "success")
       void queryClient.invalidateQueries({ queryKey: qk.organizations })
-      // Closed meanwhile, or the page was left: this answer closes no other dialog and goes nowhere.
       if (!mounted.current) return
       guardedClose.dismiss()
       onClose()
@@ -179,7 +170,6 @@ function CreateOrganizationDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-/** "Which organization gets this address?": the server's answer, from the same function the intake uses. */
 function AddressCheckPanel() {
   const { t } = useI18n()
   const inputId = useId()
@@ -277,7 +267,6 @@ function CheckResult({ result }: { result: AddressCheck }) {
   )
 }
 
-/** An address or pattern: mono, isolated left to right inside a right-to-left page. */
 export function AddressText({ value }: { value: string }) {
   return (
     <bdi className="ui-mono" dir="ltr">

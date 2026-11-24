@@ -1,12 +1,3 @@
-// Users, /users, admins only: every account, through the admin plugin's routes (/admin/list-users and the actions
-// below). An admin creates a user with a username, a role and a first password; the user sets up two-factor at
-// their first sign-in. Per user: make admin or agent (/admin/set-role), set a new password
-// (/admin/set-user-password), end their sessions (/admin/revoke-user-sessions), disable or enable the account
-// (/admin/ban-user, /admin/unban-user), and set the display name replies show as their sender (Maane's own
-// /api/v1/admin/users/:id/name). A role change, a new password and a disable each end the user's sessions.
-// The first admin, made at setup, is protected: the server refuses to demote or disable it, so it shows no such
-// action; nor does the acting admin's own row. A refusal is explained in words (api/errors.ts).
-
 import {
   AGENT_NAME_MAX,
   isValidUsername,
@@ -40,7 +31,6 @@ import { Tag } from "../ui/tags.tsx"
 import { AdminOnly } from "./AdminOnly.tsx"
 import { FormError, PasswordField } from "./auth/parts.tsx"
 
-/** A user as the admin plugin lists them. */
 export type ListedUser = {
   id: string
   username?: string | null
@@ -52,10 +42,8 @@ export type ListedUser = {
   createdAt: Date | string
 }
 
-/** Maane is small: one read lists every user. */
 const USER_LIMIT = 200
 
-/** Every user, oldest first (/admin/list-users). */
 export function readUsers(): Promise<{ users: ListedUser[]; total: number }> {
   return authData(
     authClient.admin.listUsers({ query: { limit: USER_LIMIT, sortBy: "createdAt", sortDirection: "asc" } }),
@@ -71,7 +59,6 @@ export function UsersPage() {
   )
 }
 
-/** Which actions the acting admin may take on a user; the server checks the same rules on its own. */
 export function userActions(user: ListedUser, meId: string | undefined) {
   const self = user.id === meId
   const protectedAdmin = user.setupAdmin === true
@@ -318,7 +305,6 @@ function UserRow({
 
 type CreateField = "username" | "password" | "repeat"
 
-/** A new user: a username, a role, and a first password typed twice; they set up two-factor at their first sign-in. */
 function CreateUserDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
@@ -353,7 +339,6 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
           password,
           name: username,
           role,
-          // Only the username: the server refuses anything else through data.
           data: { username },
         }),
       )
@@ -442,10 +427,6 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-/**
- * The name replies show as the sender, `Name (Organization)` (plan 3.1): Maane's own endpoint sets it through Better
- * Auth's documented adminUpdateUser, with the name only.
- */
 function NameDialog({ user, onClose }: { user: ListedUser; onClose: () => void }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
@@ -515,7 +496,6 @@ function NameDialog({ user, onClose }: { user: ListedUser; onClose: () => void }
   )
 }
 
-/** A new password for a user: typed twice; every session of that user ends. */
 function SetPasswordDialog({ user, onClose }: { user: ListedUser; onClose: () => void }) {
   const { t } = useI18n()
   const formId = useId()

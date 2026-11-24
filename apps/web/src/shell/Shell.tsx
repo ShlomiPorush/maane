@@ -1,10 +1,3 @@
-// The app frame, after Mikud's shell (v3 NL-1, NL-6, NL-7, NL-9). From 761px a top bar runs across: the brand over
-// the sidebar's column, then in the page's card the fold toggle (above 1100px), the trail with the page title, and
-// the page's own actions. Above 1100px a 240px sidebar on the grey canvas that folds into the 72px icon rail,
-// remembered in this browser; from 761 to 1100px always the rail. The sidebar foot holds the account menu, the
-// language and the theme buttons. Up to 760px a slim top bar with the account menu, and a bottom tab bar with the
-// pages of the navigation: all of them when they are five or fewer, else the first four and More, a menu of the rest.
-
 import { ChevronRight, Ellipsis } from "lucide-react"
 import { useRef, useState } from "react"
 import { Link, Outlet, useLocation } from "react-router"
@@ -30,13 +23,11 @@ function ShellFrame() {
   const nav = useNavFolded()
   const me = useMe()
   const pages = navFor(me.data?.role)
-  // The page a path belongs to (a ticket belongs to the ticket list), marked current in both navigations.
   const current = navPageFor(useLocation().pathname)
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null)
   return (
     <ChromeContext.Provider value={{ actionsSlot }}>
       <div className="ui-shell">
-        {/* The page's card is drawn behind the bar and the page, so their order for the keyboard stays as is. */}
         <div className="ui-frame" aria-hidden="true" />
         <TopBar nav={nav} setActionsSlot={setActionsSlot} />
         <PhoneTopBar />
@@ -72,7 +63,6 @@ function ShellFrame() {
   )
 }
 
-/** The phone tab bar holds five places at most: past five, the fifth is More, a menu of the pages that do not fit. */
 const TABS = 5
 
 function TabBar({ pages }: { pages: readonly NavPage[] }) {
@@ -129,10 +119,6 @@ function TabBar({ pages }: { pages: readonly NavPage[] }) {
   )
 }
 
-/**
- * Maane's mark, a thread: three bars that alternate sides like a ticket's messages. It never mirrors with the
- * direction. The same bars, at the tile's scale, are public/favicon.svg and the icons rendered from it.
- */
 export function BrandIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -143,7 +129,6 @@ export function BrandIcon() {
   )
 }
 
-/** The trail: earlier levels as links, then the page title, which is the page's one h1 from 761px. */
 function Trail() {
   const { t } = useI18n()
   const meta = useCurrentMeta()
@@ -175,7 +160,6 @@ function TopBar({
 }) {
   const { t } = useI18n()
   return (
-    // A subgrid of the shell: the brand above the sidebar's column, the bar above the page's.
     <header className="ui-topbar">
       <div className="ui-topbar-brand">
         <Link to="/" className="ui-bar-brand" aria-label={t("nav.homeLabel")}>
@@ -189,20 +173,17 @@ function TopBar({
         </span>
       </div>
       <div className="ui-topbar-main">
-        {/* The sidebar folds from the start of the bar, behind a short divider; only above 1100px. */}
         <span className="ui-topbar-fold">
           <NavToggle {...nav} />
           <span className="ui-topbar-divider" aria-hidden="true" />
         </span>
         <Trail />
-        {/* The page's own actions come here (PageActions). */}
         <div ref={setActionsSlot} className="ui-topbar-actions" />
       </div>
     </header>
   )
 }
 
-/** Phone: a slim top bar with the page name and the account menu (NL-9). */
 function PhoneTopBar() {
   const { t } = useI18n()
   const meta = useCurrentMeta()

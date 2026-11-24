@@ -1,7 +1,3 @@
-// Every stable server code the UI must explain maps to its own sentence in both languages, and failures without a
-// known code fall back by status: no answer, the rate limit, a server error. The server's English message never
-// reaches the page.
-
 import { MESSAGES } from "@maane/shared"
 import { describe, expect, it } from "vitest"
 import { translate } from "../i18n/i18n.tsx"
@@ -12,10 +8,6 @@ import { answered, challengeExpired, ERROR_TEXT, errorKey, errorText } from "./e
 const leaf = (tree: unknown, key: string) =>
   typeof key.split(".").reduce<unknown>((node, part) => (node as Record<string, unknown>)?.[part], tree) === "string"
 
-/**
- * The codes the server answers today (apps/server/src/http/app.ts, http/organizations.ts, and auth/auth.ts) and
- * Better Auth's common ones.
- */
 const SERVER_CODES = {
   api: [
     "unauthorized",

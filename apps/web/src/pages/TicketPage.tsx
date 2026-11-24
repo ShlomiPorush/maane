@@ -1,16 +1,3 @@
-// One ticket, /tickets/:number (plan 2.4): its facts, then its messages in order, each with its sender, recipients,
-// date (Maane's time zone), and its body framed from GET /api/v1/messages/:id/body. The frame is sandboxed twice: by
-// its own `sandbox` attribute and by the route's policy (sandbox, default-src 'none', images only as data: URLs until
-// "Show remote images"). What a scan blocked shows as blocked with its signature, never its content. Files show
-// their scan status in words; a clean image, PDF, or text file previews in the shared dialog, and every stored file
-// downloads. A ticket outside the user's organizations reads as not found, as the server answers. Replies and internal
-// notes (plan 3.1) show their author, a reply where its sending is per recipient and which of its links were clicked
-// and history files downloaded (plan 3.4), and the composer comes last. The details hold the workflow (plan 4.1): the
-// status, the categories, moving the ticket to another organization, and (plan 4.2) its snooze (tickets/Workflow.tsx);
-// its scheduled replies show above the composer (tickets/Scheduled.tsx), and a reply one of them made is marked. The
-// reminder of its waiting period that has not gone yet shows there too, with when it goes (plan 4.3,
-// tickets/Reminder.tsx); a sent one is a message marked as an automatic reminder, under the organization's name.
-
 import type { AttachmentView, ImportedTicketView, MessageView, ScheduledReplyView, TicketView } from "@maane/shared"
 import { Download, Eye, Paperclip } from "lucide-react"
 import { useState } from "react"
@@ -98,7 +85,6 @@ export function TicketPage() {
         </div>
       ) : null}
       <StaleNote failed={query.isError && Boolean(view)} />
-      {/* One per ticket: its state (the scheduled reply being changed, the preview) never carries to another ticket. */}
       {view ? <Ticket key={view.ticket.number} view={view} /> : null}
     </div>
   )
@@ -107,11 +93,8 @@ export function TicketPage() {
 function Ticket({ view }: { view: TicketView }) {
   const { t } = useI18n()
   const [preview, setPreview] = useState<AttachmentView | null>(null)
-  // The scheduled reply being changed, as it was when the agent chose it: a newer view never moves or drops the change
-  // (one that went out or was cancelled meanwhile gets the server's refusal when saved).
   const [editing, setEditing] = useState<ScheduledReplyView | null>(null)
   const { ticket } = view
-  // An imported ticket is read-only until the import is finished (plan 5.1): its values show, nothing changes them.
   const readOnly = ticket.imported?.readOnly === true
   return (
     <>
@@ -215,7 +198,6 @@ function Ticket({ view }: { view: TicketView }) {
         <>
           <ScheduledReplies view={view} editing={editing?.id ?? null} onEdit={setEditing} />
           {view.reminder ? <PendingReminder reminder={view.reminder} /> : null}
-          {/* One composer per ticket: moving to another ticket starts a fresh one (recipients, text, files, submission). */}
           <Composer
             key={ticket.number}
             view={view}
@@ -230,7 +212,6 @@ function Ticket({ view }: { view: TicketView }) {
   )
 }
 
-/** The ticket's categories, shown without the control that changes them. */
 function CategoryList({ view }: { view: TicketView }) {
   const { t } = useI18n()
   const own = view.ticket.categories
@@ -246,7 +227,6 @@ function CategoryList({ view }: { view: TicketView }) {
   )
 }
 
-/** What the import kept of the Zendesk ticket (plan 5.1): its number, brand, tags, fields, and followers, read-only. */
 function FromZendesk({ imported }: { imported: ImportedTicketView }) {
   const { t } = useI18n()
   return (
@@ -319,7 +299,6 @@ function MessageCard({
 }: {
   message: MessageView
   ticketNumber: number
-  /** An automatic reminder goes as the organization: its name stands where an agent's would (plan 4.3). */
   organizationName?: string
   onPreview: (file: AttachmentView) => void
 }) {
@@ -345,7 +324,6 @@ function MessageCard({
             <span className="ui-muted">{t("ticket.imported.author", { name: message.imported.authorName })}</span>
           ) : null}
           {message.reminder && organizationName ? <bdi dir="auto">{organizationName}</bdi> : null}
-          {/* An imported comment without a recorded address shows its Zendesk author's name, never an unknown sender. */}
           {message.direction === "note" ? null : message.from ? (
             <AddressLine value={message.from} />
           ) : message.imported ? (
@@ -426,12 +404,10 @@ function MessageCard({
   )
 }
 
-/** The frame's height, from how many lines the message's text has: a frame cannot be measured from outside. */
 function frameHeight(lines: number): number {
   return Math.min(640, Math.max(140, 44 + lines * 22))
 }
 
-/** The body in its sandboxed frame, with "Show remote images" for a message that has any (per message, not kept). */
 function MailFrame({ message }: { message: MessageView }) {
   const { t, tc } = useI18n()
   const [images, setImages] = useState(false)
@@ -459,7 +435,6 @@ function MailFrame({ message }: { message: MessageView }) {
   )
 }
 
-/** A refused imported file (plan 5.2) was never stored: its original is in the Zendesk archive, not the mailbox. */
 const IMPORTED_HINTS = new Set(["infected", "blocked_type"])
 
 function Files({

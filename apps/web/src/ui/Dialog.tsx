@@ -1,10 +1,3 @@
-// The one dialog builder (v3 DS-24, DS-16, DS-1 to DS-4, DS-9). Every dialog has a head with its
-// title and the shared X, a body that scrolls, its actions in a foot, and a set width. A question
-// (role alertdialog) has no X and closes by its Cancel. On a phone every dialog is a bottom sheet
-// that opens at four fifths of the screen, grows by exactly the scrolled distance, and closes on a
-// pull down past min(120px, a quarter of its height). popups.guard.test.ts fails on a dialog, sheet
-// or layer made anywhere else.
-
 import { X } from "lucide-react"
 import { type ReactNode, type RefObject, useEffect, useId, useRef } from "react"
 import { createPortal } from "react-dom"
@@ -16,14 +9,10 @@ export type DialogSize = keyof typeof DIALOG_SIZES
 
 type Common = {
   title: ReactNode
-  /** Required: 460, 680 or 1100px wide, always as high as the content. */
   size: DialogSize
   children: ReactNode
-  /** Buttons for the foot; never put Save, Cancel or Close in the scrolling body. */
   foot?: ReactNode
-  /** Only for windows without typed input: a click outside closes them (DS-9). */
   backdropClose?: boolean
-  /** The dialog already has a history entry of its own (an item opened by URL). */
   noHistory?: boolean
   initialFocus?: () => HTMLElement | null
   bodyClassName?: string
@@ -32,9 +21,9 @@ type Common = {
 
 export type DialogProps = Common &
   (
-    | { role?: "dialog" /** The shared X, Escape, Back and a pull down call it. */; onClose: () => void }
+    | { role?: "dialog"; onClose: () => void }
     | {
-        role: "alertdialog" /** A question closes by its Cancel: Escape, Back and a pull down call it. */
+        role: "alertdialog"
         onCancel: () => void
       }
   )
@@ -51,9 +40,7 @@ export function Dialog(props: DialogProps) {
   const closeRef = useRef(close)
   closeRef.current = close
 
-  // The backdrop is the layer's root. React owns it (a portal into <body>), so StrictMode's second
-  // effect run finds the same element still in the page and opens the layer again on it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the layer lives as long as the dialog; options are read once at opening (DS-6)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the layer lives as long as the dialog; options are read once at opening
   useEffect(() => {
     const root = backdropRef.current
     if (!root) return
@@ -79,7 +66,6 @@ export function Dialog(props: DialogProps) {
         pressedOnBackdrop.current = event.target === event.currentTarget
       }}
       onClick={(event) => {
-        // Only a press that started on the backdrop counts, so a text selection ending outside keeps the dialog.
         const fromBackdrop = event.target === event.currentTarget && (pressedOnBackdrop.current || event.detail === 0)
         pressedOnBackdrop.current = false
         if (fromBackdrop && props.backdropClose) closeRef.current()
@@ -117,7 +103,6 @@ export function Dialog(props: DialogProps) {
   )
 }
 
-/** Phone sheet: grows with the scroll, drags up by the head, pulls down to close (DS-1, DS-3, DS-4). */
 function useSheet(
   backdropRef: RefObject<HTMLDivElement | null>,
   panelRef: RefObject<HTMLDivElement | null>,
@@ -134,7 +119,6 @@ function useSheet(
       backdrop.classList.toggle("is-full", panel.offsetHeight >= window.innerHeight - 1)
     }
 
-    // Scrolling first raises the sheet by exactly the scrolled distance, then the content scrolls.
     const onScroll = (event: Event) => {
       if (!phone()) return
       const scroller = event.target
@@ -194,7 +178,6 @@ function useSheet(
         panel.style.transform = "translateY(100%)"
         window.setTimeout(() => {
           closeRef.current()
-          // A dialog that asked first and stayed open springs back.
           if (panel.isConnected) panel.style.transform = ""
         }, 200)
       } else {

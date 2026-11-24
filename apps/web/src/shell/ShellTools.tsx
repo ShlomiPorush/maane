@@ -1,7 +1,3 @@
-// The shell's own tools (v3 NL-7, NL-9; after Mikud's shell): the toggle that folds the sidebar, the theme button,
-// the language button, and the account menu with the theme, the language, the Account page and sign-out. The theme
-// and the language are this browser's own choices.
-
 import { LOCALES } from "@maane/shared"
 import {
   Languages,
@@ -23,14 +19,12 @@ import { useMe } from "./session.ts"
 import { useSignOut } from "./signOut.ts"
 import { THEMES, type Theme, useTheme } from "./theme.ts"
 
-/** The order the theme button walks through: the system's, then light, then dark. */
 export const THEME_CYCLE: readonly Theme[] = ["system", "light", "dark"]
 export const nextTheme = (theme: Theme): Theme =>
   THEME_CYCLE[(THEME_CYCLE.indexOf(theme) + 1) % THEME_CYCLE.length] ?? "system"
 
 const THEME_ICON = { system: Monitor, light: Sun, dark: Moon } as const
 
-/** A language's name in that language (its own locale file), so a reader of the other one still finds it. */
 export const nativeName = (language: Language): string => translate(language, "language.self")
 
 export function NavToggle({ folded, toggle }: { folded: boolean; toggle: () => void }) {
@@ -55,7 +49,6 @@ export function NavToggle({ folded, toggle }: { folded: boolean; toggle: () => v
   )
 }
 
-/** Walks through the system's theme, light and dark; the name says the current one and the next. */
 export function ThemeButton() {
   const { t } = useI18n()
   const [theme, setTheme] = useTheme()
@@ -76,7 +69,6 @@ export function ThemeButton() {
   )
 }
 
-/** Switches to the other language; its name is written in that language. */
 export function LanguageButton() {
   const { t, language, setLanguage } = useI18n()
   const other: Language = language === "he" ? "en" : "he"
@@ -95,7 +87,6 @@ export function LanguageButton() {
   )
 }
 
-/** The account: its name, the theme, the language, the Account page and Sign out (unsaved changes asked first). */
 export function AccountMenu({ compact = false }: { compact?: boolean }) {
   const { t, language, setLanguage } = useI18n()
   const [open, setOpen] = useState(false)
@@ -111,7 +102,6 @@ export function AccountMenu({ compact = false }: { compact?: boolean }) {
         ref={button}
         type="button"
         className={compact ? "ui-account-btn is-compact" : "ui-account-btn"}
-        // The name holds the words it shows, so a voice command that says them reaches it.
         aria-label={[name, menuName].filter(Boolean).join(", ")}
         title={menuName}
         aria-haspopup="menu"

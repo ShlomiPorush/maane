@@ -1,7 +1,3 @@
-// Better Auth's client reports a 401 answer to the app through its documented fetchOptions.onError, so a session that
-// ended while the page stayed open leads to sign-in as it does for Maane's own API. The client reads `fetch` when it
-// is created, so the stand-in is in place before the module loads.
-
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 afterEach(() => {

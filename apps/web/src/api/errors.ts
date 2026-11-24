@@ -1,8 +1,3 @@
-// What a failed request means to the person who sent it, in their language. Maane's API answers {error: "code"}
-// (lower case); Better Auth and Maane's refusals on Better Auth's routes answer {code, message} (upper case). Both
-// map here, through one table, to a locale key: short, truthful, and saying what to do next. The server's own
-// English message is never shown. A code the table does not know falls back by its HTTP status.
-
 import {
   CATEGORY_NAME_MAX,
   MESSAGE_MAX_MB,
@@ -16,7 +11,6 @@ import { AuthCallError, type AuthError } from "./auth.ts"
 import { ApiError } from "./client.ts"
 
 export const ERROR_TEXT: Record<string, string> = {
-  // Maane's API (/api/v1, /api/setup)
   unauthorized: "errors.code.unauthorized",
   totp_required: "errors.code.totpRequired",
   forbidden: "errors.code.forbidden",
@@ -77,7 +71,6 @@ export const ERROR_TEXT: Record<string, string> = {
   import_no_agent: "errors.code.importNoAgent",
   import_user_invalid: "errors.code.importUserInvalid",
   internal: "errors.server",
-  // Maane's refusals on Better Auth's routes (apps/server/src/auth/auth.ts)
   UNAUTHORIZED: "errors.code.unauthorized",
   TOTP_REQUIRED: "errors.code.totpRequired",
   TOTP_ALREADY_ON: "errors.code.totpAlreadyOn",
@@ -91,7 +84,6 @@ export const ERROR_TEXT: Record<string, string> = {
   SETUP_ADMIN_PROTECTED: "errors.code.setupAdminProtected",
   TRUST_DEVICE_UNSUPPORTED: "errors.code.trustDevice",
   NOT_FOUND: "errors.code.notFound",
-  // Better Auth's own codes
   INVALID_USERNAME_OR_PASSWORD: "errors.code.wrongCredentials",
   INVALID_PASSWORD: "errors.code.wrongPassword",
   INVALID_CODE: "errors.code.wrongCode",
@@ -115,7 +107,6 @@ export const ERROR_TEXT: Record<string, string> = {
   CROSS_SITE_NAVIGATION_LOGIN_BLOCKED: "errors.code.csrfRefused",
 }
 
-/** The keys a failure falls back to by its status. */
 export const STATUS_TEXT = {
   network: "errors.network",
   rateLimited: "errors.rateLimited",
@@ -125,16 +116,11 @@ export const STATUS_TEXT = {
   unexpected: "errors.unexpected",
 } as const
 
-/**
- * The example addresses some sentences show. Filled in as values, so they sit in first-strong isolates and keep their
- * order inside right-to-left text.
- */
 export const ADDRESS_EXAMPLES = {
   addressExample: "support@example.com",
   patternExample: "support-*@example.com",
 }
 
-/** The numbers and examples some sentences name (lengths, and the largest message the mail provider takes). */
 export const ERROR_VARS = {
   ...ADDRESS_EXAMPLES,
   nameMax: ORGANIZATION_NAME_MAX,
@@ -146,7 +132,6 @@ export const ERROR_VARS = {
   usernameMax: USERNAME_MAX,
 }
 
-/** A failure reduced to what the table reads: the status (0 when no answer came) and the code. */
 export function failureOf(error: unknown): { status: number; code: string } {
   if (error instanceof ApiError) return { status: error.status, code: error.code }
   if (error instanceof AuthCallError) return fromAuth(error.answer)
@@ -161,7 +146,6 @@ function fromAuth(answer: AuthError): { status: number; code: string } {
 export function errorKey(error: unknown): string {
   const { status, code } = failureOf(error)
   if (status === 0 || code === "NETWORK" || code === "network") return STATUS_TEXT.network
-  // Better Auth's limiter answers 429; its message is not a code to look up.
   if (status === 429 || code === "RATE_LIMITED") return STATUS_TEXT.rateLimited
   const known = ERROR_TEXT[code]
   if (known) return known
@@ -176,12 +160,10 @@ export function errorText(t: (key: string, vars?: Record<string, string | number
   return t(errorKey(error), ERROR_VARS)
 }
 
-/** Whether the sign-in's second-factor step has expired: the page goes back to the password. */
 export function challengeExpired(error: unknown): boolean {
   return errorKey(error) === "errors.code.codeExpired"
 }
 
-/** Whether a refused answer means what was typed is wrong (it is cleared), not that no answer came (it stays). */
 export function answered(error: unknown): boolean {
   return failureOf(error).status > 0
 }

@@ -1,14 +1,3 @@
-// The ticket list, the home page (plan 2.4): one list across every organization the user may see, newest activity
-// first (GET /api/v1/tickets), with an organization filter, the review filter, and (plan 4.1) a status filter whose
-// default is open work (new, open, on hold; plan 4.2 leaves snoozed tickets out of it and adds a Snoozed filter) and a
-// category filter, all kept in the address
-// (?organization=<id>&review=1&status=<filter>&category=<id>; no status is open work). Plan 4.4 adds one search box
-// (?q=<term>) over the subject, the customer's address and name, message text, and the ticket number; without a chosen
-// status it searches every status, and a chosen one narrows it. It runs on Enter or its button (SR-9), narrows the list
-// like a filter, and emptying the box ends it. "Show older tickets" follows the cursor after the last row shown (TB-6);
-// the list reads itself again every 30 seconds and keeps every page it shows (SV-10). A row opens the ticket
-// (/tickets/:n).
-
 import {
   type CategoryRef,
   defaultStatusFilter,
@@ -33,7 +22,6 @@ import { Sender, TicketNumber, TicketTags } from "./tickets/parts.tsx"
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-/** The filters the address holds; anything else in it is ignored. */
 export function ticketFilters(search: URLSearchParams): TicketFilters {
   const organization = search.get("organization") ?? ""
   const status = search.get("status") ?? ""
@@ -73,7 +61,6 @@ export function TicketsPage() {
       filters.status !== defaultStatusFilter(Boolean(filters.q)),
   )
 
-  // A filter replaces the address in place: Back leaves the list instead of undoing a filter (NL-4).
   const setFilter = (name: "organization" | "review" | "status" | "category" | "q", value: string | null) => {
     const next = new URLSearchParams(search)
     if (value) next.set(name, value)
@@ -92,7 +79,6 @@ export function TicketsPage() {
         onOrganization={(id) => setFilter("organization", id || null)}
         onFlagged={(on) => setFilter("review", on ? "1" : null)}
         status={filters.status ?? defaultStatusFilter(Boolean(filters.q))}
-        // A chosen status stays in the address even when it equals today's default: the default changes with search.
         onStatus={(status) => setFilter("status", status)}
         categories={categories}
         category={filters.category ?? ""}
@@ -157,10 +143,6 @@ export function TicketsPage() {
   )
 }
 
-/**
- * The search box: the term runs on Enter or the button, not on each key (a server query, SR-9); emptying the box ends
- * the search at once. It follows the address (Clear filters, Back) without being drawn again, so the focus stays.
- */
 function SearchBox({ value, onSearch }: { value: string; onSearch: (q: string) => void }) {
   const { t } = useI18n()
   const id = useId()
@@ -221,7 +203,6 @@ function Filters(props: {
 }) {
   const { t } = useI18n()
   const selectId = useId()
-  // An organization in the address that the list does not offer (removed, or not visible) still shows as chosen.
   const known = props.organization === "" || props.organizations.some((o) => o.id === props.organization)
   const knownCategory = props.category === "" || props.categories.some((c) => c.id === props.category)
   return (
@@ -305,7 +286,6 @@ function Filters(props: {
   )
 }
 
-/** The whole row is the link to the ticket (TB-8); it holds no control of its own. */
 function TicketRow({ ticket }: { ticket: TicketSummary }) {
   const { t, tc } = useI18n()
   return (

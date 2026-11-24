@@ -1,9 +1,3 @@
-// The notifications of this device, on the Account page (plan 4.5): on or off for the signed-in user in this browser.
-// Turning them on asks the browser's permission, subscribes with Maane's public key, and gives the server the
-// subscription and the UI's language (the notification's words); the server keeps it as the user's. Turning them off
-// deletes it on the server, then ends it in the browser. A subscription the browser holds but the server does not
-// count as the user's (another account's, or one the server deleted) shows as off, and turning on replaces it.
-
 import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
 import { api, qk } from "../api/endpoints.ts"
@@ -60,7 +54,6 @@ export function DeviceNotifications() {
     change(
       () =>
         whileRegistering(async () => {
-          // A subscription the server does not count as this user's is replaced, never handed to them.
           await (await device.current())?.unsubscribe()
           const subscription = await device.subscribe(publicKey)
           await api.subscribeDevice(subscription, language)
@@ -76,7 +69,6 @@ export function DeviceNotifications() {
       await subscription.unsubscribe()
     }, t("notifications.turnedOff"))
 
-  // A new UI language while notifications are on: the next ones come in it.
   const shownLanguage = useRef(language)
   useEffect(() => {
     if (shownLanguage.current === language) return
@@ -85,9 +77,7 @@ export function DeviceNotifications() {
     void (async () => {
       const subscription = await device.current()
       if (subscription) await api.subscribeDevice(subscription, language)
-    })().catch(() => {
-      // The words stay in the earlier language until notifications are turned on again; nothing else changes.
-    })
+    })().catch(() => {})
   }, [language, state, device])
 
   return (

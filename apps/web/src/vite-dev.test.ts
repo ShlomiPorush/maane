@@ -1,6 +1,4 @@
 // @vitest-environment node
-// The development server serves pdf.js's decoders as the build does (pdfDecoders in vite.config.ts), and nothing else
-// from pdfjs-dist's folder: the PDF preview of `pnpm --filter @maane/web run dev` decodes scans and faxes too.
 
 import { createServer as createHttpServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -13,7 +11,6 @@ let http: Server
 let base = ""
 
 beforeAll(async () => {
-  // Vite's documented middleware mode: its handlers behind a server of the test's own, on a free port.
   vite = await createServer({
     configFile: fileURLToPath(new URL("../vite.config.ts", import.meta.url)),
     server: { middlewareMode: true },

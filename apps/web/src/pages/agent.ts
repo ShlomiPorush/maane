@@ -1,6 +1,3 @@
-// A signed-in browser in words, from its User-Agent: "Firefox on Android". Names of browsers and systems are
-// product names, the same in every language. Null when it says nothing recognisable.
-
 const BROWSERS: [RegExp, string][] = [
   [/\bEdg(?:e|A|iOS)?\//, "Edge"],
   [/\bOPR\//, "Opera"],

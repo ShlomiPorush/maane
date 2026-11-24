@@ -1,9 +1,3 @@
-// Unsaved changes are protected (v3 SV-1, DS-9). A page or a dialog registers how many changes it
-// holds and which moves keep them. One router blocker asks before a move would drop them (links,
-// Back and Forward, which are undone while the question is open), and the browser asks before the
-// tab closes or reloads. A leave the router does not see (signing out) asks the same question through
-// useConfirmLeave, and drops nothing itself: the caller clears the changes once the leave worked.
-
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { type Location, useBeforeUnload, useBlocker } from "react-router"
 import { useI18n } from "../i18n/i18n.tsx"
@@ -11,16 +5,13 @@ import { confirmDialog } from "./confirm.tsx"
 
 export type UnsavedGuard = {
   count: number
-  /** "leave" for a page with a save bar, "discard" for a dialog with typed changes. */
   kind: "leave" | "discard"
-  /** True when a move keeps the changes (it stays inside the page or dialog). */
   keeps?: (next: Location, current: Location) => boolean
 }
 
 type Registry = {
   set(id: string, guard: UnsavedGuard | null): void
   clear(): void
-  /** Asks before a leave the router does not see; true to go on. Nothing is dropped here. */
   confirmLeave(): Promise<boolean>
 }
 const UnsavedContext = createContext<Registry | null>(null)
@@ -36,7 +27,6 @@ export function UnsavedProvider({ children }: { children: ReactNode }) {
     setTotal(sum)
   }, [])
 
-  /** The one question for every leave: "Leave without saving?", or "Discard your changes?" for dialogs only. */
   const ask = useCallback(
     (dropping: UnsavedGuard[]) => {
       const count = dropping.reduce((sum, guard) => sum + guard.count, 0)
@@ -121,7 +111,6 @@ export function UnsavedProvider({ children }: { children: ReactNode }) {
   return <UnsavedContext.Provider value={registry}>{children}</UnsavedContext.Provider>
 }
 
-/** Registers the changes a page or dialog holds while it is mounted. */
 export function useUnsaved(id: string, guard: UnsavedGuard): void {
   const registry = useContext(UnsavedContext)
   const keepsRef = useRef(guard.keeps)
@@ -136,13 +125,11 @@ export function useUnsaved(id: string, guard: UnsavedGuard): void {
   useEffect(() => () => registry?.set(id, null), [registry, id])
 }
 
-/** Drops every registered change: used when the session ended and the app must leave at once. */
 export function useClearUnsaved(): () => void {
   const registry = useContext(UnsavedContext)
   return useCallback(() => registry?.clear(), [registry])
 }
 
-/** Asks about unsaved changes before a leave the router does not see, such as signing out (SV-1). */
 export function useConfirmLeave(): () => Promise<boolean> {
   const registry = useContext(UnsavedContext)
   return useCallback(() => registry?.confirmLeave() ?? Promise.resolve(true), [registry])

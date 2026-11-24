@@ -1,19 +1,3 @@
-// Settings, /settings, admins only (v3 SV-1, FS-6, FS-8): every setting Maane manages, edited in place. Changes wait
-// in a draft; the save bar counts them and offers Discard and Save changes (PUT /api/v1/settings with the changed
-// keys only); leaving with unsaved changes asks first. A field the environment sets is locked: it stays in place,
-// disabled, and names its variable. The server refuses a locked field (setting_locked), an invalid value
-// (setting_invalid) and an unknown key (setting_unknown); each refusal is explained and points at its field. A
-// refresh never touches a field being edited: the draft holds only what was changed. A field edited again while a
-// save is on its way keeps its new text: a save takes out of the draft only what it sent. Files and scanning (phase
-// 2.2) shows the scanner's latest self-test and a connection test the worker runs: the page queues it and reads its
-// state until it is done (the server never calls the scanner). Microsoft Graph (phase 2.3) holds the tenant, the
-// application, its client secret (write only: the page shows whether one is set, never the value, and an empty field
-// keeps it), and the intake mailbox, and a connection test the worker runs the same way: it reads only the mailbox's
-// Inbox folder details and reports Graph's error code. Sending (phase 3.1) holds SMTP2GO's SMTP server and API key, the
-// failover server, and the bounce address, with a connection test of each server that the worker runs the same way (it
-// connects with TLS and logs in, and sends nothing). Link tracking (phase 3.4) turns tracking on or off and sets the
-// link domain.
-
 import {
   BLOCKED_TYPE,
   BLOCKED_TYPES_MAX,
@@ -64,7 +48,6 @@ import { AdminOnly } from "./AdminOnly.tsx"
 import { FormError } from "./auth/parts.tsx"
 import { Group, Row } from "./parts.tsx"
 
-/** Every setting this page shows; guards.test.ts fails when the registry has one that is not here. */
 export const SETTING_ROWS: readonly SettingKey[] = [
   "general.defaultLocale",
   "security.sessionDays",
@@ -94,7 +77,6 @@ export const SETTING_ROWS: readonly SettingKey[] = [
   "links.domain",
 ]
 
-/** The sending settings of each SMTP server, in the order the page shows them; the connection test reads them saved. */
 const SMTP2GO_KEYS: readonly SettingKey[] = ["smtp2go.host", "smtp2go.port", "smtp2go.user", "smtp2go.password"]
 const FAILOVER_KEYS: readonly SettingKey[] = [
   "failover.host",
@@ -103,9 +85,7 @@ const FAILOVER_KEYS: readonly SettingKey[] = [
   "failover.user",
   "failover.password",
 ]
-/** Secrets of sending: write only, like Graph's client secret. */
 const SENDING_SECRETS: readonly SettingKey[] = ["smtp2go.password", "smtp2go.apiKey", "failover.password"]
-/** Values that are code-like: shown left to right in a mono font. */
 const SENDING_CODE: readonly SettingKey[] = ["smtp2go.host", "smtp2go.user", "failover.host", "failover.user"]
 
 const SESSION_DAYS_MIN = 1
@@ -113,16 +93,13 @@ const SESSION_DAYS_MAX = 90
 const MAX_MB_MIN = FILES_MAX_BYTES_MIN / MEGABYTE
 const MAX_MB_MAX = FILES_MAX_BYTES_MAX / MEGABYTE
 
-/** How often the page reads a queued connection test, and how long it waits for the worker before it gives up. */
 const TEST_POLL_MS = 1_500
 const TEST_WAIT_MS = 90_000
 
 type Draft = Partial<Record<SettingKey, string>>
 
-/** The Graph fields: the connection test uses their saved values, so it waits while one of them is unsaved. */
 const GRAPH_KEYS: readonly SettingKey[] = ["graph.tenantId", "graph.clientId", "graph.clientSecret", "graph.mailbox"]
 
-/** Fields without a default to go back to: empty until the owner sets them. */
 const NO_DEFAULT: readonly SettingKey[] = [
   ...GRAPH_KEYS,
   "smtp2go.user",
@@ -132,14 +109,11 @@ const NO_DEFAULT: readonly SettingKey[] = [
   "failover.user",
   "failover.password",
   "mail.bounceAddress",
-  // Empty means the public URL's own host.
   "links.domain",
 ]
 
-/** A secret's text: one line without white space at either end, as the registry takes it. */
 const secretText = (text: string) => (text.length <= GRAPH_SECRET_MAX && /^\S(?:[^\r\n]*\S)?$/.test(text) ? text : null)
 
-/** A value as its field shows it: the size in MB, the blocked types one list. */
 export function settingText(key: SettingKey, value: unknown): string {
   if (key === "files.maxBytes" && typeof value === "number") return String(value / MEGABYTE)
   if (key === "files.blockedTypes" && Array.isArray(value)) return value.join(", ")
@@ -148,7 +122,6 @@ export function settingText(key: SettingKey, value: unknown): string {
 
 const shown = (view: SettingView | undefined) => (view ? settingText(view.key, view.value) : "")
 
-/** The value the server takes for a field's text, or null when the text is not a valid value. */
 export function parseSetting(key: SettingKey, text: string): unknown {
   if (key === "security.sessionDays") {
     if (!/^\d{1,3}$/.test(text.trim())) return null
@@ -193,7 +166,6 @@ export function parseSetting(key: SettingKey, text: string): unknown {
   return (LOCALES as readonly string[]).includes(text) ? text : null
 }
 
-/** Whether a field's text means the same value, so typing "50" over 50 or reordering spaces is no change (SV-2). */
 function sameValue(key: SettingKey, text: string, value: unknown): boolean {
   const parsed = parseSetting(key, text)
   return parsed !== null && JSON.stringify(parsed) === JSON.stringify(value)
@@ -251,7 +223,6 @@ function Settings() {
   const linkDomainId = useId()
   const views = new Map((query.data?.settings ?? []).map((view) => [view.key, view]))
 
-  // Only what differs from the saved value counts as a change.
   const changed = (Object.keys(draft) as SettingKey[]).filter((key) => {
     const view = views.get(key)
     return draft[key] !== shown(view) && !sameValue(key, draft[key] ?? "", view?.value)
@@ -264,8 +235,6 @@ function Settings() {
     if (error?.key === key) setError(null)
   }
 
-  // False once the page is gone (left, or remounted for another identity): a late answer must not write the previous
-  // identity's settings over the cached ones the next page reads.
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -300,7 +269,6 @@ function Settings() {
       })
       showToast(t("settings.saved"), "success")
       await queryClient.invalidateQueries({ queryKey: qk.setupStatus })
-      // A new address is tested by the worker now; its result shows when it arrives.
       if ("scanner.address" in body) await queryClient.invalidateQueries({ queryKey: qk.scanner })
     } catch (failure) {
       const key = failure instanceof ApiError ? (failure.details.key as SettingKey | undefined) : undefined
@@ -321,7 +289,6 @@ function Settings() {
     return view?.locked ? { variable: view.variable } : null
   }
 
-  /** A value that differs from its default: Changed, and Reset puts the default in the draft (FS-6). */
   const resetOf = (key: SettingKey) => {
     if (lockOf(key) || !views.has(key) || NO_DEFAULT.includes(key)) return null
     const fallback = SETTINGS[key].defaultValue
@@ -342,7 +309,6 @@ function Settings() {
     return { label, onReset: () => edit(key, fallbackText) }
   }
 
-  /** A text or number field of a setting, left to right where its value is code-like. */
   const field = (
     key: SettingKey,
     id: string,
@@ -350,7 +316,6 @@ function Settings() {
       className?: string
       ltr?: boolean
       numeric?: { min: number; max: number }
-      /** Write only: never filled from the server, and empty keeps the stored value. */
       secret?: { placeholder: string }
     },
   ) => (
@@ -394,11 +359,9 @@ function Settings() {
     const tracking = "links.tracking" as const
     const linkDomain = "links.domain" as const
     const secret = views.get(clientSecret)
-    /** One sending setting's row: a write-only secret, the security choice, or a text or number field. */
     const sendingRow = (key: SettingKey) => {
       const id = `${sendingIds}-${key}`
       const label = t(labelKey(key))
-      // The whole address is one isolated value: an isolated domain after "bounces@" read out of order in Hebrew.
       const hint = t(`settings.sending.${key}.hint`, { example: "bounces@example.com" })
       if (key === "failover.security")
         return (
@@ -687,11 +650,6 @@ function Settings() {
   )
 }
 
-/**
- * The Graph connection test: the worker reads the saved mailbox's Inbox folder details and nothing else, and the page
- * reads the job's state until it is done. The result stays on the page until it is left; nothing stores it. The test
- * waits while a Graph field is unsaved, because it uses the saved settings.
- */
 function GraphRow({ fieldsChanged }: { fieldsChanged: boolean }) {
   const { t } = useI18n()
   const [testing, setTesting] = useState(false)
@@ -784,11 +742,6 @@ function GraphRow({ fieldsChanged }: { fieldsChanged: boolean }) {
   )
 }
 
-/**
- * SMTP2GO's delivery webhook (plan 3.3): its secret address and Authorization token are made by the server from a
- * cryptographically secure generator, never typed. The page says only whether they exist; making them shows both
- * this once, to copy into SMTP2GO, and making new ones (after asking) replaces the old ones at once.
- */
 function WebhookRow({ set, onMade }: { set: boolean; onMade: () => void }) {
   const { t } = useI18n()
   const [busy, setBusy] = useState(false)
@@ -868,11 +821,6 @@ function WebhookRow({ set, onMade }: { set: boolean; onMade: () => void }) {
   )
 }
 
-/**
- * The SMTP connection test of one server: the worker connects with TLS and logs in with the saved settings
- * (nodemailer's transporter.verify()), sends nothing, and the page reads the job's state until it is done. It waits
- * while one of that server's fields is unsaved.
- */
 function SmtpRow({ provider, fieldsChanged }: { provider: "smtp2go" | "failover"; fieldsChanged: boolean }) {
   const { t } = useI18n()
   const [testing, setTesting] = useState(false)
@@ -969,11 +917,6 @@ function SmtpRow({ provider, fieldsChanged }: { provider: "smtp2go" | "failover"
   )
 }
 
-/**
- * The scanner's latest self-test (its own read, every 30 seconds) and Test connection: the worker runs the test from
- * the queue and the page reads its state until it is done. The test checks the saved address, so it waits while a
- * new address is still unsaved.
- */
 function ScannerRow({ addressChanged }: { addressChanged: boolean }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
@@ -1078,10 +1021,6 @@ function ScannerState({ status }: { status: ScannerStatusView | null }) {
   )
 }
 
-/**
- * clamd's version line, "ClamAV <engine>/<signatures>/<date of the signatures>", as the engine and the signature
- * version only: the date in it is written with an English month name, which Maane never shows (FW-9).
- */
 export function engineOf(version: string | null): { version: string; signatures: string } | null {
   const match = version ? /^ClamAV ([^/\s]+)\/(\d+)/.exec(version) : null
   return match?.[1] && match[2] ? { version: match[1], signatures: match[2] } : null

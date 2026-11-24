@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { nextWholeHour, zonedInput, zonedInstant } from "./datetime.ts"
 
-// Entering a time in Israel (plan 4.2): the date and time the agent types are Asia/Jerusalem's, whatever the browser's
-// zone, around both daylight saving changes. In 2026 Israel moves to summer time on Friday 27 March at 02:00 (to 03:00)
-// and back on Sunday 25 October at 02:00 (to 01:00).
-
 const at = (date: string, time: string) => zonedInstant({ date, time })?.toISOString() ?? null
 
 describe("a time entered in Israel", () => {

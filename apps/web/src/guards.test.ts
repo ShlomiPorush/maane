@@ -1,15 +1,4 @@
 // @vitest-environment node
-// Guard tests of the v3 style and of Maane's language policy, over the web sources (adapted from Mikud):
-// - every popup comes from its shared builder (DS-24): a dialog, sheet, menu, toast or other layer made anywhere else
-//   fails, as does a CSS rule that floats a selector not listed here;
-// - every page has a refresh of its own (SV-10), or is listed with the reason it has none;
-// - no page formats a date itself (FW-9);
-// - every locale key the code uses exists in both locale files, and every dynamic key family is complete;
-// - no Hebrew and no literal bidirectional control character in apps/web (Hebrew lives only in he.json);
-// - the page loads nothing from another origin and has no inline script or style (the server's CSP forbids both);
-// - every setting the server registers has a place on the Settings page;
-// - every audit action the server's and the worker's writeAudit calls can write has its words on the audit page.
-// Each check is a function over file texts, so the self-tests show it catches a planted bypass.
 
 import { readdirSync, readFileSync } from "node:fs"
 import { join, relative } from "node:path"
@@ -77,10 +66,8 @@ function walk(dir: string, accept: (name: string) => boolean): Record<string, st
   return out
 }
 
-/** The app's sources without tests, keyed by their path under src/. */
 const files = walk(SRC, (name) => /\.(ts|tsx)$/.test(name) && !/\.test\.tsx?$/.test(name))
 
-/** Every text file of apps/web, tests included, keyed by path under apps/web. */
 function allAppFiles(): Record<string, string> {
   const out: Record<string, string> = {}
   const visit = (dir: string) => {
@@ -97,14 +84,10 @@ function allAppFiles(): Record<string, string> {
   return out
 }
 
-/** Source text without comments, so a rule explained in a comment does not count as code. */
 function code(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1")
 }
 
-// --- Popups (DS-24) ---
-
-/** The files that may build a layer over the page, each with its reason. */
 const BUILDERS: Record<string, string> = {
   "ui/Dialog.tsx": "the one dialog builder; on phones every dialog is a bottom sheet (DS-1, DS-24)",
   "ui/Toast.tsx": "the one toast (FB-2)",
@@ -112,12 +95,10 @@ const BUILDERS: Record<string, string> = {
   "ui/Menu.tsx": "the one menu (the account menu, a user's actions), anchored to its button (MP-7)",
 }
 
-/** Files that may portal and nothing else: they move a page's own elements into the frame, not a layer. */
 const PORTAL_ONLY: Record<string, string> = {
   "shell/chrome.tsx": "PageActions moves the page's own action buttons into the top bar from 761px (NL-6)",
 }
 
-/** CSS selectors that may float above the page, each with its reason. */
 const FLOATING_CSS: Record<string, string> = {
   ".ui-dialog-backdrop": "every dialog and phone sheet",
   ".ui-toast": "the toast",
@@ -140,7 +121,6 @@ const LAYER_PATTERNS: [string, RegExp][] = [
   ["the browser's alert, confirm or prompt", /(?<![\w.$])(?:window\.)?(?:alert|confirm|prompt)\s*\(/],
 ]
 
-/** The opening tag of a JSX element at `start`, braces balanced, so `() =>` inside a value does not end it. */
 function openingTag(text: string, start: number): string {
   let depth = 0
   for (let index = start; index < text.length; index++) {
@@ -156,7 +136,6 @@ function popupViolations(sources: Record<string, string>): string[] {
   const found: string[] = []
   for (const [file, text] of Object.entries(sources)) {
     if (file in BUILDERS) continue
-    // A <Dialog ...> call is the builder itself: its role and props are not a layer made by hand.
     let plain = code(text)
     for (let start = plain.indexOf("<Dialog"); start !== -1; start = plain.indexOf("<Dialog")) {
       plain = plain.slice(0, start) + plain.slice(start + openingTag(plain, start).length)
@@ -201,9 +180,6 @@ function floatingCssViolations(css: string): string[] {
   return found
 }
 
-// --- Page refresh (SV-10) ---
-
-/** Pages without a refresh of their own, each with its reason. */
 const NO_REFRESH: Record<string, string> = {
   NotFoundPage: "says the address names no page; it reads nothing",
   LoginPage: "signs in; it reads whether a user exists and the session once, on opening",
@@ -245,8 +221,6 @@ function refreshViolations(routes: string, sources: Record<string, string>): str
   return found
 }
 
-// --- Dates (FW-9) ---
-
 const DATE_HELPERS = new Set(["format/datetime.ts"])
 const OWN_DATES =
   /\.toLocale(?:Date|Time)String\(|Intl\.DateTimeFormat|\.get(?:Hours|Minutes|Seconds|Date|Day|Month|FullYear)\(|\bhour12\b|\bhourCycle\b|\bdateStyle\b|\btimeStyle\b|new Date\([^)]*\)\.toLocaleString\(/
@@ -256,8 +230,6 @@ function dateViolations(sources: Record<string, string>): string[] {
     .filter(([file, text]) => !DATE_HELPERS.has(file) && OWN_DATES.test(code(text)))
     .map(([file]) => `${file} formats a date itself; use src/format/datetime.ts`)
 }
-
-// --- Locale keys ---
 
 function leaf(tree: unknown, key: string): boolean {
   let node: unknown = tree
@@ -270,7 +242,6 @@ function leaf(tree: unknown, key: string): boolean {
 
 const inBoth = (key: string) => leaf(en, key) && leaf(he, key)
 
-/** The first argument of a call that starts at `open` (just after its parenthesis), parentheses and braces balanced. */
 function firstArgument(text: string, open: number): string {
   let depth = 0
   for (let index = open; index < text.length; index++) {
@@ -284,7 +255,6 @@ function firstArgument(text: string, open: number): string {
   return text.slice(open)
 }
 
-/** Every key a t() or tc() call can ask for: each dotted literal in its first argument (also in a condition). */
 function usedKeys(sources: Record<string, string>): { plain: Set<string>; counted: Set<string>; dynamic: Set<string> } {
   const plain = new Set<string>()
   const counted = new Set<string>()
@@ -301,7 +271,6 @@ function usedKeys(sources: Record<string, string>): { plain: Set<string>; counte
   return { plain, counted, dynamic }
 }
 
-/** Every family of keys the code builds at run time, and the full list of what it may build. */
 const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "theme.": THEMES,
   "role.": ROLES,
@@ -330,8 +299,6 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "ticket.link.": LINK_REASONS,
   "import.run.state.": IMPORT_RUN_STATES,
   "import.run.stage.": IMPORT_STAGES,
-  // With went_live and not_listening here, and listening in delivery.problem and scheduled.reason below: values only
-  // rows from before phase 6 (listening mode) carry, still shown.
   "import.run.reason.": [...IMPORT_STOP_REASONS, "went_live", "not_listening"],
   "import.run.counts.": Object.keys(emptyImportCounts()),
   "import.report.reason.": IMPORT_REPORT_REASONS,
@@ -360,9 +327,6 @@ const DYNAMIC_FAMILIES: Record<string, readonly string[]> = {
   "links.scannerReason.": SCANNER_REASONS,
 }
 
-// --- Language policy: Hebrew only in he.json, bidirectional controls only as escapes ---
-
-// Built from code points: this file itself holds no Hebrew and no control character.
 const HEBREW = new RegExp(
   `[${String.fromCodePoint(0x590)}-${String.fromCodePoint(0x5ff)}${String.fromCodePoint(0xfb1d)}-${String.fromCodePoint(0xfb4f)}]`,
 )
@@ -379,8 +343,6 @@ function languageViolations(sources: Record<string, string>): string[] {
   return found
 }
 
-// --- Content Security Policy: nothing from another origin, no inline script or style ---
-
 function cspViolations(html: string, css: string, sources: Record<string, string>): string[] {
   const found: string[] = []
   if (/<script(?![^>]*\bsrc=)[^>]*>/i.test(html)) found.push("index.html: an inline script")
@@ -394,8 +356,6 @@ function cspViolations(html: string, css: string, sources: Record<string, string
   }
   return found
 }
-
-// --- The tests ---
 
 const css = readFileSync(join(SRC, "styles/ui.css"), "utf8")
 const routes = readFileSync(join(SRC, "routes.tsx"), "utf8")
@@ -515,7 +475,6 @@ describe("locale keys", () => {
     expect(plain.has("login.title")).toBe(true)
     expect(counted.has("savebar.count")).toBe(true)
     expect(dynamic.has("audit.action.")).toBe(true)
-    // A key chosen by a condition counts too.
     expect(plain.has("users.makeAgent")).toBe(true)
     expect(plain.has("login.backupDescription")).toBe(true)
   })
@@ -563,12 +522,9 @@ describe("settings", () => {
   })
 })
 
-// --- Audit actions: every action the server can write has its words ---
-
 const SERVER_SRC = fileURLToPath(new URL("../../server/src/", import.meta.url))
 const WORKER_SRC = fileURLToPath(new URL("../../worker/src/", import.meta.url))
 
-/** The server's and the worker's sources without tests (the worker's by a path from the server's, ../../worker/). */
 function serverFiles(): Record<string, string> {
   const out: Record<string, string> = {}
   const visit = (dir: string) => {
@@ -584,7 +540,6 @@ function serverFiles(): Record<string, string> {
   return out
 }
 
-/** Every argument of a call, from just after its opening parenthesis to its closing one. */
 function callArguments(text: string, open: number): string {
   let depth = 0
   for (let index = open; index < text.length; index++) {
@@ -598,11 +553,6 @@ function callArguments(text: string, open: number): string {
   return text.slice(open)
 }
 
-/**
- * The actions the server's writeAudit calls can write: literals after `action:` (also in a condition), and the values
- * of a `*_AUDIT` map that an `action` read from it. An action the scan cannot read (any other expression), or an
- * audit row inserted without writeAudit, is reported, so a new writer cannot hide from the check.
- */
 function auditActionsWritten(sources: Record<string, string>): { actions: Set<string>; unread: string[] } {
   const actions = new Set<string>()
   const unread: string[] = []
@@ -617,7 +567,7 @@ function auditActionsWritten(sources: Record<string, string>): { actions: Set<st
         [...(map[2] ?? "").matchAll(/:\s*"([^"]+)"/g)].map((value) => value[1] ?? ""),
       )
     for (const call of text.matchAll(/\b(function\s+)?writeAudit\(/g)) {
-      if (call[1]) continue // the declaration in audit.ts
+      if (call[1]) continue
       const rest = callArguments(text, (call.index ?? 0) + call[0].length)
       const expressions = [
         ...[...rest.matchAll(/\baction:\s*([^,\n}]+)/g)].map((match) => (match[1] ?? "").trim()),
@@ -674,20 +624,11 @@ describe("audit actions", () => {
   })
 })
 
-// --- Intake reasons: every reason the worker's intake records can carry has its words on the intake log ---
-
-/** The expressions intake builds a reason from, and every code each can give. */
 const REASON_EXPRESSIONS: Record<string, readonly string[]> = {
   "msg.content": MESSAGE_CONTENTS.filter((content) => content !== "parsed"),
   "classification.signs.join()": AUTOMATED_SIGNS,
 }
 
-/**
- * The reasons the worker can write into an intake record. Only intake/process.ts inserts one (another file that does is
- * reported); its reasons are the literals after `reason:` and given to `linkReason`, and the codes of the expressions
- * listed above. A reason built any other way is reported, so a new one cannot hide from the check. A type annotation
- * (`reason: TicketFlag`) is not a value.
- */
 function intakeReasonsWritten(sources: Record<string, string>): { reasons: Set<string>; unread: string[] } {
   const reasons = new Set<string>()
   const unread: string[] = []

@@ -1,13 +1,3 @@
-// One organization, /organizations/:id, admins only (plan 2.1): its support addresses (exact addresses and patterns,
-// the default marked) and its agents (GET /api/v1/admin/organizations/:id). Rename and Delete act on the whole
-// organization; the server refuses to delete one that still has addresses or agents (organization_in_use). An address
-// is never edited: the admin adds a new one and removes the old one. Make default moves the default mark in one step
-// (exact addresses only); while intake is live the default cannot be removed, only replaced, and the server says so
-// (intake_default_required). Only agents are added: admins see every organization by their role. Removing an agent
-// takes effect on their next request. The signature (plan 3.1) is plain text added after every reply sent for the
-// organization, edited in its own dialog. The automatic reminder (plan 4.3) is edited the same way: its plain text
-// (empty for no reminders) and the days a ticket waits for the customer before it goes.
-
 import {
   ADDRESS_KINDS,
   type AddressKind,
@@ -49,8 +39,6 @@ export function OrganizationPage() {
   const { id = "" } = useParams()
   return (
     <AdminOnly title={t("organizations.title")}>
-      {/* One instance per organization: moving from one to another (Back, Forward) replaces it, so an answer that
-          arrives late for the previous one (a delete, a dialog's save) finds its instance gone and does nothing. */}
       <Organization key={id} />
     </AdminOnly>
   )
@@ -187,7 +175,6 @@ function Organization() {
 
 type Change = ReturnType<typeof useChange>
 
-/** The signature of the organization's replies, as the customer reads it under each reply. */
 function Signature({ signature, onEdit }: { signature: string; onEdit: () => void }) {
   const { t } = useI18n()
   return (
@@ -200,7 +187,6 @@ function Signature({ signature, onEdit }: { signature: string; onEdit: () => voi
         </button>
       </div>
       {signature ? (
-        // Each line with its own direction, as the email gives it: a Hebrew line and an English line both read right.
         <div className="ui-signature" data-testid="organization-signature">
           {linesOf(signature).map(({ key, line }) => (
             <div key={key} dir="auto">
@@ -283,7 +269,6 @@ function SignatureDialog({ id, signature, onClose }: { id: string; signature: st
   )
 }
 
-/** A text's lines, each keyed by where it starts in the text. */
 function linesOf(text: string): { key: number; line: string }[] {
   let at = 0
   return text.split("\n").map((line) => {
@@ -293,7 +278,6 @@ function linesOf(text: string): { key: number; line: string }[] {
   })
 }
 
-/** The automatic reminder: its text as the customer reads it, and after how many days it goes; or that there is none. */
 function Reminder({ template, days, onEdit }: { template: string; days: number; onEdit: () => void }) {
   const { t, tc } = useI18n()
   return (
@@ -308,7 +292,6 @@ function Reminder({ template, days, onEdit }: { template: string; days: number; 
       {template ? (
         <>
           <p className="ui-reminder-after">{tc("organization.reminder.after", days)}</p>
-          {/* Each line with its own direction, as the email gives it: a Hebrew line and an English line both read right. */}
           <div className="ui-signature" data-testid="organization-reminder-text">
             {linesOf(template).map(({ key, line }) => (
               <div key={key} dir="auto">
@@ -652,7 +635,6 @@ function RenameDialog({ id, name, onClose }: { id: string; name: string; onClose
     try {
       await api.renameOrganization(id, trimmed)
       showToast(t("organization.renameDone", { name: trimmed }), "success")
-      // Closed meanwhile: this answer closes nothing (another dialog may be open now).
       if (mounted.current) {
         guardedClose.dismiss()
         onClose()
@@ -705,7 +687,6 @@ function RenameDialog({ id, name, onClose }: { id: string; name: string; onClose
   )
 }
 
-/** A new exact address or pattern, checked here with the server's own rules before it is sent. */
 function AddAddressDialog({ id, onClose }: { id: string; onClose: () => void }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
@@ -733,7 +714,6 @@ function AddAddressDialog({ id, onClose }: { id: string; onClose: () => void }) 
     try {
       await api.addAddress(id, kind, parsed.value)
       showToast(t("organization.addresses.addDone", { value: parsed.value }), "success")
-      // Closed meanwhile: this answer closes nothing (another dialog may be open now).
       if (mounted.current) {
         guardedClose.dismiss()
         onClose()
@@ -816,13 +796,8 @@ function AddAddressDialog({ id, onClose }: { id: string; onClose: () => void }) 
   )
 }
 
-/** How many agents one page of a search holds; Show more loads the next page. */
 export const AGENT_PAGE = 50
 
-/**
- * One page of the agents whose username contains the text, from `offset` on, through the admin plugin's documented
- * search of /admin/list-users. Its `total` counts every agent the same filters match.
- */
 export function searchAgents(search: string, offset = 0): Promise<{ users: ListedUser[]; total: number }> {
   return authData(
     authClient.admin.listUsers({
@@ -834,17 +809,12 @@ export function searchAgents(search: string, offset = 0): Promise<{ users: Liste
         filterField: "role",
         filterValue: "agent",
         filterOperator: "eq",
-        // Maane gives every user their username as the name, so the name search is the username search.
         ...(search ? { searchValue: search, searchField: "name" as const, searchOperator: "contains" as const } : {}),
       },
     }),
   ) as Promise<{ users: ListedUser[]; total: number }>
 }
 
-/**
- * One of the agents who are not in this organization yet, found by part of their username. Admins are never offered:
- * they see every organization.
- */
 function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose: () => void }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
@@ -856,12 +826,10 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
   const [userId, setUserId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // The search follows the typing after a short pause, not on every key.
   useEffect(() => {
     const timer = window.setTimeout(() => setSearch(typed.trim().toLowerCase()), 250)
     return () => window.clearTimeout(timer)
   }, [typed])
-  // Pages by offset, each kept once loaded: every agent the search matches can be reached, however many come first.
   const found = useInfiniteQuery({
     queryKey: ["agents", search],
     queryFn: ({ pageParam }) => searchAgents(search, pageParam),
@@ -875,7 +843,6 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
   })
   const present = new Set(data.members.map((member) => member.userId))
   const seen = new Set<string>()
-  // A user can appear on two pages when the list changed in between: each one shows once.
   const shown = (found.data?.pages ?? [])
     .flatMap((page) => page.users)
     .filter((user) => !seen.has(user.id) && Boolean(seen.add(user.id)))
@@ -886,7 +853,6 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    // The button stays disabled until an agent is chosen.
     if (!chosen) return
     setBusy(true)
     setError(null)
@@ -897,7 +863,6 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
         queryClient.invalidateQueries({ queryKey: qk.organization(data.organization.id) }),
         queryClient.invalidateQueries({ queryKey: qk.organizations, exact: true }),
       ])
-      // Closed meanwhile: this answer closes nothing (another dialog may be open now).
       if (mounted.current) onClose()
     } catch (failure) {
       setError(errorText(t, failure))
@@ -961,8 +926,6 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
             <button
               type="button"
               className="ui-btn ui-btn-sm"
-              // While a new search is on its way the list still shows the previous one: its next page is not this
-              // search's next page.
               disabled={found.isFetchingNextPage || found.isPlaceholderData}
               onClick={() => void found.fetchNextPage()}
             >

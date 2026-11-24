@@ -1,15 +1,3 @@
-// The composer of a ticket (plan 3.1): a reply or an internal note. To and Cc start from the ticket's participants,
-// From from the organization's support addresses (the ticket's own first), and the text is written in TipTap, where
-// each paragraph takes the direction of its first letter (its documented textDirection: "auto"). Files come from the
-// agent's computer (uploaded, then scanned by the worker; a refused one says why and is never sent) or from the
-// ticket's own messages. One click is one message: the composer sends a submission ID, kept until the server answers,
-// so a repeated or lost request finds the same message.
-// A reply's default action is "Send and set pending" (plan 4.1): the server sets the status in the reply's own
-// transaction; "Send" leaves the status. A closed ticket offers only "Send" to an agent (only an admin leaves closed).
-// "Send later" (plan 4.2) schedules the reply for a date and time in Israel time, with its status action, which applies
-// when it goes. A scheduled reply its author changes comes back into the composer; saving makes a new version.
-// TipTap's own stylesheet stays off (injectCSS: false): the UI's policy allows no inline <style>; ui.css styles it.
-
 import {
   type AttachmentView,
   type ComposeView,
@@ -40,13 +28,11 @@ import { useUnsaved } from "../../ui/unsaved.tsx"
 import { FormError } from "../auth/parts.tsx"
 import { WhenDialog } from "./When.tsx"
 
-/** How often an upload's scan is read, and how long the composer waits for it. */
 const SCAN_POLL_MS = 1_500
 const SCAN_WAIT_MS = 5 * 60_000
 
 type Kind = "reply" | "note"
 
-/** A file the agent added: an upload on its way or scanned, or a file of the ticket's own messages. */
 type Picked =
   | { key: string; source: "upload"; name: string; size: number; upload: UploadView | null; failed: string | null }
   | { key: string; source: "part"; name: string; size: number; part: AttachmentView }
@@ -63,7 +49,6 @@ const UPLOAD_TONE: Record<UploadView["status"], Tone> = {
 }
 const ATTACHABLE = new Set(["clean", "not_fully_scanned", "not_scanned"])
 
-/** Addresses typed into To or Cc: separated by commas, semicolons, or spaces; names come from the participants. */
 export function parseAddresses(text: string, known: MailAddress[]): MailAddress[] {
   const names = new Map(known.map((entry) => [entry.address.toLowerCase(), entry.name]))
   return text
@@ -75,7 +60,6 @@ export function parseAddresses(text: string, known: MailAddress[]): MailAddress[
 
 const listText = (list: MailAddress[]) => list.map((entry) => entry.address).join(", ")
 
-/** A scheduled reply's file as the composer holds it again (its upload was scanned and kept when it was written). */
 function pickedOf(file: ScheduledReplyView["files"][number]): Picked {
   if (file.source === "upload")
     return {
@@ -121,10 +105,8 @@ export function Composer({
   onEditKeep = () => {},
 }: {
   view: TicketView
-  /** A scheduled reply its author is changing (plan 4.2), loaded into the composer. */
   editing?: ScheduledReplyView | null
   onEditDone?: () => void
-  /** The agent kept changing this reply rather than load another one in its place. */
   onEditKeep?: (scheduled: ScheduledReplyView) => void
 }) {
   const { t } = useI18n()
@@ -133,7 +115,6 @@ export function Composer({
   const formId = useId()
   const [kind, setKind] = useState<Kind>("reply")
   const [chosenFrom, setFrom] = useState(compose.defaultFrom ?? "")
-  // A From the ticket no longer offers (it moved to another organization) gives way to its default; the draft stays.
   const from = compose.from.includes(chosenFrom) ? chosenFrom : (compose.defaultFrom ?? "")
   const [to, setTo] = useState(listText(compose.to))
   const [cc, setCc] = useState(listText(compose.cc))
@@ -189,7 +170,6 @@ export function Composer({
   useUnsaved("composer", { count: dirty ? 1 : 0, kind: "leave" })
   const [later, setLater] = useState(false)
   const role = useMe().data?.role ?? "agent"
-  // "Send and set pending" only where this user may set pending (not on a closed ticket, unless an admin).
   const canSetPending = mayChangeStatus(role, view.ticket.status, "pending")
   const [laterPending, setLaterPending] = useState(canSetPending)
 
@@ -199,13 +179,7 @@ export function Composer({
     setFiles([])
   }
 
-  // A scheduled reply to change comes into the composer; a draft in it is dropped only when the agent agrees. The
-  // change is pinned to the reply and the version its content was loaded from until the agent saves or stops: a newer
-  // view never moves it, and a reply that went out or was cancelled meanwhile gets the server's refusal on save, never
-  // a new reply in its place.
   const loaded = useRef<{ id: string; version: number } | null>(null)
-  // The reply being changed as it was loaded, and its fields as the composer held them then: a change to another
-  // scheduled reply asks first when any of them was edited since.
   const loadedView = useRef<ScheduledReplyView | null>(null)
   const baseline = useRef("")
   const fields = () =>
@@ -225,7 +199,6 @@ export function Composer({
           focusCancel: true,
         })
         if (!yes) {
-          // The change in progress stays; with none, the composer keeps its draft.
           if (loadedView.current) onEditKeep(loadedView.current)
           else onEditDone()
           return
@@ -270,7 +243,6 @@ export function Composer({
     (file) => file.source === "part" || (file.upload !== null && ATTACHABLE.has(file.upload.status)),
   )
 
-  /** Uploads one file and follows its scan until the worker decided. */
   const add = async (file: File) => {
     const key = `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`
     setFiles((current) => [
@@ -304,7 +276,6 @@ export function Composer({
           ],
     )
 
-  /** What the composer holds as a request, or null (with the reason shown) when it cannot go. */
   const collect = (setPending: boolean): ReplyInput | null => {
     if (!editor) return null
     setError(null)
@@ -338,12 +309,10 @@ export function Composer({
       queryClient.invalidateQueries({ queryKey: ["tickets"] }),
     ])
 
-  /** A submission ID is kept only while no answer came: a refusal wrote nothing, so the next click is a new one. */
   const answered = (failure: unknown) => {
     if (failure instanceof ApiError && failure.status >= 400 && failure.status < 500) submission.current = null
   }
 
-  /** "Send later" and "Save changes": the time dialog does the request; a refusal stays in it. */
   const schedule = async (at: Date) => {
     const input = collect(laterPending && canSetPending)
     if (!input) throw new Error(t("compose.empty"))
@@ -373,7 +342,6 @@ export function Composer({
   const send = async (setPending: boolean) => {
     const input = collect(setPending)
     if (!editor || !input) return
-    // The same ID until the server answers: a repeated click or a retry after a lost answer finds the same message.
     submission.current = input.submissionId
     setBusy(true)
     try {
@@ -398,7 +366,6 @@ export function Composer({
     }
   }
 
-  // Files of incoming messages and replies only: an internal note's files never reach a customer.
   const ticketFiles = view.messages.flatMap((message) =>
     message.direction === "note" ? [] : message.attachments.filter((file) => file.download),
   )
@@ -504,7 +471,6 @@ export function Composer({
             <span className="ui-label">{t("compose.signature")}</span>
             <div>
               {compose.signature.split(/\r?\n/).map((line, index) => (
-                // Each line takes the direction of its first letter, as the email's paragraphs do.
                 // biome-ignore lint/suspicious/noArrayIndexKey: the lines of one fixed text, in order
                 <div key={index} dir="auto">
                   {line === "" ? <br /> : line}

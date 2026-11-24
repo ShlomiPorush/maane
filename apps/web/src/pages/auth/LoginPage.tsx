@@ -1,8 +1,3 @@
-// Sign-in on Better Auth's routes, /login: username and password (/sign-in/username), then the second factor: the
-// code from the authenticator app (/two-factor/verify-totp) or a backup code (/two-factor/verify-backup-code).
-// trustDevice is never sent: Maane asks for the code at every sign-in. An account without two-factor yet goes on to
-// set it up. `next` (a page of this app only) is where it goes afterwards. A wrong password or code stays on its form.
-
 import { useQueryClient } from "@tanstack/react-query"
 import { type FormEvent, useId, useRef, useState } from "react"
 import { Navigate, useNavigate, useSearchParams } from "react-router"
@@ -35,7 +30,6 @@ export function LoginPage() {
 
   const status = useSetupStatus({ fresh: true })
   const me = useMe({ fresh: true })
-  // The session is judged only by a read made after this page opened, never by a cached answer.
   if (status.isPending || ((me.isPending || me.isFetching) && step === "password"))
     return <Loading label={t("app.loading")} />
   if (status.isError)
@@ -45,7 +39,6 @@ export function LoginPage() {
       </div>
     )
   if (!status.data.hasUser) return <Navigate to={withNext("/setup", next)} replace />
-  // A failed read keeps the old answer beside its error: the error decides.
   if (me.error instanceof ApiError && me.error.code === "totp_required")
     return <Navigate to={withNext("/enroll", next)} replace />
   if (!me.error && me.data) return <Navigate to={next} replace />
@@ -84,7 +77,6 @@ export function LoginPage() {
         setStep("code")
         return
       }
-      // Signed in without two-factor (a new account): it is set up next, without asking for the password again.
       rememberForEnrollment(password)
       setPassword("")
       await queryClient.resetQueries()
@@ -96,7 +88,6 @@ export function LoginPage() {
     }
   }
 
-  /** Sends the second factor; an expired challenge goes back to the password. */
   const verify = async (call: () => Promise<{ error: AuthError }>): Promise<CodeAnswer> => {
     setBusy(true)
     setError(null)

@@ -1,6 +1,3 @@
-// The pages in the navigation, in one list for the sidebar, the rail and the phone tab bar. Admin pages show only
-// to admins; an agent who opens one by its address sees a locked page that says why (pages/AdminOnly.tsx).
-
 import { Building2, DatabaseZap, History, Inbox, type LucideIcon, Mails, Settings, Tags, Users } from "lucide-react"
 
 export type NavPage = {
@@ -21,7 +18,6 @@ export const NAV: readonly NavPage[] = [
   { id: "audit", to: "/audit", icon: History, admin: true },
 ]
 
-/** The Account page: outside the navigation, opened from the account menu. */
 export const ACCOUNT_PATH = "/account"
 
 export function navFor(role: string | undefined): readonly NavPage[] {
@@ -29,7 +25,6 @@ export function navFor(role: string | undefined): readonly NavPage[] {
 }
 
 export function navPageFor(pathname: string): NavPage | null {
-  // A ticket belongs to the ticket list, the home page.
   if (pathname === "/" || pathname.startsWith("/tickets/")) return NAV[0] ?? null
   return NAV.find((page) => page.to !== "/" && (pathname === page.to || pathname.startsWith(`${page.to}/`))) ?? null
 }

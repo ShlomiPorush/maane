@@ -1,7 +1,3 @@
-// The parts the sign-in and setup pages share: the frame (a column on the page, no card, v3 FS-23), a password
-// field with show and Caps Lock note, the six-digit code field that sends itself on the sixth digit, the backup
-// code field, and the backup codes shown once with Copy, Download and "I saved them".
-
 import { Copy, Download, Eye, EyeOff } from "lucide-react"
 import {
   type FormEvent,
@@ -27,7 +23,6 @@ export function AuthFrame({
 }: {
   title: string
   description?: ReactNode
-  /** Between the brand and the title: the setup steps. */
   above?: ReactNode
   children: ReactNode
 }) {
@@ -58,7 +53,6 @@ export function AuthFrame({
   )
 }
 
-/** An error under a form, announced when it appears. */
 export function FormError({ id, children }: { id?: string; children: ReactNode }) {
   return (
     <div id={id} className="ui-banner ui-banner-fail" role="alert">
@@ -149,13 +143,8 @@ export function PasswordField({
   )
 }
 
-/** What became of a sent code: accepted, refused (it is cleared), or sent without an answer (it stays). */
 export type CodeAnswer = "done" | "refused" | "kept"
 
-/**
- * The six-digit code. It sends itself on the sixth digit; a refused code is cleared for the next try, one that
- * got no answer stays and can be sent again with the button (v3 FS-23).
- */
 export function CodeField({
   onSubmit,
   busy,
@@ -169,7 +158,6 @@ export function CodeField({
   submitLabel: string
   busyLabel: string
   error?: string | null
-  /** The sentence under the field; the authenticator app's by default. */
   hint?: string
 }) {
   const { t } = useI18n()
@@ -246,7 +234,6 @@ export function CodeField({
   )
 }
 
-/** A backup code from enrolment: typed as shown (the dash may be left out). Each code works once. */
 export function BackupCodeField({
   onSubmit,
   busy,
@@ -318,10 +305,6 @@ export function BackupCodeField({
   )
 }
 
-/**
- * The backup codes, shown once: the only way in without the authenticator. Copy and Download keep them; Continue
- * waits for "I saved them".
- */
 export function BackupCodes({
   codes,
   onDone,
@@ -331,7 +314,6 @@ export function BackupCodes({
   codes: string[]
   onDone: () => void
   doneLabel: string
-  /** Told whether "I saved them" is ticked, for a dialog that warns before the codes are closed unsaved. */
   onSavedChange?: (saved: boolean) => void
 }) {
   const { t } = useI18n()

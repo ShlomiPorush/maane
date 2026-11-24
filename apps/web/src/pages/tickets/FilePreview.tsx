@@ -1,8 +1,3 @@
-// A file's preview in the shared dialog (requirements 3.2): an image as an <img> of its preview address, a PDF drawn
-// by pdf.js on a canvas page by page (with a note that the download holds the original), a text as plain text (each line
-// with its own direction). The server serves a preview only for a clean file of one of these types, read from its
-// content; anything else never opens here.
-
 import { type AttachmentView, TEXT_PREVIEW_MAX_BYTES } from "@maane/shared"
 import { ChevronLeft, ChevronRight, Download } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
@@ -84,8 +79,6 @@ function PdfPreview({ id }: { id: string }) {
   const [state, setState] = useState<PdfState>({ status: "loading" })
   const [page, setPage] = useState(1)
 
-  // The document and its worker live exactly as long as the preview: closing it at any moment, while the file still
-  // downloads, while pdf.js loads, or once the document is open, ends them, and nothing starts after it closed.
   useEffect(() => {
     let gone = false
     let loading: import("pdfjs-dist").PDFDocumentLoadingTask | null = null
@@ -96,7 +89,6 @@ function PdfPreview({ id }: { id: string }) {
         const { loadPdfJs, openPdf } = await import("./pdf.ts")
         if (gone) return
         const pdfjs = await loadPdfJs()
-        // The last check before anything starts: from here on the task is created and owned in the same step.
         if (gone) return
         const task = openPdf(pdfjs, data)
         loading = task

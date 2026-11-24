@@ -1,7 +1,3 @@
-// Categories, /categories, admins only (plan 4.1): one shared list, each with how many tickets carry it
-// (GET /api/v1/admin/categories). Add category and Rename ask for a name in a dialog; Delete asks first and says that
-// every ticket loses the category. Agents set categories on a ticket from its page.
-
 import { CATEGORY_NAME_MAX, type CategoryView } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { Ellipsis, Pencil, Plus, Trash2 } from "lucide-react"
@@ -146,7 +142,6 @@ function CategoryRow({ category, onRename }: { category: CategoryView; onRename:
   )
 }
 
-/** A name for a new category, or a new name for one (category set). */
 function NameDialog({ category, onClose }: { category: CategoryView | null; onClose: () => void }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()

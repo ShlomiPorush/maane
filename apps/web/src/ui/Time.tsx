@@ -1,6 +1,3 @@
-// A time on screen: a <time datetime> written by the format helpers, with the exact time in its tooltip
-// (v3 FW-1, FW-9). The mode decides how much of it the place shows.
-
 import { agoParts, formatListTime, formatTime, toDate } from "../format/datetime.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 
@@ -18,7 +15,6 @@ export function Time({ value, mode = "list" }: { value: string | null | undefine
     text = mode === "list" ? formatListTime(date) : formatTime(date, { seconds: false })
   }
   return (
-    // Digits keep their order inside a right-to-left sentence; "3 h ago" is a sentence of its own.
     <time
       className="ui-time"
       dir={mode === "ago" ? undefined : "ltr"}

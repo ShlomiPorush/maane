@@ -1,13 +1,5 @@
-// The one HTTP client for Maane's own API (/api/v1 and /api/setup). Every state-changing request carries the
-// x-maane-request header (the server refuses it otherwise; the browser adds Origin itself), the session cookie goes
-// along (same origin), and the server's {error: "code"} becomes an ApiError. A 401 and totp_required are reported to
-// the app, which then goes to sign-in or to the two-factor setup. Better Auth's own routes go through its client
-// (api/auth.ts), never through here.
-
 export const API_BASE = "/api/v1"
-/** The header the server requires on every state-changing request to /api/v1. */
 export const REQUEST_HEADER = "x-maane-request"
-/** A request without an answer fails after this long, so a hung request never holds a refresh. */
 export const REQUEST_TIMEOUT_MS = 20_000
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
@@ -16,11 +8,8 @@ export type TransportResponse = { status: number; body: unknown }
 export type Transport = (request: TransportRequest) => Promise<TransportResponse>
 
 export class ApiError extends Error {
-  /** 0 when no answer came. */
   readonly status: number
-  /** The server's code ("setting_locked"), "network" when no answer came, "unknown" for an answer without one. */
   readonly code: string
-  /** The error's other fields, such as the setting `key`. */
   readonly details: Record<string, unknown>
 
   constructor(status: number, code: string, details: Record<string, unknown> = {}) {
@@ -32,7 +21,6 @@ export class ApiError extends Error {
   }
 }
 
-/** The browser transport: same-origin fetch with the session cookie. */
 export const fetchTransport: Transport = async ({ method, url, headers, body }) => {
   const response = await fetch(url, {
     method,
@@ -56,17 +44,14 @@ export const fetchTransport: Transport = async ({ method, url, headers, body }) 
 let transport: Transport = fetchTransport
 let unauthorizedHandler: ((error: ApiError) => void) | null = null
 
-/** Replaces the transport (tests). */
 export function setTransport(next: Transport): void {
   transport = next
 }
 
-/** Called on each 401 and on totp_required: the app goes to sign-in or to the two-factor setup. */
 export function onUnauthorized(handler: ((error: ApiError) => void) | null): void {
   unauthorizedHandler = handler
 }
 
-/** The ApiError of a failed answer: the server's code, else one that follows from the status. */
 export function errorFrom(status: number, body: unknown): ApiError {
   const answer = (body ?? {}) as { error?: unknown }
   if (typeof answer.error === "string" && answer.error) {
@@ -79,7 +64,6 @@ export function errorFrom(status: number, body: unknown): ApiError {
   return new ApiError(status, "unknown")
 }
 
-/** A request to Maane's API. A path under /api/ is used as it is; any other path is under /api/v1. */
 export async function request<T>(method: HttpMethod, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" }
   if (method !== "GET") headers[REQUEST_HEADER] = "1"
@@ -97,10 +81,6 @@ export async function request<T>(method: HttpMethod, path: string, body?: unknow
   throw error
 }
 
-/**
- * A file of Maane's API as bytes (a preview the UI draws itself: a PDF for pdf.js, a text). Same origin, with the
- * session cookie; a refusal becomes an ApiError like any other answer, and a 401 is reported the same way.
- */
 export async function requestFile(url: string): Promise<Response> {
   let response: Response
   try {
@@ -115,10 +95,6 @@ export async function requestFile(url: string): Promise<Response> {
   throw error
 }
 
-/**
- * Sends one file to Maane's API as multipart form data (the composer's uploads), with the header every change carries
- * and the session cookie. Longer than a JSON request may take: a large file needs the time to travel.
- */
 export async function sendFile<T>(path: string, file: File): Promise<T> {
   const form = new FormData()
   form.set("file", file)
@@ -141,7 +117,6 @@ export async function sendFile<T>(path: string, file: File): Promise<T> {
   throw error
 }
 
-/** A query string from the defined values only. */
 export function query(params: Record<string, string | number | null | undefined>): string {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {

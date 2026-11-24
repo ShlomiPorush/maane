@@ -1,10 +1,3 @@
-// Choosing a time ahead in Israel time (plan 4.2): "send later" in the composer and snooze. The date and the time are
-// entered and shown in Maane's zone (Asia/Jerusalem) whatever the browser's zone (format/datetime.ts converts them,
-// daylight saving included). The date is the browser's date field (its order is the browser's, v3 FW-9); the time is
-// typed on the 24-hour clock, since a native time field shows AM and PM in some browsers' languages. A time the clock
-// skips when summer time starts is refused with the reason, and so is a time that is not ahead; the server refuses one
-// that is not ahead by its own clock too.
-
 import { type FormEvent, type ReactNode, useId, useState } from "react"
 import { errorText } from "../../api/errors.ts"
 import { nextWholeHour, type ZonedInput, zonedInput, zonedInstant } from "../../format/datetime.ts"
@@ -15,18 +8,14 @@ import { useMounted } from "../../ui/mounted.ts"
 import { FormError } from "../auth/parts.tsx"
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/
-/** The time as typed on the 24-hour clock (v3 FW-9): "9:30" or "09:30". */
 const TIME = /^(\d{1,2}):(\d{2})$/
 
 export function WhenDialog(props: {
   title: string
   submitLabel: string
   busyLabel: string
-  /** Where the fields start: an instant (a change), else the next whole hour. */
   initial?: string
-  /** More fields under the time (the composer's status action). */
   children?: ReactNode
-  /** Does the work with the chosen instant; a refusal stays in the dialog with its words. */
   onSubmit: (at: Date) => Promise<void>
   onClose: () => void
   testId?: string
@@ -117,7 +106,7 @@ export function WhenDialog(props: {
             <label className="ui-label" htmlFor={`${formId}-time`}>
               {t("when.time")}
             </label>
-            {/* Text on the 24-hour clock: a native time field shows AM and PM in some browsers' languages. */}
+            {/* A type="time" field would show AM and PM in browsers whose language uses a 12-hour clock. */}
             <input
               id={`${formId}-time`}
               type="text"

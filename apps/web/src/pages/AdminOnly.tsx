@@ -1,6 +1,3 @@
-// An admin page opened by someone who is not an admin: the page stays and says why it is locked (v3 principle
-// "locked, not hidden"). The server refuses these reads and writes on its own; this only explains.
-
 import type { ReactNode } from "react"
 import { Link } from "react-router"
 import { useI18n } from "../i18n/i18n.tsx"

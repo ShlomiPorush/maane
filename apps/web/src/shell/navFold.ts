@@ -1,7 +1,3 @@
-// The sidebar folds into the 72px icon rail and remembers it in this browser (v3 NL-7; n8n-ops shell.tsx
-// useNavFolded). public/boot.js applies the choice before the page draws, so a folded sidebar never flashes
-// open. Ctrl+B (Cmd+B on a Mac) folds and unfolds it where the full sidebar exists, above 1100px.
-
 import { useCallback, useEffect, useState } from "react"
 
 export const NAV_KEY = "maane.nav"
@@ -18,9 +14,7 @@ export function setNavFolded(folded: boolean): void {
   else delete root().dataset.nav
   try {
     localStorage.setItem(NAV_KEY, folded ? "rail" : "side")
-  } catch {
-    // Storage blocked: the choice lasts for this visit only.
-  }
+  } catch {}
 }
 
 export const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform)

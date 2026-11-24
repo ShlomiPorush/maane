@@ -1,6 +1,3 @@
-// The language: Hebrew by default and right to left; the server's default applies only until this browser chooses;
-// a filled value is isolated so its direction cannot move the sentence's punctuation.
-
 import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, describe, expect, it } from "vitest"

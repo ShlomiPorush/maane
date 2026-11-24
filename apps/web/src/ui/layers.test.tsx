@@ -1,7 +1,3 @@
-// A modal dialog keeps the keyboard inside (W3C APG modal dialog): Tab from the last control goes to the first,
-// Shift+Tab from the first goes to the last, and a Tab from outside (the toast) comes back in. Inside, Tab is left to
-// the browser. A layer that is not modal (a menu, which closes on Tab itself) is left alone.
-
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it } from "vitest"

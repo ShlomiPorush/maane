@@ -1,9 +1,3 @@
-// The parts of the Account and Settings pages, after Mikud's Settings parts (v3 FS-6, FS-8): a group is a panel
-// with a small title, its count and its list actions at the end of its head; a row has the label and explanation at
-// the start and the control at the end. A value the environment sets carries a neutral "Set by the environment" tag
-// on its label line and names the variable under the explanation; its control stays in place, disabled. A value that
-// differs from its default carries a Changed tag and a "Reset to default (value)" button; a locked one never does.
-
 import { Lock, RotateCcw } from "lucide-react"
 import type { ReactNode } from "react"
 import { formatNumber } from "../format/number.ts"
@@ -20,9 +14,7 @@ export function Group({
   id: string
   title: string
   count?: number
-  /** Actions on the whole list, at the end of the head. */
   extra?: ReactNode
-  /** One muted line under the head that says what the group is for. */
   intro?: ReactNode
   children: ReactNode
 }) {
@@ -41,9 +33,7 @@ export function Group({
   )
 }
 
-/** The environment sets this value: the variable that does. */
 export type EnvLock = { variable: string | null }
-/** The value differs from its default: the default's name, and what puts it back in the draft. */
 export type ResetMark = { label: string; onReset: () => void }
 
 export function Row({
