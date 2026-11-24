@@ -3,8 +3,8 @@ import { ENCRYPTED_PDF, ENCRYPTED_ZIP } from "../files/samples.ts"
 
 // A stand-in clamd for unit and integration tests: a small TCP server with deterministic answers, speaking the part of
 // clamd's protocol Maane's client uses (PING, VERSION, and zINSTREAM with length-prefixed chunks), and peers that
-// misbehave on the connection itself. Tests never
-// reach a real scanner; the container stack stage of scripts/verify.sh runs the real ClamAV.
+// misbehave on the connection itself. Tests never reach a real scanner; the container stack stage of scripts/verify.sh
+// runs the real ClamAV.
 
 /** Text that makes the stand-in answer an alert or misbehave, when the scanned content contains it. */
 export const MARKERS = {
@@ -26,8 +26,8 @@ export interface StandInOptions {
   /** A scanner that alerts on everything. */
   alertsOnEverything?: boolean
   /**
-   * A peer that misbehaves on every connection: `silent` reads everything, never answers, and never closes, also
-   * after the client stops writing (the case the clamscan package could not bound); `halfClose` reads everything and ends its
+   * A peer that misbehaves on every connection: `silent` reads everything, never answers, and never closes, also after
+   * the client stops writing (the case the clamscan package could not bound); `halfClose` reads everything and ends its
    * side without an answer; `noRead` accepts and never reads; `trickle` sends a byte every 50 ms and never ends the
    * reply; `flood` answers with a reply far longer than clamd ever gives; `padded` answers `stream: OK` after 4 KiB of
    * spaces, in one write; `paddedSplit` sends the same reply in two writes, the second crossing the limit.
@@ -57,7 +57,7 @@ function answer(content: Buffer, options: StandInOptions): string | null {
   if (
     !options.noSignatures &&
     // EICAR anywhere in the stream, as a signature without an offset finds it: intake scans text fields in which
-    // a sender may have put it after other text (plan 2.3, review G1).
+    // a sender may have put it after other text (plan 2.3).
     (text.includes(MARKERS.infected) || (text.includes(EICAR_START) && text.includes(EICAR_END)))
   )
     return "stream: Eicar-Test-Signature FOUND"

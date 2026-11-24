@@ -1,4 +1,4 @@
-// The HTML of incoming mail (plan 2.3, P4): sanitize-html runs before anything is stored, and only its output is kept.
+// The HTML of incoming mail (plan 2.3): sanitize-html runs before anything is stored, and only its output is kept.
 // The allow list lives in the server (apps/server/src/mail/html.ts), which applies it once more when it serves a body
 // (plan 2.4). When a message has no text part, its stored text is made from the sanitized HTML with html-to-text (the
 // library mailparser itself uses), with images skipped.

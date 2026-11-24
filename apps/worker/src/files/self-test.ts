@@ -4,7 +4,7 @@ import type { ScannerCheck } from "@maane/shared"
 import { CLEAN_SAMPLE, ENCRYPTED_PDF, ENCRYPTED_ZIP, eicar } from "./samples.ts"
 import { PROBE_DEADLINE_MS, SAMPLE_DEADLINE_MS, type Scanner, type Verdict } from "./scanner.ts"
 
-// The scanner contract (plan 2.2, P15): "clean" is trusted only from a scanner that passed this self-test. It runs on
+// The scanner contract (plan 2.2): "clean" is trusted only from a scanner that passed this self-test. It runs on
 // worker start, every hour, when the scanner address changes, and for a connection test from Settings. A scanner that
 // fails it counts as unavailable, and the Settings page names the check that failed.
 

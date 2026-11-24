@@ -1,4 +1,4 @@
-// The samples of the scanner self-test (plan 2.2, P15). Each one proves one alert a scanner must give before Maane
+// The samples of the scanner self-test (plan 2.2). Each one proves one alert a scanner must give before Maane
 // trusts its "clean": EICAR, an encrypted ZIP, and an encrypted PDF, plus harmless text that must come back clean.
 
 /**

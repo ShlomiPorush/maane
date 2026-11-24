@@ -368,7 +368,6 @@ describe("the ticket's delivery flag", () => {
 
     await bounce(firstId, "2026-11-13T10:00:00Z")
     expect((await view(number)).ticket.reviewFlags).toContain("delivery_failed")
-    // The list shows it too.
     const list = await admin.call("GET", "/api/v1/tickets")
     expect(list.json.tickets[0].reviewFlags).toContain("delivery_failed")
 

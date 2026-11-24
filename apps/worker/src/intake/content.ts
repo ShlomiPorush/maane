@@ -1,6 +1,6 @@
-// What of a parsed message is stored, and the scan of its text fields (plan 2.3, review G1). The structured fields
-// threading and matching need (Message-ID, In-Reply-To, References, the From, To, and Cc addresses, the Date, the content
-// type) are bounded and always kept. The text fields are scanned like files by the same file service before the store
+// What of a parsed message is stored, and the scan of its text fields (plan 2.3). The structured fields threading and
+// matching need (Message-ID, In-Reply-To, References, the From, To, and Cc addresses, the Date, the content type) are
+// bounded and always kept. The text fields are scanned like files by the same file service before the store
 // transaction: the text body, the sanitized HTML, and the header block (the subject, the display names, every header
 // line, Graph's subject and sender name, and the parts' file names, types, and content IDs, as one text). A field the
 // scanner flags (infected or a blocked type) is not stored, the message is flagged `blocked_content`, and one audit row
@@ -183,7 +183,7 @@ export function columnsOf(content: MessageContent, scans: Partial<Record<TextFie
   const s = content.structured
   const h = content.headers
   const headersOk = storable(scans.headers)
-  // Classified from the parsed headers before any is dropped (review G13): only the bounded result is stored.
+  // Classified from the parsed headers before any is dropped: only the bounded result is stored.
   const classification = classify({ headers: h.lines, contentType: s.contentType, from: s.fromAddress })
   const named = (addresses: string[], names: (string | null)[]) =>
     addresses.map((address, index) => ({ address, name: headersOk ? (names[index] ?? null) : null }))
@@ -225,8 +225,8 @@ export function partNamesOf(content: MessageContent, scans: Partial<Record<TextF
 }
 
 /**
- * The audit row of the text fields a scan refused (G1), written once: only the fields that were not refused before.
- * Names the fields and the signatures or types, never the content.
+ * The audit row of the text fields a scan refused, written once: only the fields that were not refused before. Names
+ * the fields and the signatures or types, never the content.
  */
 export async function auditBlockedFields(
   tx: Pick<Db, "insert">,
@@ -247,7 +247,6 @@ export async function auditBlockedFields(
   return true
 }
 
-/** Whether any field still waits for the scanner. */
 export const fieldsWaiting = (scans: unknown) =>
   typeof scans === "object" &&
   scans !== null &&

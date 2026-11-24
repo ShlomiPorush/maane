@@ -1,8 +1,8 @@
 import { fileTypeFromBuffer } from "file-type"
 
-// The type of a file, decided from its content and never from its name or the type the sender declared (plan 2.2,
-// P9; requirements 3.2). Binary formats come from file-type. Text is decided by a strict rule, so that a preview can
-// never be fooled into rendering markup: a text preview is always served as text/plain.
+// The type of a file, decided from its content and never from its name or the type the sender declared (plan 2.2;
+// requirements 3.2). Binary formats come from file-type. Text is decided by a strict rule, so that a preview can never
+// be fooled into rendering markup: a text preview is always served as text/plain.
 
 /** Content the text rule accepts. */
 export const TEXT_TYPE = "text/plain"

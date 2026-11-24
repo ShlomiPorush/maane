@@ -110,7 +110,6 @@ export function fieldsOf(record: ZendeskTicketRecord, definitions: Map<string, F
   return fields
 }
 
-/** The tags of a ticket, as Zendesk kept them. */
 export const tagsOf = (record: ZendeskTicketRecord): string[] =>
   Array.isArray(record.tags) ? [...new Set(record.tags.filter((tag): tag is string => typeof tag === "string"))] : []
 
@@ -177,7 +176,6 @@ const strings = (value: unknown): string[] =>
 const viasOf = (comment: ZendeskFullComment): ZendeskVia[] =>
   [comment.metadata?.via, comment.via].filter((via): via is ZendeskVia => typeof via === "object" && via !== null)
 
-/** The first value `pick` finds in the via objects, else null. */
 function first<T>(vias: ZendeskVia[], pick: (via: ZendeskVia) => T | null): T | null {
   for (const via of vias) {
     const value = pick(via)
@@ -186,7 +184,6 @@ function first<T>(vias: ZendeskVia[], pick: (via: ZendeskVia) => T | null): T | 
   return null
 }
 
-/** The first non-empty list `pick` finds in the via objects, else none. */
 function firstList<T>(vias: ZendeskVia[], pick: (via: ZendeskVia) => T[]): T[] {
   for (const via of vias) {
     const value = pick(via)
@@ -236,7 +233,6 @@ function channelOf(comment: ZendeskFullComment): string | null {
   )
 }
 
-/** Whether a Zendesk user is one of its agents (an agent or an admin). */
 const isAgent = (user: ZendeskUser | undefined) => user?.role === "agent" || user?.role === "admin"
 
 /** A file the manifest holds (status ok): what the import reads from the archive and stores (plan 5.2). */

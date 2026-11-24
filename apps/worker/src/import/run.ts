@@ -8,15 +8,15 @@
 // is open (apps/server/src/imports/window.ts).
 //
 // Before its first write a run checks, in this order: the chosen Maane user; the archive's state (`state.json`'s run
-// count and coverage) and that no backup holds its lock; the strict offline check of the whole archive; that its
-// origin is the origin of earlier imports; and that the state is still the same, with no lock (a change means a new
-// full check). After each ticket it reads the state again: a backup that ran or started meanwhile stops the run, and
-// the next start is a full pass. A run that stopped otherwise (a crash, the scanner, a ticket the database refused) goes
-// on from the last ticket it committed while the archive still holds its state. An error stops the run where it is,
-// open: it records why (`scanner` or `failed`), and a ticket that caused it gets a `ticket_failed` report row with the
-// kind of error and no text of the error; an error no ticket caused records the stage it stopped in and the kind of
-// error (`failure`), never its text. When its job has used up its retries, the page offers Continue (the same Start)
-// once the cause is fixed.
+// count and coverage) and that no backup holds its lock; the strict offline check of the whole archive; that its origin
+// is the origin of earlier imports; and that the state is still the same, with no lock (a change means a new full
+// check). After each ticket it reads the state again: a backup that ran or started meanwhile stops the run, and the
+// next start is a full pass. A run that stopped otherwise (a crash, the scanner, a ticket the database refused) goes on
+// from the last ticket it committed while the archive still holds its state. An error stops the run where it is, open:
+// it records why (`scanner` or `failed`), and a ticket that caused it gets a `ticket_failed` report row with the kind
+// of error and no text of the error; an error no ticket caused records the stage it stopped in and the kind of error
+// (`failure`), never its text. When its job has used up its retries, the page offers Continue (the same Start) once the
+// cause is fixed.
 //
 // Each ticket is one transaction, which first locks the run's row, then the ticket number lock
 // (apps/server/src/tickets/numbers.ts, before any ticket lock, as intake takes it): it writes the ticket and replaces
@@ -224,7 +224,9 @@ interface Context {
 
 type Report = { reason: ImportReportReason; detail: string | null }
 
-/** Where a run is: the ticket it writes (an error there is that ticket's), or the stage of an error no ticket caused. */
+/**
+ * Where a run is: the ticket it writes (an error there is that ticket's), or the stage of an error no ticket caused.
+ */
 type At = { ticket: number | null; stage: ImportStage }
 
 const DELETED = new Set(["deleted"])
@@ -813,7 +815,7 @@ export class ZendeskImport {
           .onConflictDoUpdate({ target: message.zendeskKey, set: values })
           .returning({ id: message.id })
         if (!row) throw new Error("the message was not written")
-        // The block event, once per field the scanner refused (plan 2.3's policy, P12).
+        // The block event, once per field the scanner refused (plan 2.3's policy).
         await auditBlockedFields(
           tx,
           row.id,
@@ -822,8 +824,8 @@ export class ZendeskImport {
         )
         if (blocked) reports.push({ reason: "blocked_content", detail: item.key })
         await this.#writeFiles(tx, reader, ticketId, row.id, item.files, headersOk)
-        // A file the manifest marks failed, and one the scanner refused, by its name; by its ID when the scanner blocked
-        // the names (P12).
+        // A file the manifest marks failed, and one the scanner refused, by its name; by its ID when the scanner
+        // blocked the names.
         const fileDetail = (file: { id: string; name: string | null }) => (headersOk ? (file.name ?? file.id) : file.id)
         for (const file of item.failed) fileReports.push({ reason: "file_failed", detail: fileDetail(file) })
         // A file with no ID the import can use has only its name to name it.
@@ -1015,7 +1017,6 @@ async function continueNumbers(tx: Tx): Promise<void> {
     ) as highest) as numbers`)
 }
 
-/** A list in batches of at most `size` items, in order. */
 export function batches<T>(items: T[], size: number): T[][] {
   const out: T[][] = []
   for (let start = 0; start < items.length; start += size) out.push(items.slice(start, start + size))

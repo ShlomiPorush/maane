@@ -59,7 +59,6 @@ export class TimedActions {
     this.#queue = options.queue
   }
 
-  /** Runs the action's version that the job was queued for. */
   async run(actionId: string, version: number): Promise<TimedResult> {
     const locale = (await this.#settings.get("general.defaultLocale")) as Locale
     return transactionWithJobs(this.#db, async (tx, jobs) => {

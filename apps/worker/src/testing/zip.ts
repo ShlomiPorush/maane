@@ -3,7 +3,6 @@ import { crc32 } from "node:zlib"
 // Tiny ZIP archives for the stack check, built at run time so that no binary fixture is tracked: one entry, stored
 // without compression (PKWARE APPNOTE, local file header, central directory, end of central directory).
 
-/** A ZIP archive with one stored entry. */
 export function storedZip(name: string, content: Buffer): Buffer {
   const fileName = Buffer.from(name, "utf8")
   const crc = crc32(content)

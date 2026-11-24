@@ -243,7 +243,7 @@ describe("missing originals", () => {
     const original = h.graph.add(mime({ messageId: "same-round@example.com" }), { receivedAt: at(2) })
     await h.round()
     expect((await h.ticketOf(original))?.id).toBe((await h.ticketOf(reply))?.id)
-    // The reply was stored first, so it does not wait for the original (review G16): the original joins it late.
+    // The reply was stored first, so it does not wait for the original: the original joins it late.
     expect(await h.recordOf(original)).toMatchObject({ outcome: "joined", matchLayer: "original" })
     expect(await h.tickets()).toHaveLength(1)
   })

@@ -1,10 +1,10 @@
-// What waits for the scanner (plan 2.3, P5, P13; review G1, G6, G7): while files, text fields, or a raw message wait,
-// this job fetches their messages again from Graph, by the message's own source (its mailbox) and immutable ID with the
-// credential in effect now, and scans what waits again. Finishing what was already taken in is not tied to the current
-// source. A 401, 403, or 404 (the message, or access to its old mailbox, is gone) makes what waits `unavailable` with
-// that status as its reason, so nothing waits for ever; any other failure leaves it waiting. The raw MIME is kept once
-// it, every part, and every text field scanned clean, also when they were decided after the raw message. Each run takes the messages
-// tried longest ago first, so messages that keep failing cannot starve the others.
+// What waits for the scanner (plan 2.3): while files, text fields, or a raw message wait, this job fetches their
+// messages again from Graph, by the message's own source (its mailbox) and immutable ID with the credential in effect
+// now, and scans what waits again. Finishing what was already taken in is not tied to the current source. A 401, 403,
+// or 404 (the message, or access to its old mailbox, is gone) makes what waits `unavailable` with that status as its
+// reason, so nothing waits for ever; any other failure leaves it waiting. The raw MIME is kept once it, every part, and
+// every text field scanned clean, also when they were decided after the raw message. Each run takes the messages tried
+// longest ago first, so messages that keep failing cannot starve the others.
 
 import type { Db } from "@maane/server/db/client"
 import { intakeSource, message, messagePart } from "@maane/server/db/schema"
@@ -90,7 +90,7 @@ export class WaitingFiles {
     for (const item of waiting) {
       summary.messages++
       await this.#db.update(message).set({ retryAt: this.#now() }).where(eq(message.id, item.id))
-      // A record kept only Graph's metadata: its header values come from that metadata, fetched again (review G14).
+      // A record kept only Graph's metadata: its header values come from that metadata, fetched again.
       if (item.content !== "parsed") {
         const result = await this.#retryRecord(config, item)
         if (result === "waiting") summary.stillWaiting++
@@ -241,7 +241,7 @@ export class WaitingFiles {
         outcomes.set(part.id, "too_large")
       }
     }
-    // The raw message again: while it waits, and when it scanned clean but was not kept because a part waited (G6).
+    // The raw message again: while it waits, and when it scanned clean but was not kept because a part waited.
     const rawOutcome =
       current.rawStatus === "waiting" || (current.rawStatus === "clean" && !current.rawSha256)
         ? await this.#files.scan(raw, null)
@@ -253,7 +253,6 @@ export class WaitingFiles {
       if (!locked) return
       const rows = await tx.select().from(messagePart).where(eq(messagePart.messageId, messageId))
 
-      // Text fields.
       const lockedScans = (locked.fieldScans ?? {}) as Scans
       const scans: Scans = { ...lockedScans }
       for (const field of waitingFields(lockedScans)) {
@@ -286,7 +285,6 @@ export class WaitingFiles {
         patch.reviewFlags = [...new Set([...locked.reviewFlags, "blocked_content"])]
       await auditBlockedFields(tx, messageId, lockedScans, scans)
 
-      // Parts.
       for (const row of rows) {
         const outcome = outcomes.get(row.id)
         if (!outcome || row.status !== "waiting") continue

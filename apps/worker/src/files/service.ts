@@ -88,7 +88,6 @@ export class FileService {
     this.#now = options.now ?? (() => new Date())
   }
 
-  /** Where the file of this hash lives in the store. */
   storedPath(sha256: string): string {
     return this.#store.path(sha256)
   }
@@ -245,7 +244,7 @@ export interface BlockedPart {
 }
 
 /**
- * Writes the audit row of a blocked file (plan 2.2, P10) in the caller's transaction: the ticket, the message, the
+ * Writes the audit row of a blocked file (plan 2.2) in the caller's transaction: the ticket, the message, the
  * part, the file name, and the signature or the blocked type, never the content. Only when the part's status becomes
  * blocked: a retry of a part that was already blocked writes nothing. Returns whether it wrote the row.
  */

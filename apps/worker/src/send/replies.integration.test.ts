@@ -36,10 +36,10 @@ import type { SmtpTimeouts } from "./smtp.ts"
 import { smtpTest } from "./test.ts"
 import { scanUpload } from "./uploads.ts"
 
-// Replies that send (plan 3.1), from the composer's API to the stand-in SMTP servers and back through intake: the server
-// app and the worker's sender on one migrated database, the intake harness (stand-in Graph and clamd, a file store in
-// a temporary directory), and two stand-in SMTP servers: SMTP2GO (STARTTLS, outcomes by recipient) and the failover
-// (TLS from the first byte, accepts everything). Nothing leaves this process.
+// Replies that send (plan 3.1), from the composer's API to the stand-in SMTP servers and back through intake: the
+// server app and the worker's sender on one migrated database, the intake harness (stand-in Graph and clamd, a file
+// store in a temporary directory), and two stand-in SMTP servers: SMTP2GO (STARTTLS, outcomes by recipient) and the
+// failover (TLS from the first byte, accepts everything). Nothing leaves this process.
 
 const QUICK: SmtpTimeouts = { connection: 2000, greeting: 1500, socket: 3000, setup: 4000, send: 5000 }
 const SUPPORT = "support@example.com"
@@ -358,7 +358,8 @@ describe("a reply, end to end", () => {
     expect(html).not.toContain('dir="auto"')
     expect(html).toContain('<span dir="ltr">invoice.pdf</span>')
     expect(html).toContain("<span>[big.png]</span>")
-    // The screenshot, downscaled and embedded, shown no wider than the history's column; an image alone stays right to left.
+    // The screenshot, downscaled and embedded, shown no wider than the history's column; an image alone stays right to
+    // left.
     const image =
       /<p dir="rtl"><img alt="shot" src="cid:([^"]+)" width="586" height="147" style="width:586px;max-width:100%;height:auto;border:0" \/><\/p>/.exec(
         html,
@@ -516,7 +517,7 @@ describe("what a reply may carry and come from", () => {
     // Still scanning: not attachable yet.
     const pending = await uploadFile(admin, "late.txt", Buffer.from("late"))
     expect((await post(admin, { uploads: [pending.json.id] })).json).toEqual({ error: "attachment_invalid" })
-    // A file of an internal note of the same ticket never goes to a customer (review R1).
+    // A file of an internal note of the same ticket never goes to a customer.
     const ownNote = await admin.call(
       "POST",
       `/api/v1/tickets/${ticket.number}/messages`,
@@ -661,7 +662,7 @@ describe("what each provider's answer means", () => {
     ])
     expect([first?.status, second?.status].sort()).toEqual([200, 409])
     expect(await sender().send(result.id)).toBe("unknown")
-    // "Mark as sent", one recipient at a time (review R4): the other stays unknown, and so does the reply.
+    // "Mark as sent", one recipient at a time: the other stays unknown, and so does the reply.
     const mark = (address?: string) =>
       result.admin.call("POST", `/api/v1/messages/${result.id}/mark-sent`, address === undefined ? {} : { address })
     expect((await mark()).status).toBe(400)
