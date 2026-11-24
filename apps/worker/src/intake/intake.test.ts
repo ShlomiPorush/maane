@@ -289,6 +289,12 @@ describe("parsing", () => {
     expect((await parseMessage(mime())).date?.toISOString()).toBe("2026-11-12T08:00:00.000Z")
   })
 
+  it("counts a Message-ID's length in UTF-8 bytes", () => {
+    const threeBytes = String.fromCodePoint(0x4e00)
+    const fits = threeBytes.repeat(332)
+    expect(messageIds(`<${fits}xx> <${fits}xxx> <ok@example.com>`)).toEqual([`${fits}xx`, "ok@example.com"])
+  })
+
   it("treats an unparsable Date as no date, never the time of parsing", async () => {
     const raw = Buffer.from("From: dana@example.com\r\nDate: not a date at all\r\nSubject: x\r\n\r\nhi\r\n", "latin1")
     expect((await parseMessage(raw)).date).toBeNull()

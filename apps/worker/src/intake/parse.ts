@@ -66,10 +66,9 @@ export interface ReportRecipient {
 const ANGLE_ID = /<([^<>\s]+)>/g
 
 /**
- * Bounds on what a sender controls that becomes a key (plan 2.3): a Message-ID longer than a header line may be
- * (RFC 5322, 998 characters) and an address longer than SMTP allows (RFC 5321, 254) are dropped, and only the last
- * MAX_REFERENCES of a References header are kept, so no message can overflow an index entry or flood the pending
- * references of a ticket.
+ * Bounds on what a sender controls that becomes a key (plan 2.3): a Message-ID over MESSAGE_ID_MAX UTF-8 bytes and an
+ * address longer than SMTP allows (RFC 5321, 254) are dropped, and only the last MAX_REFERENCES of a References header
+ * are kept, so no message can overflow an index entry or flood the pending references of a ticket.
  */
 export const MESSAGE_ID_MAX = 998
 export const ADDRESS_MAX_LENGTH = 254
@@ -84,7 +83,7 @@ export function messageIds(value: string | string[] | undefined | null): string[
     if (found.length > 0) ids.push(...found)
     else if (text.trim() && !/\s/.test(text.trim())) ids.push(text.trim())
   }
-  return [...new Set(ids.filter((id) => id && id.length <= MESSAGE_ID_MAX))]
+  return [...new Set(ids.filter((id) => id && Buffer.byteLength(id) <= MESSAGE_ID_MAX))]
 }
 
 function addresses(value: AddressObject | AddressObject[] | undefined): MailAddress[] {

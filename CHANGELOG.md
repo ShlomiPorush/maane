@@ -54,4 +54,5 @@ All notable changes to Maane. The format follows [Keep a Changelog](https://keep
 
 ### Fixed
 
+- A message whose Message-ID, or one it refers to, is longer than mail allows only when counted in bytes (letters outside ASCII) opens or joins its ticket. Before, its content was not stored, or it failed while it became a ticket. Maane drops such an ID and keeps the message.
 - An organization's signature, on its page and under the composer, shows each line with its own direction, so an English line under a Hebrew one ends with its period, as the email gives it. The Account page reads a session's device in the page's language, so "Chrome on Linux" keeps its word order in Hebrew. The bounce address example in Settings reads `bounces@example.com` in Hebrew too.

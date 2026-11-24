@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto"
 import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { SYSTEM } from "@maane/server/audit"
@@ -213,6 +214,31 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     expect((await h.messageOf(valid)).subject).toBe("after the long keys")
     expect(await h.processor.run()).toEqual({ processed: 2, failed: 0 })
     expect((await h.ticketOf(hostile))?.id).toBeDefined()
+  })
+
+  it("opens a ticket for mail whose Message-IDs are too long for an index only in bytes", async () => {
+    const h = await start()
+    await h.organization("Example Support", [{ value: "support@example.com", isDefault: true }])
+    // 950 CJK ideographs, three bytes each in UTF-8 and random so PostgreSQL cannot compress them: fewer than 998
+    // characters, yet more bytes than one btree index entry may hold. As encoded words, which mailparser decodes.
+    const id = () =>
+      Array.from({ length: 95 }, () =>
+        encodedWord(fromCodePoints(...Array.from({ length: 10 }, () => randomInt(0x4e00, 0xa000)))),
+      ).join("\r\n ")
+    const own = h.graph.add(mime({ messageId: null, headers: [["Message-ID", id()]] }))
+    const replying = h.graph.add(
+      mime({
+        headers: [
+          ["In-Reply-To", id()],
+          ["References", id()],
+        ],
+      }),
+    )
+    await h.round()
+    for (const graphId of [own, replying]) {
+      expect(await h.messageOf(graphId)).toMatchObject({ content: "parsed", state: "processed" })
+      expect(await h.ticketOf(graphId)).toBeDefined()
+    }
   })
 
   it("processes once a message whose In-Reply-To names 70,000 IDs, and goes on", async () => {
