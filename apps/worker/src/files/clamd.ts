@@ -45,7 +45,6 @@ export interface ExchangeLimits {
 /** A reply longer than this is not clamd's: a signature name and its frame fit easily. */
 export const MAX_REPLY_BYTES = 4096
 export const CONNECT_TIMEOUT_MS = 5_000
-/** The size of each INSTREAM chunk. */
 const CHUNK_BYTES = 64 * 1024
 
 /**
@@ -98,7 +97,7 @@ function exchange(
   })
 }
 
-/** Writes and waits while the socket's buffer is full, so a peer that does not read holds us only until the deadline. */
+/** Waits while the socket's buffer is full: a peer that does not read holds us only until the deadline. */
 async function write(socket: Socket, data: Uint8Array, finished: () => boolean): Promise<void> {
   if (finished()) throw new Error("finished")
   if (socket.write(data)) return
@@ -123,7 +122,6 @@ const length = (n: number) => {
   return prefix
 }
 
-/** A reply to INSTREAM. */
 export type ScanReply = { found: string | null }
 
 /**

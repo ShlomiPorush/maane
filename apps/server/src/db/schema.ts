@@ -320,14 +320,11 @@ export const intakeCursor = pgTable(
     /** A well-known folder (`@maane/shared` GRAPH_FOLDERS). */
     folder: text("folder").notNull(),
     link: text("link").notNull(),
-    /** `next` (a page of the round in progress) or `delta` (the round is done). */
-    kind: text("kind").notNull(),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [
     primaryKey({ columns: [t.sourceId, t.folder] }),
     check("intake_cursor_folder", sql`${t.folder} in ('inbox', 'junkemail')`),
-    check("intake_cursor_kind", sql`${t.kind} in ('next', 'delta')`),
   ],
 )
 
@@ -361,12 +358,10 @@ export const ticket = pgTable(
     createdAt: createdAt(),
     lastActivityAt: at("last_activity_at").notNull().defaultNow(),
     /**
-     * Snoozed until this instant (plan 4.2): the ticket leaves the default list until then. Its `snooze-end` job names
-     * `snooze_version`, which every new snooze and every end of one moves on, so an older job finds a newer version
-     * and does nothing.
+     * Snoozed until this instant (plan 4.2): the ticket leaves the default list until then. Its `snooze-end` job ends
+     * the snooze only once this time has come, so the job of a replaced snooze does nothing early.
      */
     snoozedUntil: at("snoozed_until"),
-    snoozeVersion: integer("snooze_version").notNull().default(0),
     /**
      * An imported ticket (plan 5.1): its Zendesk ticket ID, which is also its Maane number (owner's decision,
      * 2026-11-16). Null for a ticket Maane opened. An imported ticket is read-only for agents until an
@@ -393,7 +388,10 @@ export const ticket = pgTable(
   ],
 )
 
-/** The people of a ticket: the sender of the message that opened it and the `Cc` addresses that are not support addresses. */
+/**
+ * The people of a ticket: the sender of the message that opened it and the `Cc` addresses that are not support
+ * addresses.
+ */
 export const ticketParticipant = pgTable(
   "ticket_participant",
   {
@@ -450,7 +448,6 @@ export const category = pgTable(
   ],
 )
 
-/** A ticket's categories: any number of them. */
 export const ticketCategory = pgTable(
   "ticket_category",
   {
@@ -514,7 +511,6 @@ export const message = pgTable(
     htmlBody: text("html_body"),
     /** SHA-256 of the decoded text, HTML, and every part's hash: with the Message-ID, From, and Date, a copy's key. */
     contentHash: text("content_hash"),
-    /** The scan status of the raw message. */
     rawStatus: text("raw_status"),
     /** The raw MIME, kept only when it and every part scanned clean. */
     rawSha256: text("raw_sha256").references(() => storedFile.sha256, { onDelete: "restrict" }),
@@ -524,7 +520,7 @@ export const message = pgTable(
      * A delivery status notification's recipients (RFC 3464), read at stage one: `{ address, action, status }[]`, only
      * validated tokens (an address, an action keyword, a status code), never the report's free text (plan 3.3).
      */
-    deliveryReport: jsonb("delivery_report"),
+    deliveryReport: jsonb("delivery_report").$type<{ address: string; action: string; status: string | null }[]>(),
     /** The top-level content type as mailparser parsed it, bounded: `{ value, reportType }`. */
     contentType: jsonb("content_type"),
     /**
@@ -533,12 +529,11 @@ export const message = pgTable(
      * the scanner is stored once a retry decides; processing waits while a field waits.
      */
     fieldScans: jsonb("field_scans").notNull().default(sql`'{}'::jsonb`),
-    /** From MAILER-DAEMON or postmaster without a sign of automated mail (classified at stage one, review G13). */
+    /** From MAILER-DAEMON or postmaster without a sign of automated mail (classified at stage one). */
     possiblyAutomated: boolean("possibly_automated").notNull().default(false),
     /** Processing runs that failed on this message; after a few it is recorded for review instead. */
     processAttempts: integer("process_attempts").notNull().default(0),
-    /** Fetches of this message again for what waits for the scanner, and the last one. */
-    retryAttempts: integer("retry_attempts").notNull().default(0),
+    /** The last fetch of this message again for what waits for the scanner. */
     retryAt: at("retry_at"),
     /** `@maane/shared` MESSAGE_FLAGS. */
     reviewFlags: text("review_flags").array().notNull().default(sql`'{}'::text[]`),
@@ -546,7 +541,6 @@ export const message = pgTable(
     classification: text("classification"),
     automatedReasons: text("automated_reasons").array().notNull().default(sql`'{}'::text[]`),
     ticketId: uuid("ticket_id").references(() => ticket.id, { onDelete: "restrict" }),
-    /** The earlier message this one is a copy of. */
     duplicateOf: uuid("duplicate_of"),
     processedAt: at("processed_at"),
     /** A reply or a note: the agent who wrote it. Users are never deleted, only banned. */
@@ -568,8 +562,7 @@ export const message = pgTable(
     /**
      * An imported comment's Message-ID as Zendesk recorded it (also in `zendesk`), kept here only so the check for the
      * same mail arriving through both intake and the import (phase 6) can use an index. Never used for threading or
-     * copies: intake's threading and copy queries read `message_id_header` only. A hash index: the check only compares
-     * for equality.
+     * copies, which read `message_id_header` only. A hash index: the check only compares for equality.
      */
     zendeskMessageId: text("zendesk_message_id"),
     createdAt: createdAt(),
@@ -601,8 +594,8 @@ export const message = pgTable(
     ),
     check(
       "message_written",
-      // A note always has its author; a reply has one too, except an automatic reminder (plan 4.3), sent as the organization.
-      // An imported comment has its own rule (message_imported).
+      // A note always has its author; a reply has one too, except an automatic reminder (plan 4.3), sent as the
+      // organization. An imported comment has its own rule (message_imported).
       sql`${t.direction} = 'in' or ${t.zendeskKey} is not null or ((${t.authorUserId} is not null or ${t.direction} = 'out') and ${t.submissionId} is not null and ${t.ticketId} is not null and ${t.state} = 'processed')`,
     ),
   ],
@@ -694,7 +687,6 @@ export const intakeRecord = pgTable(
     organizationId: uuid("organization_id").references(() => organization.id, { onDelete: "restrict" }),
     /** The ticket the message opened or joined. */
     ticketId: uuid("ticket_id").references(() => ticket.id, { onDelete: "restrict" }),
-    /** The ticket it matched. */
     matchedTicketId: uuid("matched_ticket_id").references(() => ticket.id, { onDelete: "restrict" }),
     /** A copy: the earlier message it repeats; a delivery report: the reply it is about. */
     matchedMessageId: uuid("matched_message_id").references(() => message.id, { onDelete: "restrict" }),
@@ -733,8 +725,6 @@ export const outbox = pgTable(
     fromAddress: text("from_address").notNull(),
     state: text("state").notNull().default("pending"),
     problem: text("problem"),
-    /** Send attempts started: each tries the first provider, then the failover for what the first did not take. */
-    attempts: integer("attempts").notNull().default(0),
     /**
      * The attempt that owns the row while it is `sending`, a new ID for each claim. Every later step of an attempt
      * (each send, each result) goes on only while this is still its ID and the row still `sending`; a stale attempt
@@ -742,10 +732,10 @@ export const outbox = pgTable(
      */
     attempt: uuid("attempt"),
     /**
-     * A delivery event about this reply Maane could not tie to one recipient's accepted send (plan 3.3): a failover report
-     * that names no accepted recipient or came before the acceptance, or an SMTP2GO event without a known queue ID whose
-     * recipient more than one attempt could have reached. Recorded here (when, and from where) without changing a
-     * recipient or the ticket's flag.
+     * A delivery event about this reply Maane could not tie to one recipient's accepted send (plan 3.3): a failover
+     * report that names no accepted recipient or came before the acceptance, or an SMTP2GO event without a known queue
+     * ID whose recipient more than one attempt could have reached. Recorded here (when, and from where) without
+     * changing a recipient or the ticket's flag.
      */
     unmatchedDeliveryAt: at("unmatched_delivery_at"),
     /** `@maane/shared` DELIVERY_SOURCES. */
@@ -791,7 +781,9 @@ export const outboxRecipient = pgTable(
     state: text("state").notNull().default("pending"),
     /** `smtp2go` or `failover`: the provider of the last answer about this recipient. */
     provider: text("provider"),
-    /** The provider's reply, bounded: the final reply (with the provider's queue ID) once accepted, else the refusal. */
+    /**
+     * The provider's reply, bounded: the final reply (with the provider's queue ID) once accepted, else the refusal.
+     */
     response: text("response"),
     /** The agent who marked an unknown recipient as sent. */
     markedBy: text("marked_by").references(() => authUser.id, { onDelete: "restrict" }),
@@ -805,8 +797,8 @@ export const outboxRecipient = pgTable(
      */
     possibleSends: integer("possible_sends").notNull().default(0),
     /**
-     * What the recipient's server did, by the newest event (`@maane/shared` DELIVERY_STATUSES): written only by delivery
-     * events, never by a send's result, and only by an event newer than the one it holds.
+     * What the recipient's server did, by the newest event (`@maane/shared` DELIVERY_STATUSES): written only by
+     * delivery events, never by a send's result, and only by an event newer than the one it holds.
      */
     delivery: text("delivery"),
     /** The time of the event that wrote `delivery`, as the provider or the report gave it. */
@@ -1052,7 +1044,9 @@ export const scheduledReply = pgTable("scheduled_reply", {
   ccAddresses: jsonb("cc_addresses").notNull(),
   htmlBody: text("html_body").notNull(),
   textBody: text("text_body").notNull(),
-  /** `{ source, id, fileName, contentType, size, sha256, status }[]`: the agent's uploads and the ticket's own files. */
+  /**
+   * `{ source, id, fileName, contentType, size, sha256, status }[]`: the agent's uploads and the ticket's own files.
+   */
   files: jsonb("files").notNull(),
   mime: bytea("mime").notNull(),
   messageIdHeader: text("message_id_header").notNull(),
@@ -1133,7 +1127,9 @@ export const zendeskImport = pgTable(
   (t) => [check("zendesk_import_one_row", sql`${t.id} = 1`)],
 )
 
-/** Which organization a Zendesk brand's tickets go to (requirements 3.1): explicit; an unmapped brand is not imported. */
+/**
+ * Which organization a Zendesk brand's tickets go to (requirements 3.1): explicit; an unmapped brand is not imported.
+ */
 export const zendeskBrandMap = pgTable("zendesk_brand_map", {
   brandId: text("brand_id").primaryKey(),
   organizationId: uuid("organization_id")
@@ -1141,7 +1137,10 @@ export const zendeskBrandMap = pgTable("zendesk_brand_map", {
     .references(() => organization.id, { onDelete: "cascade" }),
 })
 
-/** Which category a Zendesk tag gives a ticket (requirements 3.1); a tag without a row gives none. Tags stay as they are. */
+/**
+ * Which category a Zendesk tag gives a ticket (requirements 3.1); a tag without a row gives none. Tags stay as they
+ * are.
+ */
 export const zendeskTagMap = pgTable("zendesk_tag_map", {
   tag: text("tag").primaryKey(),
   categoryId: uuid("category_id")

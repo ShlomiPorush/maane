@@ -57,7 +57,6 @@ export type AuditPage = { entries: AuditEntry[]; next: number | null }
 
 export const AUDIT_PAGE_SIZE = 50
 
-/** An organization in the admin list. */
 export type OrganizationSummary = {
   id: string
   name: string
@@ -136,7 +135,6 @@ export type TicketFilters = {
   /** A search term (plan 4.4). */
   q?: string
 }
-/** The intake log's filters. */
 export type IntakeFilters = { flagged?: boolean }
 
 /**

@@ -1,9 +1,9 @@
-// Stage one of intake (plan 2.3, P5, P13, P21): delta queries on the current source's folders. For each new message:
-// fetch its raw MIME within files.maxBytes, parse it, sanitize its HTML, scan the raw message and each part, then
-// store, in one transaction that holds the source FOR SHARE and commits only while it is still current, the message,
-// its parts, the files that may be kept, and the raw MIME when it and every part scanned clean. Only after a page's
-// messages are committed is its nextLink or deltaLink stored, so a crash re-reads the page and skips what is stored
-// (unique on source and Graph immutable ID). Nothing here decides about tickets: stage two does (process.ts).
+// Stage one of intake (plan 2.3): delta queries on the current source's folders. For each new message: fetch its raw
+// MIME within files.maxBytes, parse it, sanitize its HTML, scan the raw message and each part, then store, in one
+// transaction that holds the source FOR SHARE and commits only while it is still current, the message, its parts, the
+// files that may be kept, and the raw MIME when it and every part scanned clean. Only after a page's messages are
+// committed is its nextLink or deltaLink stored, so a crash re-reads the page and skips what is stored (unique on
+// source and Graph immutable ID). Nothing here decides about tickets: stage two does (process.ts).
 
 import type { Db } from "@maane/server/db/client"
 import { intakeCursor, intakeSource, message, messagePart } from "@maane/server/db/schema"
@@ -172,7 +172,7 @@ export class IntakeSync {
       }
       summary.pages++
       for (const item of result.items) {
-        // A vanished item (P5): never stored, nothing to do; already stored, Maane keeps what it stored.
+        // A vanished item: never stored, nothing to do; already stored, Maane keeps what it stored.
         if (item["@removed"]) {
           summary.removed++
           continue
@@ -187,7 +187,7 @@ export class IntakeSync {
       await hooks.afterMessages?.(folder, page)
       const next = result.nextLink ?? result.deltaLink
       if (!next) throw new Error("Graph answered a delta page without a nextLink or a deltaLink")
-      await this.#saveCursor(source.id, folder, next, result.nextLink ? "next" : "delta")
+      await this.#saveCursor(source.id, folder, next)
       if (!result.nextLink) return
       link = next
     }
@@ -202,15 +202,15 @@ export class IntakeSync {
     return rows.length > 0
   }
 
-  async #saveCursor(sourceId: string, folder: GraphFolder, link: string, kind: "next" | "delta"): Promise<void> {
+  async #saveCursor(sourceId: string, folder: GraphFolder, link: string): Promise<void> {
     await this.#db.transaction(async (tx) => {
       if (!(await holdSourceIfCurrent(tx, sourceId))) throw new SourceChangedError()
       await tx
         .insert(intakeCursor)
-        .values({ sourceId, folder, link, kind })
+        .values({ sourceId, folder, link })
         .onConflictDoUpdate({
           target: [intakeCursor.sourceId, intakeCursor.folder],
-          set: { link, kind, updatedAt: this.#now() },
+          set: { link, updatedAt: this.#now() },
         })
     })
   }
@@ -223,7 +223,7 @@ export class IntakeSync {
     try {
       fetched = await this.#graph.mime(config, source.mailbox, item.id, limit)
     } catch (error) {
-      // A 404 is final (P5): the item is recorded with its Graph metadata, and the cursor moves on.
+      // A 404 is final: the item is recorded with its Graph metadata, and the cursor moves on.
       if (graphStatus(error) === 404) return this.#storeRecord(source, folder, item, meta, "unavailable", null)
       throw error
     }
@@ -234,7 +234,7 @@ export class IntakeSync {
     } catch {
       return this.#storeRecord(source, folder, item, meta, "unparsed", fetched.bytes.byteLength)
     }
-    // The text fields are scanned like files before anything is stored (review G1).
+    // The text fields are scanned like files before anything is stored.
     const content = contentOf(parsed, meta)
     const fields = await scanFields(this.#files, fieldTexts(content))
     const raw = await this.#files.scan(fetched.bytes, null)

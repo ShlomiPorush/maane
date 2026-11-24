@@ -227,7 +227,6 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
       return json(res, 200, { token_type: "Bearer", expires_in: 3599, ext_expires_in: 3599, access_token: access })
     }
 
-    // Graph.
     const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1]
     if (!bearer || !tokens.has(bearer))
       return graphError(res, 401, "InvalidAuthenticationToken", "Access token is empty or invalid.")

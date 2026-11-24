@@ -41,7 +41,6 @@ async function chooseLanguage(page: Page, language: "he" | "en") {
   await expect(page.locator("html")).toHaveAttribute("lang", language)
 }
 
-/** Opens a ticket of the list by its subject; returns its number. */
 async function openTicket(page: Page, subject: string): Promise<number> {
   await page.goto("/")
   const row = page.locator("a.ui-ticket-row").filter({ hasText: subject }).first()

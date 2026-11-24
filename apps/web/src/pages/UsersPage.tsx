@@ -164,7 +164,6 @@ function UserRow({
   const role = (user.role ?? "agent") as Role
   const otherRole: Role = role === "admin" ? "agent" : "admin"
 
-  /** Asks first, runs the admin route, says what happened, and reads the list again. */
   const act = async (
     question: { title: string; message: string; confirmText: string; danger?: boolean },
     run: () => Promise<unknown>,

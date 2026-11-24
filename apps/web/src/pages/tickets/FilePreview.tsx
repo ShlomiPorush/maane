@@ -120,7 +120,6 @@ function PdfPreview({ id }: { id: string }) {
     const draw = async (document: Pdf) => {
       const pdfPage = await document.getPage(page)
       if (gone) return false
-      // Fit the page to the dialog's width, drawn at the screen's pixel density.
       const width = Math.max(240, target.parentElement?.clientWidth ?? 800)
       const base = pdfPage.getViewport({ scale: 1 })
       const scale = Math.min(2, width / base.width)

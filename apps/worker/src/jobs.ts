@@ -80,7 +80,7 @@ export interface IntakeJobs {
   retry: WaitingFiles
 }
 
-/** The Graph connection test (P12): the saved settings, the Inbox folder's metadata, nothing else. */
+/** The Graph connection test: the saved settings, the Inbox folder's metadata, nothing else. */
 export async function graphTest(settings: Settings, graph: GraphGateway): Promise<GraphTestResult> {
   const config = await graphConfig(settings)
   if (!config)
@@ -96,14 +96,8 @@ export async function graphTest(settings: Settings, graph: GraphGateway): Promis
 }
 
 /**
- * The jobs this worker runs: the heartbeat, a scheduled job that proves the queue picks up and finishes work; the
- * scanner self-test (queued once at start, every hour, when the address changes, and for a connection test; its output
- * is the result the Settings page polls for); the daily sweep of unreferenced stored files; and Graph intake (plan
- * 2.3): the connection test, stage one every minute, stage two after each sync, every minute, and once at start, and the
- * retry of waiting files every five minutes; sending (plan 3.1) and the activity poll of delivery statuses every ten
- * minutes (plan 3.3); timed actions (scheduled replies and reminders, plans 4.2 and 4.3) and the end of a snooze,
- * each at its time, and every five minutes again for what is still waiting past its time. Later phases add
- * notifications here.
+ * The heartbeat is a scheduled job that proves the queue picks up and finishes work. The scanner self-test's output is
+ * the result the Settings page polls for.
  */
 export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Promise<void> {
   const heartbeatFile = options.heartbeatFile ?? HEARTBEAT_FILE
@@ -143,7 +137,8 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
       if ((PROVIDERS as readonly unknown[]).includes(provider))
         return smtpTest(send.settings, provider as Provider, send.timeouts)
     })
-    // Timed actions and snoozes (plan 4.2): each job carries the version it was queued for; an older one does nothing.
+    // Timed actions and snoozes (plan 4.2): an action's job carries the version it was queued for, and an older one
+    // does nothing; a snooze's job ends the ticket's snooze only once its time has come.
     const actions = new TimedActions({
       db: send.db,
       settings: send.settings,
@@ -156,10 +151,9 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
       if (typeof actionId === "string" && Number.isSafeInteger(version))
         return { result: await timedActionJob(actions, actionId, version as number) }
     })
-    await boss.work<{ ticketId?: unknown; version?: unknown }>(SNOOZE_END, async ([job]) => {
-      const { ticketId, version } = job?.data ?? {}
-      if (typeof ticketId === "string" && Number.isSafeInteger(version))
-        return { ended: await snoozeEnded(send.db, ticketId, version as number) }
+    await boss.work<{ ticketId?: unknown }>(SNOOZE_END, async ([job]) => {
+      const ticketId = job?.data.ticketId
+      if (typeof ticketId === "string") return { ended: await snoozeEnded(send.db, ticketId) }
     })
     // What a failed or lost job left waiting past its time is queued again (pg-boss's documented schedule).
     await boss.createQueue(TIMED_RECOVER, { policy: "exclusive", expireInSeconds: 5 * 60 })
@@ -228,6 +222,6 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
   await boss.work(INTAKE_FILES_RETRY, async () =>
     runExclusive(intake.pool, INTAKE_FILES_RETRY, () => intake.retry.run()),
   )
-  // Processing at start (P19): what stage one stored is processed even while Graph cannot be reached.
+  // Processing at start: what stage one stored is processed even while Graph cannot be reached.
   await boss.send(INTAKE_PROCESS, {})
 }

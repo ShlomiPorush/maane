@@ -5,11 +5,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export REPO_ROOT
 
 TOOLCHAIN_IMAGE="maane-toolchain:local"
-POSTGRES_IMAGE="postgres:18.6-bookworm"
-export POSTGRES_IMAGE
-# Keep its version equal to @playwright/test in e2e/package.json: scripts/verify.sh refuses a mismatch.
-PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:v1.65.1-noble"
-export PLAYWRIGHT_IMAGE
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/maane"
 
 die() {
@@ -55,7 +50,6 @@ random_hex() {
   od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
 }
 
-# Installs dependencies from the lockfile.
 install_deps() {
   in_toolchain "pnpm install --frozen-lockfile --reporter=append-only"
 }
@@ -204,23 +198,17 @@ VAPID_ENV_NAMES=(MAANE_VAPID_PUBLIC_KEY MAANE_VAPID_PRIVATE_KEY)
 # or another separator after the name. The name must end there, so MAANE_VAPID_PUBLIC_KEY_OLD and comments do not count.
 VAPID_LINE='^[[:space:]]*(export[[:space:]]+)?MAANE_VAPID_(PUBLIC|PRIVATE)_KEY([^][A-Za-z0-9_.-]|$)'
 
-# Prints a new pair as the two lines app.env takes, from the given image, without network or privileges. Returns 3
-# when the image has no generator (a pull request from before phase 4, which reads no VAPID keys).
+# Prints a new pair as the two lines app.env takes, from the given image, without network or privileges.
 vapid_generator() {
-  local image="$1" rc=0
-  docker run --rm --network none --entrypoint test "$image" -f dist/worker/vapid-keys.js || rc=$?
-  # test answers 1 when the file is missing; any other failure is Docker's own and stays a failure.
-  if [ "$rc" = 1 ]; then return 3; fi
-  [ "$rc" = 0 ] || return "$rc"
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-    --entrypoint node "$image" dist/worker/vapid-keys.js
+    --entrypoint node "$1" dist/worker/vapid-keys.js
 }
 
 # Appends a VAPID pair to DIR/app.env when it holds none. Both keys there: nothing changes. One of them, an empty one,
 # or one in another form Compose reads (VAPID_LINE): refused, because a new pair would replace the one the devices
 # subscribed with. The output is never printed.
 ensure_vapid_keys() {
-  local dir="$1" image="$2" file lock keys rc shape separator
+  local dir="$1" image="$2" file lock keys shape separator
   file="$dir/app.env"
   require_linux_dir "$dir"
   require_outside_repo "$dir"
@@ -235,17 +223,7 @@ ensure_vapid_keys() {
   if grep -qE "$VAPID_LINE" "$file"; then
     die "$file already sets a VAPID key, but not both as plain NAME=value lines. Fix it by hand; a new pair would disconnect every device's notifications"
   fi
-  if keys="$(vapid_generator "$image")"; then
-    rc=0
-  else
-    rc=$?
-  fi
-  if [ "$rc" = 3 ]; then
-    info "$image has no VAPID key generator; app.env is left as it is"
-    exec {lock}>&-
-    return 0
-  fi
-  [ "$rc" = 0 ] || die "the VAPID key generator in $image failed; $file is unchanged"
+  keys="$(vapid_generator "$image")" || die "the VAPID key generator in $image failed; $file is unchanged"
   # The generator's two lines exactly: a 65-byte public key and a 32-byte private key, base64url without padding.
   shape=$'^MAANE_VAPID_PUBLIC_KEY=[A-Za-z0-9_-]{87}\nMAANE_VAPID_PRIVATE_KEY=[A-Za-z0-9_-]{43}$'
   [[ "$keys" =~ $shape ]] ||
@@ -325,7 +303,6 @@ save_clamav_cache() {
   exec {lock}>&-
 }
 
-# --- Development stack ---
 DEV_PROJECT="maane-dev"
 DEV_COMPOSE_FILE="$REPO_ROOT/docker-compose-dev.yml"
 DEV_DEFAULT_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/maane-dev"

@@ -1,4 +1,4 @@
-// Automated mail (plan 2.3, P11; requirements 2.2), per RFC 3834 (automatic responses), RFC 3464 (delivery status
+// Automated mail (plan 2.3; requirements 2.2), per RFC 3834 (automatic responses), RFC 3464 (delivery status
 // notifications), RFC 8098 (disposition notifications), RFC 2919 and RFC 2369 (mailing lists). Automated mail never
 // opens, joins, or reopens a ticket. `X-Auto-Response-Suppress` asks others not to answer; it says nothing about the
 // message that carries it, so it is never a sign. A From of MAILER-DAEMON or postmaster without any sign opens a ticket

@@ -5,11 +5,11 @@ import { SHA256_HEX, SHARDS, shardOf, storedFilePath } from "@maane/server/files
 import { sql } from "drizzle-orm"
 import type { Tx } from "./types.ts"
 
-// The content-addressed store on disk (plan 2.2, P14, P20): <dir>/<first two hex>/<sha256>. Only the worker writes
-// it, always inside the transaction that inserts the file's row, after it took the transaction-scoped advisory lock on
-// the hash (lockStoredFile). Node's fs: a file is written under a temporary name in its shard, synced, and renamed into
-// place, then the shard directory is synced, all before the row is inserted and the transaction commits. No directory
-// is created at write time; prepare() creates them at worker start.
+// The content-addressed store on disk (plan 2.2): <dir>/<first two hex>/<sha256>. Only the worker writes it, always
+// inside the transaction that inserts the file's row, after it took the transaction-scoped advisory lock on the hash
+// (lockStoredFile). Node's fs: a file is written under a temporary name in its shard, synced, and renamed into place,
+// then the shard directory is synced, all before the row is inserted and the transaction commits. No directory is
+// created at write time; prepare() creates them at worker start.
 
 /** Holds, until the transaction ends, the lock every writer and the sweep take on one hash before they touch it. */
 export async function lockStoredFile(tx: Pick<Tx, "execute">, sha256: string): Promise<void> {
@@ -28,11 +28,6 @@ async function syncDir(path: string): Promise<void> {
   } finally {
     await handle.close()
   }
-}
-
-/** Test seams: a step that runs right after the file is published and synced, before the row is written. */
-export interface WriteHooks {
-  afterPublish?: () => Promise<void>
 }
 
 export class FileStore {
@@ -58,7 +53,6 @@ export class FileStore {
     await syncDir(dirname(this.dir))
   }
 
-  /** Whether the file of this hash is on disk with the expected size. */
   async has(sha256: string, size: number): Promise<boolean> {
     const info = await stat(this.path(sha256)).catch(() => null)
     return info?.isFile() === true && info.size === size
@@ -70,7 +64,7 @@ export class FileStore {
    * sync the shard. A failure before the rename leaves no file; one after it leaves a file no row references, which
    * the sweep removes.
    */
-  async write(sha256: string, bytes: Uint8Array, hooks: WriteHooks = {}): Promise<void> {
+  async write(sha256: string, bytes: Uint8Array): Promise<void> {
     const shard = join(this.dir, shardOf(sha256))
     const temp = join(shard, `.${sha256}.${randomBytes(8).toString("hex")}.tmp`)
     try {
@@ -88,7 +82,6 @@ export class FileStore {
       throw error
     }
     await syncDir(shard)
-    await hooks.afterPublish?.()
   }
 
   /** The names in each shard: stored files and writers' temporary files, with their modification times. */

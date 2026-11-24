@@ -6,8 +6,8 @@
 // the ticket's organization's, the author still allowed on it). A failed check ends the action without
 // sending, with its reason. Otherwise the reply is written from the version the server built, with its outbox row
 // (at most one per action and version) and its `send-reply` job, and the action becomes `handed`; the send point checks
-// it once more in the transaction that takes the row to `sending`. A rerun after a crash finds the action `handed` (or
-// the version's outbox row) and makes no second message. The message gets a submission ID of its own on each run: the
+// it once more in the transaction that takes the row to `sending`. A rerun after a crash finds the action no longer
+// `scheduled` and makes no second message. The message gets a submission ID of its own on each run: the
 // composer's belongs to the scheduling, and a later version must never meet an earlier version's message.
 //
 // "Send and set pending" is not applied here: the send point's claim applies it, in the transaction that hands the
@@ -29,7 +29,7 @@ import { errorFacts, log } from "@maane/server/log"
 import { reminderProblem } from "@maane/server/reminders/checks"
 import { reminderMessage } from "@maane/server/reminders/mail"
 import { sendProblem } from "@maane/server/replies/checks"
-import { ActionWritten, type ReplyFile, writeMessage } from "@maane/server/replies/write"
+import { type ReplyFile, writeMessage } from "@maane/server/replies/write"
 import type { Settings } from "@maane/server/settings/service"
 import { customerWroteSince } from "@maane/server/tickets/customer-reply"
 import { type LockedTicket, lockTicket } from "@maane/server/tickets/status"
@@ -59,85 +59,77 @@ export class TimedActions {
     this.#queue = options.queue
   }
 
-  /** Runs the action's version that the job was queued for. */
   async run(actionId: string, version: number): Promise<TimedResult> {
     const locale = (await this.#settings.get("general.defaultLocale")) as Locale
-    try {
-      return await transactionWithJobs(this.#db, async (tx, jobs) => {
-        const ticketId = await ticketOfAction(tx, actionId)
-        const locked = ticketId ? await lockTicket(tx, ticketId) : null
-        const action = locked ? await lockAction(tx, actionId) : null
-        if (!locked || !action || action.state !== "scheduled" || action.version !== version) return "stale"
-        if (action.kind === "reminder") return this.#reminder(tx, jobs, locked, actionId, version, locale)
-        const [reply] = await tx.select().from(scheduledReply).where(eq(scheduledReply.actionId, actionId))
-        if (!reply || !action.authorUserId) return "stale"
-        const problem = (await customerWroteSince(tx, locked.id, actionId))
-          ? "customer_reply"
-          : await sendProblem(tx, {
-              from: reply.fromAddress,
-              organizationId: locked.organizationId,
-              authorUserId: action.authorUserId,
-            })
-        if (problem) {
-          await setActionState(tx, actionId, "ended", problem)
-          log.info("a scheduled reply ended at its time without sending", { actionId, reason: problem })
-          return problem
-        }
-        const at = new Date()
-        const files = reply.files as ReplyFile[]
-        const messageId = await writeMessage(
-          tx,
-          {
-            ticketId: locked.id,
-            authorUserId: action.authorUserId,
-            // Its own on each run: the outbox row's unique (action, version) keeps a rerun from writing twice.
-            submissionId: randomUUID(),
-            at,
-            ready: {
-              kind: "reply",
-              from: reply.fromAddress,
-              to: reply.toAddresses as MailAddress[],
-              cc: reply.ccAddresses as MailAddress[],
-              html: reply.htmlBody,
-              text: reply.textBody,
-              files,
-              built: {
-                mime: reply.mime,
-                messageId: reply.messageIdHeader,
-                subject: reply.subject,
-                inReplyTo: reply.inReplyTo,
-                references: reply.references,
-              },
-              links: reply.links as Parameters<typeof writeMessage>[1]["ready"]["links"],
-            },
-            action: { id: actionId, version },
-          },
-          (data) => this.#queue(jobs, SEND_REPLY, data),
-        )
-        if (!messageId) return "stale"
-        await tx.update(ticket).set({ lastActivityAt: at }).where(eq(ticket.id, locked.id))
-        await setActionState(tx, actionId, "handed")
-        await writeAudit(tx, SYSTEM, {
-          action: "message.reply",
-          entityType: "message",
-          entityId: messageId,
-          details: {
-            ticket: locked.number,
+    return transactionWithJobs(this.#db, async (tx, jobs) => {
+      const ticketId = await ticketOfAction(tx, actionId)
+      const locked = ticketId ? await lockTicket(tx, ticketId) : null
+      const action = locked ? await lockAction(tx, actionId) : null
+      if (!locked || !action || action.state !== "scheduled" || action.version !== version) return "stale"
+      if (action.kind === "reminder") return this.#reminder(tx, jobs, locked, actionId, version, locale)
+      const [reply] = await tx.select().from(scheduledReply).where(eq(scheduledReply.actionId, actionId))
+      if (!reply || !action.authorUserId) return "stale"
+      const problem = (await customerWroteSince(tx, locked.id, actionId))
+        ? "customer_reply"
+        : await sendProblem(tx, {
             from: reply.fromAddress,
-            recipients: [...(reply.toAddresses as MailAddress[]), ...(reply.ccAddresses as MailAddress[])].map(
-              (entry) => entry.address,
-            ),
-            files: files.length,
-            scheduled: actionId,
+            organizationId: locked.organizationId,
+            authorUserId: action.authorUserId,
+          })
+      if (problem) {
+        await setActionState(tx, actionId, "ended", problem)
+        log.info("a scheduled reply ended at its time without sending", { actionId, reason: problem })
+        return problem
+      }
+      const at = new Date()
+      const files = reply.files as ReplyFile[]
+      const messageId = await writeMessage(
+        tx,
+        {
+          ticketId: locked.id,
+          authorUserId: action.authorUserId,
+          // Its own on each run, so a later version never meets this version's message.
+          submissionId: randomUUID(),
+          at,
+          ready: {
+            kind: "reply",
+            from: reply.fromAddress,
+            to: reply.toAddresses as MailAddress[],
+            cc: reply.ccAddresses as MailAddress[],
+            html: reply.htmlBody,
+            text: reply.textBody,
+            files,
+            built: {
+              mime: reply.mime,
+              messageId: reply.messageIdHeader,
+              subject: reply.subject,
+              inReplyTo: reply.inReplyTo,
+              references: reply.references,
+            },
+            links: reply.links as Parameters<typeof writeMessage>[1]["ready"]["links"],
           },
-        })
-        return "handed"
+          action: { id: actionId, version },
+        },
+        (data) => this.#queue(jobs, SEND_REPLY, data),
+      )
+      await tx.update(ticket).set({ lastActivityAt: at }).where(eq(ticket.id, locked.id))
+      await setActionState(tx, actionId, "handed")
+      await writeAudit(tx, SYSTEM, {
+        action: "message.reply",
+        entityType: "message",
+        entityId: messageId,
+        details: {
+          ticket: locked.number,
+          from: reply.fromAddress,
+          recipients: [...(reply.toAddresses as MailAddress[]), ...(reply.ccAddresses as MailAddress[])].map(
+            (entry) => entry.address,
+          ),
+          files: files.length,
+          scheduled: actionId,
+        },
       })
-    } catch (error) {
-      // This version made its reply already (a rerun raced it): nothing is written twice.
-      if (error instanceof ActionWritten) return "stale"
-      throw error
-    }
+      return "handed"
+    })
   }
 
   /** A reminder at its time (plan 4.3), in run's transaction with its locks held: checked, built, and written. */
@@ -171,7 +163,7 @@ export class TimedActions {
       {
         ticketId: locked.id,
         authorUserId: null,
-        // Its own on each run: the outbox row's unique (action, version) keeps a rerun from writing twice.
+        // Its own on each run, so a later version never meets this version's message.
         submissionId: randomUUID(),
         at,
         ready,
@@ -179,7 +171,6 @@ export class TimedActions {
       },
       (data) => this.#queue(jobs, SEND_REPLY, data),
     )
-    if (!messageId) return "stale"
     await setActionState(tx, actionId, "handed")
     await writeAudit(tx, SYSTEM, {
       action: "message.reminder",
@@ -207,7 +198,7 @@ export const OVERDUE = "5 minutes"
  * scheduled reply or a reminder) and the
  * `snooze-end` job of every snooze still on, OVERDUE past their time by the database's clock. A job that failed for good,
  * or that the queue no longer holds after a long outage, is made up for; one that still runs meanwhile is harmless, as
- * each names its version. Returns how many it queued.
+ * an action's job names its version and a snooze ends only once. Returns how many it queued.
  */
 export async function requeueOverdue(
   db: Db,
@@ -218,7 +209,7 @@ export async function requeueOverdue(
     .from(timedAction)
     .where(and(eq(timedAction.state, "scheduled"), sql`${timedAction.dueAt} < now() - ${OVERDUE}::interval`))
   const snoozes = await db
-    .select({ ticketId: ticket.id, version: ticket.snoozeVersion })
+    .select({ ticketId: ticket.id })
     .from(ticket)
     .where(sql`${ticket.snoozedUntil} < now() - ${OVERDUE}::interval`)
   for (const data of actions) await send(TIMED_ACTION, data)

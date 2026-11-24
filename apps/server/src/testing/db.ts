@@ -3,16 +3,13 @@ import { fileURLToPath } from "node:url"
 import pg from "pg"
 import { type Database, migrateDatabase, openDatabase } from "../db/client.ts"
 
-export const MIGRATIONS_DIR = fileURLToPath(new URL("../../drizzle", import.meta.url))
+const MIGRATIONS_DIR = fileURLToPath(new URL("../../drizzle", import.meta.url))
 
 /**
  * A new, migrated database for one test file, inside the disposable PostgreSQL that scripts/verify.sh starts
- * (MAANE_TEST_DATABASE_URL, with a password generated for the run). Dropped by `drop()`. A migration test passes a
- * folder that stops at an earlier migration, fills it, and then migrates the rest with `migrateDatabase`.
+ * (MAANE_TEST_DATABASE_URL, with a password generated for the run). Dropped by `drop()`.
  */
-export async function createTestDatabase(
-  migrations = MIGRATIONS_DIR,
-): Promise<Database & { url: string; drop(): Promise<void> }> {
+export async function createTestDatabase(): Promise<Database & { url: string; drop(): Promise<void> }> {
   const base = process.env.MAANE_TEST_DATABASE_URL
   if (!base) throw new Error("MAANE_TEST_DATABASE_URL is not set: integration tests run only from scripts/verify.sh")
   const name = `maane_test_${randomBytes(6).toString("hex")}`
@@ -23,7 +20,7 @@ export async function createTestDatabase(
   const url = new URL(base)
   url.pathname = `/${name}`
   const database = openDatabase(url.toString(), 5)
-  await migrateDatabase(database.db, migrations)
+  await migrateDatabase(database.db, MIGRATIONS_DIR)
   return {
     ...database,
     url: url.toString(),

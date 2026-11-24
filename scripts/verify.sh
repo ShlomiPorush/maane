@@ -103,6 +103,7 @@ run_checks() {
 
 # Integration tests against a disposable PostgreSQL on a private Docker network. Its password is new for every run,
 # kept in an owner-only file in a temporary directory, and passed to containers only through --env-file.
+POSTGRES_IMAGE="postgres:18.6-bookworm"
 VERIFY_DIR=""
 VERIFY_NETWORK=""
 cleanup_integration() {
@@ -318,13 +319,12 @@ fail_stack() {
 # Runs e2e/ in the Playwright image on the stack's network. e2e/global-setup.ts forwards 127.0.0.1:8095, the stack's
 # MAANE_PUBLIC_URL, to the server, so the server's Origin checks see its own address.
 run_e2e() {
-  local pinned
-  pinned="$(sed -nE 's|.*"@playwright/test": "([^"]+)".*|\1|p' "$REPO_ROOT/e2e/package.json")"
-  [ "v$pinned-noble" = "${PLAYWRIGHT_IMAGE##*:}" ] ||
-    die "@playwright/test $pinned does not match $PLAYWRIGHT_IMAGE; keep both on one version"
+  local image
+  image="mcr.microsoft.com/playwright:v$(sed -nE 's|.*"@playwright/test": "([^"]+)".*|\1|p' "$REPO_ROOT/e2e/package.json")-noble"
+  info "End-to-end: the web UI against the stack (Playwright, $image)"
   docker run --rm --ipc=host --network "${STACK_PROJECT}_default" \
     --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" -e E2E_TARGET=server:8080 \
-    -v "$REPO_ROOT:/repo" -w /repo/e2e "$PLAYWRIGHT_IMAGE" \
+    -v "$REPO_ROOT:/repo" -w /repo/e2e "$image" \
     npx --no-install playwright test
 }
 
@@ -354,7 +354,6 @@ run_stack() {
   run_intake_checks
 
   start_sender
-  info "End-to-end: the web UI against the stack (Playwright, $PLAYWRIGHT_IMAGE)"
   run_e2e || fail_stack "end-to-end tests failed"
   info "Sending: what the stand-in SMTP servers received"
   check_sends

@@ -1,19 +1,19 @@
-// Stage two of intake (plan 2.3, P6, P7, P8, P11, P16): processes stored messages, oldest first by Graph's receive
-// time, each in its own transaction, idempotent by the message's state. Maane is live from the first moment (phase 6):
-// every message is processed into tickets. Messages already stored are processed whatever the current source is: they
-// are mail that really arrived. A message waits while one of its text fields waits for the scanner (content.ts), and
-// while a message it refers to is stored but not processed yet (review G15), for at most DEPENDENCY_WAIT_MS. While no
-// default address exists, nothing is processed at all (no message is picked, no attempt counted): every waiting
-// message is processed once, in the usual order, after one exists (apps/server/src/organizations/intake.ts).
+// Stage two of intake (plan 2.3): processes stored messages, oldest first by Graph's receive time, each in its own
+// transaction, idempotent by the message's state. Maane is live from the first moment (phase 6): every message is
+// processed into tickets. Messages already stored are processed whatever the current source is: they are mail that
+// really arrived. A message waits while one of its text fields waits for the scanner (content.ts), and while a message
+// it refers to is stored but not processed yet, for at most DEPENDENCY_WAIT_MS. While no default address exists,
+// nothing is processed at all (no message is picked, no attempt counted): every waiting message is processed once, in
+// the usual order, after one exists (apps/server/src/organizations/intake.ts).
 //
 // For each message: a copy of an earlier one is recorded and changes nothing; automated mail opens, joins, and reopens
 // nothing; otherwise the support address (To, then Cc, then the default) and the threading layers decide between
 // joining a ticket, a new ticket, and a new ticket linked to the ones it matched (plan 4.1: a participant's reply to a
-// closed ticket opens a follow-up linked to it; the closed ticket is not changed). Joining a ticket is a customer reply,
-// which takes effect in apps/server/src/tickets/customer-reply.ts. Lock order: the ticket number lock
+// closed ticket opens a follow-up linked to it; the closed ticket is not changed). Joining a ticket is a customer
+// reply, which takes effect in apps/server/src/tickets/customer-reply.ts. Lock order: the ticket number lock
 // (apps/server/src/tickets/numbers.ts), the message, then the ticket; the sender's participation and the ticket's
-// status are read under the ticket's lock (phase 6), so a rerun of the import that changed the participants just
-// before is never acted on with a stale answer.
+// status are read under the ticket's lock (phase 6), so a rerun of the import that changed the participants just before
+// is never acted on with a stale answer.
 
 import type { Db } from "@maane/server/db/client"
 import {
@@ -47,8 +47,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, ne, notInArray, sql } from "d
 import type { Db as QueueDb } from "pg-boss"
 import { applyDeliveryReport } from "../delivery/reports.ts"
 import type { Tx } from "../files/types.ts"
-import { type AutomatedSign, type Classification, classify } from "./classify.ts"
-import type { StoredContentType } from "./content.ts"
+import type { AutomatedSign, Classification } from "./classify.ts"
 import type { MailAddress } from "./parse.ts"
 import { newReferenceCode, referenceCodesIn, referencedIds, ticketNumbersIn } from "./threading.ts"
 
@@ -62,11 +61,11 @@ export interface ProcessHooks {
 
 /** The most messages one run processes; the next run (every minute) goes on. */
 export const MAX_PER_RUN = 500
-/** Failed runs on one message before it is recorded for review instead of being tried for ever (review G2). */
+/** Failed runs on one message before it is recorded for review instead of being tried for ever. */
 export const MAX_PROCESS_ATTEMPTS = 3
 /**
- * How long a reply may wait, counted from its own storing, for a stored message it refers to that is not processed yet
- * (review G15, G16). Past this it is processed whatever arrived meanwhile, so no sender can delay it longer.
+ * How long a reply may wait, counted from its own storing, for a stored message it refers to that is not processed yet.
+ * Past this it is processed whatever arrived meanwhile, so no sender can delay it longer.
  */
 export const DEPENDENCY_WAIT_MS = 60 * 60_000
 
@@ -256,7 +255,7 @@ export class IntakeProcessor {
         )
     }
 
-    // A copy (P7): the same Message-ID, From, Date, and decoded content as an earlier message. Recorded, nothing else.
+    // A copy: the same Message-ID, From, Date, and decoded content as an earlier message. Recorded, nothing else.
     if (msg.messageIdHeader) {
       const earlier = await tx
         .select({
@@ -294,19 +293,13 @@ export class IntakeProcessor {
       if (earlier.length > 0) flags.add("reused_message_id" satisfies MessageFlag)
     }
 
-    // Classified at stage one from the parsed headers, also when their stored text was dropped (review G13).
-    const classification: Classification =
-      msg.classification !== null
-        ? {
-            automated: msg.classification === "automated",
-            signs: msg.automatedReasons as AutomatedSign[],
-            possiblyAutomated: msg.possiblyAutomated,
-          }
-        : classify({
-            headers: Array.isArray(msg.headers) ? (msg.headers as { key: string; line: string }[]) : [],
-            contentType: (msg.contentType as StoredContentType | null) ?? { value: "text/plain", reportType: null },
-            from: msg.fromAddress,
-          })
+    // Classified at stage one from the parsed headers, also when their stored text was dropped.
+    if (msg.classification === null) throw new Error("a parsed message was stored without its classification")
+    const classification: Classification = {
+      automated: msg.classification === "automated",
+      signs: msg.automatedReasons as AutomatedSign[],
+      possiblyAutomated: msg.possiblyAutomated,
+    }
     const rules = (await tx
       .select({
         kind: supportAddress.kind,
@@ -317,7 +310,7 @@ export class IntakeProcessor {
       .from(supportAddress)) as Rule[]
     const to = addressesOf(msg.toAddresses)
     const cc = addressesOf(msg.ccAddresses)
-    // To, then Cc, against the address table; no match uses the default (P8), which processOne checked exists. The
+    // To, then Cc, against the address table; no match uses the default, which processOne checked exists. The
     // concrete address is kept.
     const resolution = resolveSupportAddress(
       [...to, ...cc].map((entry) => entry.address),
@@ -343,8 +336,8 @@ export class IntakeProcessor {
       automatedReasons: classification.signs,
     }
 
-    // Automated mail never opens, joins, or reopens a ticket (requirements 2.2). A report keeps its original Message-ID;
-    // a delivery report about one of Maane's replies updates its recipients' delivery status (plan 3.3).
+    // Automated mail never opens, joins, or reopens a ticket (requirements 2.2). A report keeps its original
+    // Message-ID; a delivery report about one of Maane's replies updates its recipients' delivery status (plan 3.3).
     if (classification.automated) {
       const report = await applyDeliveryReport(tx, msg)
       return finish(patch, {
@@ -365,7 +358,7 @@ export class IntakeProcessor {
       const participant = sender !== null && (await this.#isParticipant(tx, ticketId, sender))
       if (participant && locked?.status !== "closed") {
         await this.#keepPending(tx, msg, ticketId)
-        // Only the ticket the message joined stops waiting for it (review G3).
+        // Only the ticket the message joined stops waiting for it.
         if (msg.messageIdHeader) await this.#resolvePending(tx, ticketId, msg.messageIdHeader, msg.id)
         const record: RecordFields = { ...base, ticketId, outcome: "joined" }
         // The one place a customer reply takes effect (apps/server/src/tickets/customer-reply.ts).
@@ -410,24 +403,24 @@ export class IntakeProcessor {
     return finish({ ...patch, ticketId: opened }, { ...base, ticketId: opened, outcome, reason: linkReason })
   }
 
-  /** The threading layers, in order (requirements 2.2, P6, P7). */
+  /** The threading layers, in order (requirements 2.2). */
   async #match(tx: Tx, msg: MessageRow): Promise<Match> {
     for (const id of referencedIds(msg.inReplyTo, msg.references)) {
       const byMessage = await this.#ticketsOf(tx, id)
-      // A Message-ID on messages of more than one ticket is ambiguous and matches nothing in this layer (P7).
+      // A Message-ID on messages of more than one ticket is ambiguous and matches nothing in this layer.
       if (byMessage.length > 1) continue
       const tickets = new Set([...byMessage, ...(await this.#waitingFor(tx, id))])
       const [only] = tickets
       if (tickets.size === 1 && only) return { kind: "ticket", ticketId: only, layer: "header" }
     }
-    // A late original: the tickets whose messages referred to it while it was missing (P6).
+    // A late original: the tickets whose messages referred to it while it was missing.
     if (msg.messageIdHeader) {
       const holders = await this.#waitingFor(tx, msg.messageIdHeader)
       const [only] = holders
       if (holders.length === 1 && only) return { kind: "ticket", ticketId: only, layer: "original" }
       if (holders.length > 1) return { kind: "ambiguous", holders, layer: "original" }
     }
-    // The body reference code and the subject number (review G12: the first few, in one query each).
+    // The body reference code and the subject number (the first few, in one query each).
     const codes = referenceCodesIn(msg.textBody)
     if (codes.length) {
       const rows = await tx
@@ -505,7 +498,7 @@ export class IntakeProcessor {
     await tx.insert(ticketParticipant).values({ ticketId, address, name }).onConflictDoNothing()
   }
 
-  /** Each Message-ID the message refers to that no processed message carries waits on the ticket (P6). */
+  /** Each Message-ID the message refers to that no processed message carries waits on the ticket. */
   async #keepPending(tx: Tx, msg: MessageRow, ticketId: string): Promise<void> {
     const ids = referencedIds(msg.inReplyTo, msg.references).filter((id) => id !== msg.messageIdHeader)
     if (ids.length === 0) return

@@ -21,7 +21,6 @@ import { Tag } from "../../ui/tags.tsx"
 import { FormError } from "../auth/parts.tsx"
 import { WhenDialog } from "./When.tsx"
 
-/** Reads the ticket and the lists again after a change. */
 function useRefresh(number: number) {
   const queryClient = useQueryClient()
   return () =>
@@ -85,7 +84,6 @@ export function StatusControl({ view }: { view: TicketView }) {
   )
 }
 
-/** The ticket's categories, and the dialog that changes them. */
 export function CategoriesControl({ view }: { view: TicketView }) {
   const { t } = useI18n()
   const [editing, setEditing] = useState(false)

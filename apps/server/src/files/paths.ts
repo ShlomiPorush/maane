@@ -14,7 +14,6 @@ export function shardOf(sha256: string): string {
   return sha256.slice(0, 2)
 }
 
-/** Where the file with this hash lives. */
 export function storedFilePath(filesDir: string, sha256: string): string {
   return join(filesDir, shardOf(sha256), sha256)
 }

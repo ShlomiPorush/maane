@@ -83,7 +83,6 @@ import {
 import { belongsTo, fromAddresses, supportRules } from "./rules.ts"
 import { type BuiltReply, type ReadyMessage, type ReplyFile, writeMessage } from "./write.ts"
 
-/** The user a request acts for. */
 export type ReplyUser = { id: string; role: string; actor: Actor; ipAddress: string | null }
 
 const Address = z.object({ address: z.string().max(ADDRESS_MAX), name: z.string().max(200).nullable() })
@@ -248,8 +247,8 @@ export class Replies {
     const ready = await this.#prepare(found, user, input, now)
 
     const written = await transactionWithJobs(this.db, async (tx, jobs) => {
-      // The ticket locked first: its status is decided from this row, a move since it was read out of the author's scope
-      // leaves nothing to write to (a note too), and any move since then refuses a reply's From.
+      // The ticket locked first: its status is decided from this row, a move since it was read out of the author's
+      // scope leaves nothing to write to (a note too), and any move since then refuses a reply's From.
       const locked = await lockTicket(tx, t.id)
       if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
       await refuseImported(tx, locked.id)
@@ -264,8 +263,9 @@ export class Replies {
       // The same submission committed meanwhile: nothing more is written, and its message is returned below.
       if (!id) return null
       // "Send and set pending" (plan 4.1): in the reply's own transaction, by the one status rule, never on acceptance.
-      // A plain send and an internal note leave the status as it is. Plan 4.3: a reply ends the ticket's waiting period,
-      // and one that leaves the ticket pending starts a new one, with its reminder, now that it goes to sending.
+      // A plain send and an internal note leave the status as it is. Plan 4.3: a reply ends the ticket's waiting
+      // period, and one that leaves the ticket pending starts a new one, with its reminder, now that it goes to
+      // sending.
       if (isReply) {
         await endWaitingPeriod(tx, t.id, "agent_reply")
         if (input.setPending) {
@@ -398,9 +398,10 @@ export class Replies {
   }
 
   /**
-   * Schedules a reply (plan 4.2): built now as it will go (dated at its time), stored as the action's first version, and
-   * a `timed-action` job queued for that time in the same transaction. Once per submission ID. "Send and set pending"
-   * applies when the reply goes to the send point, not now; it is refused now where this user may not set pending.
+   * Schedules a reply (plan 4.2): built now as it will go (dated at its time), stored as the action's first version,
+   * and a `timed-action` job queued for that time in the same transaction. Once per submission ID. "Send and set
+   * pending" applies when the reply goes to the send point, not now; it is refused now where this user may not set
+   * pending.
    */
   async #schedule(
     scope: OrganizationScope,
@@ -638,10 +639,11 @@ export class Replies {
 
   /**
    * The public history a reply quotes, newest first (requirements 4.1): the ticket's incoming messages and its replies
-   * that at least one recipient accepted (or that an agent made public in Zendesk, plan 5.1), never an internal note; each with its files' names and the images its HTML
-   * embeds. An image is embedded only as the ticket view shows one: a part of the same message that scanned clean, its
-   * stored file clean, with an image type, within the same sizes; prepared (downscaled) with sharp, with a new content
-   * ID in the From address's domain. Every other image of the stored HTML is left out when the email is drawn.
+   * that at least one recipient accepted (or that an agent made public in Zendesk, plan 5.1), never an internal note;
+   * each with its files' names and the images its HTML embeds. An image is embedded only as the ticket view shows one:
+   * a part of the same message that scanned clean, its stored file clean, with an image type, within the same sizes;
+   * prepared (downscaled) with sharp, with a new content ID in the From address's domain. Every other image of the
+   * stored HTML is left out when the email is drawn.
    */
   async #history(
     ticketId: string,
@@ -671,7 +673,7 @@ export class Replies {
           eq(message.ticketId, ticketId),
           eq(message.content, "parsed"),
           isNull(message.duplicateOf),
-          // A comment an agent made public in Zendesk (plan 5.1) was sent by Zendesk: it has no outbox or delivery state.
+          // A comment an agent made public in Zendesk (plan 5.1) was sent by Zendesk: no outbox or delivery state.
           or(
             eq(message.direction, "in"),
             and(eq(message.direction, "out"), or(exists(accepted), isNotNull(message.zendeskKey))),
@@ -822,7 +824,7 @@ export class Replies {
             and(
               inArray(messagePart.id, partIds),
               eq(message.ticketId, ticketId),
-              // An internal note's files never reach a customer (review R1).
+              // An internal note's files never reach a customer.
               inArray(message.direction, ["in", "out"]),
               inArray(messagePart.status, [...STORED_STATUSES]),
             ),
@@ -851,9 +853,9 @@ export class Replies {
   /**
    * A reply of a ticket in the scope, locked, with its outbox row; a refusal otherwise. The outbox row is locked first,
    * then the ticket FOR KEY SHARE (the order the sender's claim takes), and the scope is checked against the ticket as
-   * that lock reads it: a move holds the ticket FOR UPDATE, so a move in progress is waited for and a ticket it took out
-   * of the user's scope is not found (review S8). KEY SHARE, not a stronger lock: Mark as sent updates recipient rows
-   * after this, and the webhook locks a recipient row before the ticket FOR NO KEY UPDATE, which KEY SHARE never blocks.
+   * that lock reads it: a move holds the ticket FOR UPDATE, so a move in progress is waited for and a ticket it took
+   * out of the user's scope is not found. KEY SHARE, not a stronger lock: Mark as sent updates recipient rows after
+   * this, and the webhook locks a recipient row before the ticket FOR NO KEY UPDATE, which KEY SHARE never blocks.
    */
   async #reply(tx: Pick<Db, "select">, scope: OrganizationScope, messageId: string) {
     const [row] = await tx
@@ -922,9 +924,9 @@ export class Replies {
   }
 
   /**
-   * "Mark as sent": the agent decides that one recipient whose fate is unknown received the reply (review R4: an
-   * unknown recipient may also be one the server refused before the connection dropped, which nodemailer does not
-   * report on a failed send, so the agent decides per recipient). The reply's state then follows its recipients.
+   * "Mark as sent": the agent decides that one recipient whose fate is unknown received the reply (an unknown recipient
+   * may also be one the server refused before the connection dropped, which nodemailer does not report on a failed
+   * send, so the agent decides per recipient). The reply's state then follows its recipients.
    */
   async markSent(scope: OrganizationScope, user: ReplyUser, messageId: string, address: string): Promise<void> {
     await this.db.transaction(async (tx) => {

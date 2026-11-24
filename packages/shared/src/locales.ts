@@ -10,7 +10,6 @@ export type Messages = typeof en
 
 export const MESSAGES: Record<Locale, Messages> = { he, en }
 
-/** The writing direction of a locale. */
 export function direction(locale: Locale): "rtl" | "ltr" {
   return locale === "he" ? "rtl" : "ltr"
 }

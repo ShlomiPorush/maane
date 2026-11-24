@@ -24,7 +24,6 @@ import { changeStatus, type LockedTicket, lockTicket } from "./status.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
-/** The user a change acts for. */
 export type WorkflowUser = { id: string; role: string; actor: Actor; ipAddress: string | null }
 
 /** The organizations the user may move a ticket of this organization to: every other one in their scope. */

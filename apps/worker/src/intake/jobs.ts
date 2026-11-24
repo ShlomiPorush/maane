@@ -7,8 +7,8 @@ import { makeSourceCurrent } from "@maane/server/intake/source"
 import type { Settings } from "@maane/server/settings/service"
 
 /**
- * Before any job starts (P18): the tenant and the mailbox in effect, the environment's included (which change only
- * with a restart), make their source current under the same lock a settings change takes.
+ * Before any job starts: the tenant and the mailbox in effect, the environment's included (which change only with a
+ * restart), make their source current under the same lock a settings change takes.
  */
 export async function reconcileIntakeSource(db: Db, settings: Settings): Promise<{ id: string } | null> {
   const tenantId = await settings.get("graph.tenantId")

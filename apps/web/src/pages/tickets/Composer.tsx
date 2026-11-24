@@ -199,10 +199,10 @@ export function Composer({
     setFiles([])
   }
 
-  // A scheduled reply to change comes into the composer; a draft in it is dropped only when the agent agrees. The change
-  // is pinned to the reply and the version its content was loaded from until the agent saves or stops: a newer view
-  // never moves it, and a reply that went out or was cancelled meanwhile gets the server's refusal on save, never a new
-  // reply in its place.
+  // A scheduled reply to change comes into the composer; a draft in it is dropped only when the agent agrees. The
+  // change is pinned to the reply and the version its content was loaded from until the agent saves or stops: a newer
+  // view never moves it, and a reply that went out or was cancelled meanwhile gets the server's refusal on save, never
+  // a new reply in its place.
   const loaded = useRef<{ id: string; version: number } | null>(null)
   // The reply being changed as it was loaded, and its fields as the composer held them then: a change to another
   // scheduled reply asks first when any of them was edited since.
@@ -398,7 +398,7 @@ export function Composer({
     }
   }
 
-  // Files of incoming messages and replies only: an internal note's files never reach a customer (review R1).
+  // Files of incoming messages and replies only: an internal note's files never reach a customer.
   const ticketFiles = view.messages.flatMap((message) =>
     message.direction === "note" ? [] : message.attachments.filter((file) => file.download),
   )

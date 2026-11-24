@@ -1,8 +1,8 @@
-// Parsing a raw message (plan 2.3, P4): mailparser's simpleParser with skipImageLinks, so no inline image becomes a
-// `data:` URL inside the HTML, and skipHtmlToText, so no text is made from the unsanitized HTML. The HTML is sanitized
-// here, before anything is stored; the text is the message's own text part, or, without one, text made from the
-// sanitized HTML. Strings are made well formed when the row is built (text.ts), not here, so the content hash is of
-// what the message decoded to.
+// Parsing a raw message (plan 2.3): mailparser's simpleParser with skipImageLinks, so no inline image becomes a `data:`
+// URL inside the HTML, and skipHtmlToText, so no text is made from the unsanitized HTML. The HTML is sanitized here,
+// before anything is stored; the text is the message's own text part, or, without one, text made from the sanitized
+// HTML. Strings are made well formed when the row is built (text.ts), not here, so the content hash is of what the
+// message decoded to.
 
 import { createHash } from "node:crypto"
 import { type AddressObject, type Attachment, type HeaderValue, simpleParser } from "mailparser"

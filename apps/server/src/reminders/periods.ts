@@ -47,7 +47,7 @@ export async function endWaitingPeriod(
   if (!open || (startedBy && !(open.messageId && startedBy.includes(open.messageId)))) return false
   // The reminder's action first, as the job and the claim lock it before they read the period: locked in every state,
   // so a claim of Send again (its action stays `done`, which nothing below changes) and this ending wait for each other
-  // too (review round 2, M2). After the check above: a bounce on another reply locks nothing here.
+  // too. After the check above: a bounce on another reply locks nothing here.
   const reminders = tx.select({ id: reminder.actionId }).from(reminder).where(eq(reminder.periodId, open.id))
   await tx.select({ id: timedAction.id }).from(timedAction).where(inArray(timedAction.id, reminders)).for("update")
   await tx

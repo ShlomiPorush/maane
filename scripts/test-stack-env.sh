@@ -28,12 +28,11 @@ random_b64url() {
   LC_ALL=C tr -dc 'A-Za-z0-9_-' </dev/urandom | head -c "$1"
 }
 
-# The stand-in generator: GENERATOR=pair (a new pair), none (the image has no generator), fail, or odd (a wrong line).
+# The stand-in generator: GENERATOR=pair (a new pair), fail, or odd (a wrong line).
 GENERATOR=pair
 vapid_generator() {
   case "$GENERATOR" in
     pair) printf 'MAANE_VAPID_PUBLIC_KEY=%s\nMAANE_VAPID_PRIVATE_KEY=%s\n' "$(random_b64url 87)" "$(random_b64url 43)" ;;
-    none) return 3 ;;
     fail) return 1 ;;
     odd) printf 'MAANE_VAPID_PUBLIC_KEY=%s\n' "$(random_b64url 87)" ;;
   esac
@@ -122,18 +121,13 @@ for other in "# MAANE_VAPID_PUBLIC_KEY=" "MAANE_VAPID_PUBLIC_KEY_OLD=$public"; d
   check "one public key next to a comment or another name" [ "$(count "$dir" MAANE_VAPID_PUBLIC_KEY)" = 1 ]
 done
 
-# A generator that fails or prints something else changes nothing; an image without one is left alone.
+# A generator that fails or prints something else changes nothing.
 for GENERATOR in fail odd; do
   dir="$(new_dir)"
   after="$(sha256sum <"$dir/app.env")"
   if run "$dir"; then check "refuses a failed generator ($GENERATOR)" false; else check "refuses ($GENERATOR)" true; fi
   check "unchanged after a failed generator ($GENERATOR)" [ "$(sha256sum <"$dir/app.env")" = "$after" ]
 done
-GENERATOR=none
-dir="$(new_dir)"
-after="$(sha256sum <"$dir/app.env")"
-check "an image without a generator is not an error" run "$dir"
-check "an image without a generator changes nothing" [ "$(sha256sum <"$dir/app.env")" = "$after" ]
 GENERATOR=pair
 
 # An app.env that is not owner-only, or not there, is refused.

@@ -1,7 +1,7 @@
 // The workflow of plans 4.1 and 4.2, mounted under /api/v1 behind its session, two-factor, CSRF, and Origin checks: a
 // ticket's status, categories, organization, and snooze (any user, within their scope, read on each request; a ticket
-// outside it answers 404), and the categories themselves at /admin/categories (admins only). A refusal answers {error: code, ...details}
-// with a stable code (apps/web/src/api/errors.ts explains each one).
+// outside it answers 404), and the categories themselves at /admin/categories (admins only). A refusal answers
+// {error: code, ...details} with a stable code (apps/web/src/api/errors.ts explains each one).
 
 import { TICKET_STATUSES } from "@maane/shared"
 import { type Context, Hono } from "hono"
@@ -24,20 +24,6 @@ const MoveBody = z.object({ organizationId: z.string().regex(UUID) })
 const NameBody = z.object({ name: z.string() })
 /** A snooze's end, as an instant with its offset (the UI enters it in Israel time). */
 const SnoozeBody = z.object({ until: z.iso.datetime({ offset: true }) })
-
-type Handler = (c: Context<ApiEnv>) => Promise<Response>
-
-/** Runs a handler and answers a refusal with its code; anything else goes to the app's error handler. */
-const refusals =
-  (handler: Handler): Handler =>
-  async (c) => {
-    try {
-      return await handler(c)
-    } catch (error) {
-      if (error instanceof Refusal) return c.json({ error: error.code, ...error.details }, error.status)
-      throw error
-    }
-  }
 
 async function body<T>(c: Context<ApiEnv>, schema: z.ZodType<T>): Promise<T> {
   const parsed = schema.safeParse(await c.req.json().catch(() => null))
@@ -66,99 +52,63 @@ export function workflowRoutes(db: Db, jobs: JobQueue): Hono<ApiEnv> {
     ipAddress: clientIp(c.req.raw),
   })
   const acting = (c: Context<ApiEnv>) => ({ actor: c.get("actor"), ipAddress: clientIp(c.req.raw) })
-  const adminOnly = (c: Context<ApiEnv>) => {
-    if (c.get("user").role !== "admin") throw new Refusal("forbidden", 403)
-  }
   const categoryId = (c: Context<ApiEnv>) => {
     const id = c.req.param("id") ?? ""
     if (!UUID.test(id)) throw new Refusal("category_not_found", 404)
     return id
   }
 
-  routes.put(
-    "/tickets/:number/status",
-    refusals(async (c) => {
-      const number = numberOf(c)
-      const { status } = await body(c, StatusBody)
-      await workflow.setStatus(await scopeOf(c), userOf(c), number, status)
-      return c.json({ ok: true })
-    }),
-  )
+  routes.put("/tickets/:number/status", async (c) => {
+    const number = numberOf(c)
+    const { status } = await body(c, StatusBody)
+    await workflow.setStatus(await scopeOf(c), userOf(c), number, status)
+    return c.json({ ok: true })
+  })
 
-  routes.put(
-    "/tickets/:number/categories",
-    refusals(async (c) => {
-      const number = numberOf(c)
-      const { categories: ids } = await body(c, CategoriesBody)
-      await workflow.setCategories(await scopeOf(c), userOf(c), number, ids)
-      return c.json({ ok: true })
-    }),
-  )
+  routes.put("/tickets/:number/categories", async (c) => {
+    const number = numberOf(c)
+    const { categories: ids } = await body(c, CategoriesBody)
+    await workflow.setCategories(await scopeOf(c), userOf(c), number, ids)
+    return c.json({ ok: true })
+  })
 
-  routes.put(
-    "/tickets/:number/organization",
-    refusals(async (c) => {
-      const number = numberOf(c)
-      const { organizationId } = await body(c, MoveBody)
-      await workflow.move(await scopeOf(c), userOf(c), number, organizationId)
-      return c.json({ ok: true })
-    }),
-  )
+  routes.put("/tickets/:number/organization", async (c) => {
+    const number = numberOf(c)
+    const { organizationId } = await body(c, MoveBody)
+    await workflow.move(await scopeOf(c), userOf(c), number, organizationId)
+    return c.json({ ok: true })
+  })
 
-  routes.put(
-    "/tickets/:number/snooze",
-    refusals(async (c) => {
-      const number = numberOf(c)
-      const { until } = await body(c, SnoozeBody)
-      await snoozes.snooze(await scopeOf(c), userOf(c), number, new Date(until))
-      return c.json({ ok: true })
-    }),
-  )
+  routes.put("/tickets/:number/snooze", async (c) => {
+    const number = numberOf(c)
+    const { until } = await body(c, SnoozeBody)
+    await snoozes.snooze(await scopeOf(c), userOf(c), number, new Date(until))
+    return c.json({ ok: true })
+  })
 
-  routes.delete(
-    "/tickets/:number/snooze",
-    refusals(async (c) => {
-      await snoozes.wake(await scopeOf(c), userOf(c), numberOf(c))
-      return c.json({ ok: true })
-    }),
-  )
+  routes.delete("/tickets/:number/snooze", async (c) => {
+    await snoozes.wake(await scopeOf(c), userOf(c), numberOf(c))
+    return c.json({ ok: true })
+  })
 
-  routes.get(
-    "/admin/categories",
-    refusals(async (c) => {
-      adminOnly(c)
-      return c.json({ categories: await categories.list() })
-    }),
-  )
+  routes.get("/admin/categories", async (c) => c.json({ categories: await categories.list() }))
 
-  routes.post(
-    "/admin/categories",
-    refusals(async (c) => {
-      adminOnly(c)
-      const { name } = await body(c, NameBody)
-      return c.json({ category: await categories.create(name, acting(c)) }, 201)
-    }),
-  )
+  routes.post("/admin/categories", async (c) => {
+    const { name } = await body(c, NameBody)
+    return c.json({ category: await categories.create(name, acting(c)) }, 201)
+  })
 
-  routes.patch(
-    "/admin/categories/:id",
-    refusals(async (c) => {
-      adminOnly(c)
-      const id = categoryId(c)
-      const { name } = await body(c, NameBody)
-      await categories.rename(id, name, acting(c))
-      return c.json({ ok: true })
-    }),
-  )
+  routes.patch("/admin/categories/:id", async (c) => {
+    const id = categoryId(c)
+    const { name } = await body(c, NameBody)
+    await categories.rename(id, name, acting(c))
+    return c.json({ ok: true })
+  })
 
-  routes.delete(
-    "/admin/categories/:id",
-    refusals(async (c) => {
-      adminOnly(c)
-      await categories.delete(categoryId(c), acting(c))
-      return c.json({ ok: true })
-    }),
-  )
+  routes.delete("/admin/categories/:id", async (c) => {
+    await categories.delete(categoryId(c), acting(c))
+    return c.json({ ok: true })
+  })
 
   return routes
 }

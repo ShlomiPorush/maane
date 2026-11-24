@@ -202,6 +202,83 @@ describe("roles and admin actions", () => {
     expect(row).toMatchObject({ role: "agent", setupAdmin: false })
   })
 
+  it("keeps every admin route of Maane's API from the signed-out, a session without two-factor, and an agent", async () => {
+    const { b: admin } = await firstAdmin()
+    const agent = await newUser(admin, "agent.one", "agent")
+    const created = await admin.call("POST", "/api/auth/admin/create-user", {
+      email: userEmail("admin.two"),
+      password,
+      name: "admin.two",
+      role: "admin",
+      data: { username: "admin.two" },
+    })
+    expect(created.status).toBe(200)
+    const enrolling = browser()
+    expect((await enrolling.passwordSignIn("admin.two", password)).status).toBe(200)
+
+    const id = "00000000-0000-4000-8000-000000000000"
+    const org = `/api/v1/admin/organizations/${id}`
+    const routes: [string, string][] = [
+      ["GET", "/api/v1/settings"],
+      ["PUT", "/api/v1/settings"],
+      ["GET", "/api/v1/settings/scanner"],
+      ["POST", "/api/v1/settings/scanner/test"],
+      ["GET", `/api/v1/settings/scanner/test/${id}`],
+      ["POST", "/api/v1/settings/graph/test"],
+      ["GET", `/api/v1/settings/graph/test/${id}`],
+      ["POST", "/api/v1/settings/smtp/smtp2go/test"],
+      ["GET", `/api/v1/settings/smtp/test/${id}`],
+      ["POST", "/api/v1/settings/smtp2go/webhook"],
+      ["GET", "/api/v1/audit"],
+      ["GET", "/api/v1/intake"],
+      ["PUT", `/api/v1/admin/users/${agent.id}/name`],
+      ["GET", "/api/v1/admin/organizations"],
+      ["POST", "/api/v1/admin/organizations"],
+      ["GET", "/api/v1/admin/organizations/address-check?address=a@example.com"],
+      ["GET", org],
+      ["PATCH", org],
+      ["DELETE", org],
+      ["PUT", `${org}/signature`],
+      ["PUT", `${org}/reminder`],
+      ["POST", `${org}/members`],
+      ["DELETE", `${org}/members/${agent.id}`],
+      ["POST", `${org}/addresses`],
+      ["DELETE", `${org}/addresses/${id}`],
+      ["PUT", `${org}/addresses/${id}/default`],
+      ["GET", "/api/v1/admin/import"],
+      ["GET", "/api/v1/admin/import/run"],
+      ["PUT", "/api/v1/admin/import/mapping"],
+      ["POST", "/api/v1/admin/import/start"],
+      ["POST", "/api/v1/admin/import/finish"],
+      ["POST", "/api/v1/admin/import/cancel"],
+      ["GET", `/api/v1/admin/import/runs/${id}/report`],
+      ["GET", "/api/v1/admin/categories"],
+      ["POST", "/api/v1/admin/categories"],
+      ["PATCH", `/api/v1/admin/categories/${id}`],
+      ["DELETE", `/api/v1/admin/categories/${id}`],
+    ]
+    for (const [method, path] of routes) {
+      const body = method === "GET" || method === "DELETE" ? undefined : {}
+      const what = `${method} ${path}`
+      expect(await browser().call(method, path, body), what).toEqual({ status: 401, json: { error: "unauthorized" } })
+      expect(await enrolling.call(method, path, body), what).toEqual({ status: 403, json: { error: "totp_required" } })
+      expect(await agent.b.call(method, path, body), what).toEqual({ status: 403, json: { error: "forbidden" } })
+    }
+
+    // A refusal keeps the UI's security headers and is never cached, whether the role check or a service refused.
+    for (const [answer, status, json] of [
+      [await agent.b.get("/api/v1/admin/organizations"), 403, { error: "forbidden" }],
+      [await admin.get(org), 404, { error: "organization_not_found" }],
+    ] as const) {
+      expect(answer.status).toBe(status)
+      expect(await answer.json()).toEqual(json)
+      expect(answer.headers.get("content-security-policy")).toContain("frame-ancestors 'none'")
+      expect(answer.headers.get("x-frame-options")).toBe("DENY")
+      expect(answer.headers.get("x-content-type-options")).toBe("nosniff")
+      expect(answer.headers.get("cache-control")).toBe("private, no-store")
+    }
+  })
+
   it("lists users with the fields the Users page reads: username, role, two-factor, ban, and the setup mark", async () => {
     const { b: admin, name } = await firstAdmin()
     await newUser(admin, "agent.list", "agent")

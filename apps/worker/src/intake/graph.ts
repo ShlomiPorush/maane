@@ -82,7 +82,7 @@ export function isExpiredDelta(error: unknown): boolean {
   return error.statusCode === 410 || /^syncState(NotFound|Invalid)$/i.test(error.code ?? "")
 }
 
-/** The status that makes a waiting file `unavailable`: the message, or access to its mailbox, is gone (P5). */
+/** The status that makes a waiting file `unavailable`: the message, or access to its mailbox, is gone. */
 export const isGone = (status: number | null) => status === 401 || status === 403 || status === 404
 
 /** A code fit to show and log: letters, digits, and a few marks, never a message text. */

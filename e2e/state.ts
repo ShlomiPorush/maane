@@ -21,7 +21,6 @@ export function saveState(patch: State): void {
   writeFileSync(STATE_FILE, JSON.stringify({ ...loadState(), ...patch }), { mode: 0o600 })
 }
 
-/** Forgets the state of an earlier run (global setup). */
 export function resetState(): void {
   rmSync(STATE_FILE, { force: true })
 }

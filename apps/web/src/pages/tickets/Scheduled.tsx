@@ -59,7 +59,6 @@ function isLate(entry: Pick<ScheduledReplyView, "state" | "sendAt">, now = Date.
   return entry.state === "scheduled" && now - Date.parse(entry.sendAt) > LATE_MS
 }
 
-/** The words and tone of where a scheduled reply is. */
 function stateOf(entry: ScheduledReplyView): { tone: Tone; key: string } {
   if (isLate(entry)) return { tone: "fail", key: "scheduled.state.late" }
   if (entry.state === "scheduled") return { tone: "info", key: "scheduled.state.scheduled" }

@@ -1,6 +1,7 @@
-// Signing out of this browser from the shell (v3 SV-1, NL-9; n8n-ops shell.tsx UserMenu). Unsaved changes are
-// asked about first; this device's notifications are removed (plan 4.5); Better Auth's signOut ends the session; only once it worked are the changes dropped and the
-// page leaves for sign-in. A failed sign-out says so and keeps every draft and its guard in place.
+// Signing out of this browser from the shell (v3 SV-1, NL-9; n8n-ops shell.tsx UserMenu). Unsaved changes are asked
+// about first; this device's notifications are removed (plan 4.5); Better Auth's signOut ends the session; only once it
+// worked are the changes dropped and the page leaves for sign-in. A failed sign-out says so and keeps every draft and
+// its guard in place.
 
 import { useQueryClient } from "@tanstack/react-query"
 import { useCallback } from "react"

@@ -36,7 +36,7 @@ export interface WorkerOptions {
 
 export async function startWorker(options: WorkerOptions = {}): Promise<{ stop(): Promise<void> }> {
   const config = loadConfig()
-  // The store and its shard directories exist and are synced before any job runs (plan 2.2, P20).
+  // The store and its shard directories exist and are synced before any job runs (plan 2.2).
   const store = new FileStore(config.filesDir)
   await store.prepare()
   const database = openDatabase(config.databaseUrl, 5)
@@ -45,7 +45,7 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
     ...options.overrides,
   })
   const files = new FileService({ db: database.db, settings, scanner: clamdScanner, store })
-  // The intake source of the tenant and mailbox in effect is current before any job runs (plan 2.3, P18).
+  // The intake source of the tenant and mailbox in effect is current before any job runs (plan 2.3).
   await reconcileIntakeSource(database.db, settings)
   // The queue first: intake queues browser notifications through it, in the transaction that stores each message.
   const boss = new PgBoss({ connectionString: config.databaseUrl, schema: "pgboss" })
@@ -64,7 +64,7 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
     retry: new WaitingFiles({ db: database.db, settings, files, graph }),
   }
   // Sending reads the database through a pool of its own whose every statement is bounded, so an attempt cannot hang
-  // on a read between its claim and its send (plan 3.1, review R3).
+  // on a read between its claim and its send (plan 3.1).
   const sending = openDatabase(config.databaseUrl, 2, { statementTimeoutMs: SEND_STATEMENT_TIMEOUT_MS })
   const sendSettings = new Settings(sending.db, createSettingsCipher(config.settingsKeys), {
     ...config.overrides,

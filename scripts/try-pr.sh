@@ -83,12 +83,6 @@ write_compose() {
   fi
 }
 
-# Prints the pull request's head commit as GitHub reports it, or nothing when gh cannot tell.
-gh_head() {
-  command -v gh >/dev/null 2>&1 || return 0
-  (cd "$REPO_ROOT" && gh pr view "$1" --json headRefOid --jq .headRefOid 2>/dev/null) || true
-}
-
 seed() {
   info "Creating the first admin through the setup screen's sign-up, with two-factor on"
   # The seed writes the admin's sign-in to /state/admin.env (0600) and prints none of it.
@@ -101,7 +95,7 @@ seed() {
 }
 
 try_pr() {
-  local pr="$1" dev_port="${MAANE_PORT:-8095}" expected
+  local pr="$1" dev_port="${MAANE_PORT:-8095}"
   [[ "$pr" =~ ^[1-9][0-9]*$ ]] || die "pull request number expected, got: $pr"
   take_lock
   if [ -f "$STATE_FILE" ]; then
@@ -131,12 +125,8 @@ try_pr() {
   git -C "$REPO_ROOT" fetch --quiet origin "+pull/$pr/head:$REF" 9>&- ||
     die "cannot fetch pull request #$pr from origin. Clean up with: scripts/try-pr.sh restore"
   COMMIT="$(git -C "$REPO_ROOT" rev-parse "$REF")"
-  expected="$(gh_head "$pr")"
-  if [ -n "$expected" ] && [ "$expected" != "$COMMIT" ]; then
-    die "GitHub reports head $expected for #$pr, but $COMMIT was fetched; it moved meanwhile. Run restore, then try again."
-  fi
   save_state
-  git -C "$REPO_ROOT" worktree add --quiet --detach "$WORKTREE" "$REF"
+  git -C "$REPO_ROOT" worktree add --quiet --detach "$WORKTREE" "$COMMIT"
 
   info "Building $IMAGE from #$pr (${COMMIT:0:12})"
   docker build -f "$WORKTREE/docker/maane.Dockerfile" --build-arg "VERSION=pr$pr-${COMMIT:0:12}" -t "$IMAGE" "$WORKTREE" ||

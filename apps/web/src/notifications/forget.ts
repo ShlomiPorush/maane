@@ -9,7 +9,7 @@ import { pushDevice } from "./device.ts"
 let registering = 0
 let started = 0
 
-/** Runs a turn-on (subscribe, then save on the server) so that dropForeignSubscription leaves its subscription alone. */
+/** Runs a turn-on (subscribe, then save on the server) so dropForeignSubscription leaves its subscription alone. */
 export async function whileRegistering<T>(work: () => Promise<T>): Promise<T> {
   registering += 1
   started += 1

@@ -1,3 +1,4 @@
+import { createMiddleware } from "hono/factory"
 import type { Actor } from "../audit.ts"
 import type { SecurityHeaders } from "./tickets.ts"
 
@@ -11,6 +12,12 @@ export type ApiEnv = {
     security?: SecurityHeaders
   }
 }
+
+/** Refuses everyone but an admin; runs after the session middleware of /api/v1, which sets the user. */
+export const adminOnly = createMiddleware<ApiEnv>(async (c, next) => {
+  if (c.get("user").role !== "admin") return c.json({ error: "forbidden" }, 403)
+  await next()
+})
 
 /** The client address of a request: the TCP peer, or X-Forwarded-For only behind the trusted proxies (client.ts). */
 export { clientIp } from "./client.ts"

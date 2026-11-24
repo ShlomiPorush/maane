@@ -4,21 +4,24 @@
 // notifies, reopens, reminds, snoozes, schedules, or checks a delivery. One audit row per run, beside the block events
 // of text the scanner refused.
 //
-// Before its first write a run checks, in this order: the window (no admin pressed Finish import) and the chosen Maane
-// user; the archive's state (`state.json`'s run count and coverage) and that no backup holds its lock;
-// the strict offline check of the whole archive; that its origin is the origin of earlier imports; and that the state
-// is still the same, with no lock (a change means a new full check). After each ticket it reads the state again: a
-// backup that ran or started meanwhile stops the run, and the next start is a full pass. A run that stopped otherwise
-// (a crash, the scanner, a ticket the database refused) goes on from the last ticket it committed while the archive
-// still holds its state. An error stops the run where it is, open: it records why (`scanner` or `failed`), and a
-// ticket that caused it gets a `ticket_failed` report row with the kind of error and no text of the error; an error no
-// ticket caused records the stage it stopped in and the kind of error (`failure`), never its text. When its
-// job has used up its retries, the page offers Continue (the same Start) once the cause is fixed.
+// A run never reads the import window: it opens only while the window is open, and Finish import is refused while it
+// is open (apps/server/src/imports/window.ts).
 //
-// Each ticket is one transaction, which first locks the import's row FOR SHARE and checks the window again, then the
-// run's row, then the ticket number lock (apps/server/src/tickets/numbers.ts, before any ticket lock, as intake takes
-// it): it writes the ticket and replaces its imported comments, notes, participants, categories, and fields from the
-// newest version, with its position, counts, and report rows. A ticket counts as imported only once that committed.
+// Before its first write a run checks, in this order: the chosen Maane user; the archive's state (`state.json`'s run
+// count and coverage) and that no backup holds its lock; the strict offline check of the whole archive; that its origin
+// is the origin of earlier imports; and that the state is still the same, with no lock (a change means a new full
+// check). After each ticket it reads the state again: a backup that ran or started meanwhile stops the run, and the
+// next start is a full pass. A run that stopped otherwise (a crash, the scanner, a ticket the database refused) goes on
+// from the last ticket it committed while the archive still holds its state. An error stops the run where it is, open:
+// it records why (`scanner` or `failed`), and a ticket that caused it gets a `ticket_failed` report row with the kind
+// of error and no text of the error; an error no ticket caused records the stage it stopped in and the kind of error
+// (`failure`), never its text. When its job has used up its retries, the page offers Continue (the same Start) once the
+// cause is fixed.
+//
+// Each ticket is one transaction, which first locks the run's row, then the ticket number lock
+// (apps/server/src/tickets/numbers.ts, before any ticket lock, as intake takes it): it writes the ticket and replaces
+// its imported comments, notes, participants, categories, and fields from the newest version, with its position,
+// counts, and report rows. A ticket counts as imported only once that committed.
 // Each imported row keeps its source key (unique), so a run again updates the same rows.
 //
 // Maane is live from the first moment (phase 6), so intake may attach mail to an imported ticket before the import is
@@ -39,8 +42,9 @@
 // archive: a part whose file the archive no longer holds for its comment is deleted.
 //
 // An admin can cancel an open run (`Imports.cancel`, which sets its row to `stopped`/`cancelled`). Every transaction
-// of a run that writes locks the run's row first and goes on only while it is still `running` (`stillRunning`), so a
-// cancel waits for a ticket being written, and once it returned no handler of that run writes again.
+// of a run that writes locks the run's row first and goes on only while it is still `running` (`stillRunning`), and
+// the run's end updates the row only while it is `running`, so a cancel waits for a ticket being written, and once it
+// returned no handler of that run writes again.
 
 import { constants } from "node:fs"
 import { open, realpath } from "node:fs/promises"
@@ -63,7 +67,6 @@ import {
 } from "@maane/server/db/schema"
 import { flagSameMail } from "@maane/server/imports/overlap"
 import type { ImportedMessageSource, ImportedTicketSource } from "@maane/server/imports/source"
-import { importWindow } from "@maane/server/imports/window"
 import { errorFacts, log } from "@maane/server/log"
 import { lockTicketNumbers } from "@maane/server/tickets/numbers"
 import {
@@ -222,7 +225,9 @@ interface Context {
 
 type Report = { reason: ImportReportReason; detail: string | null }
 
-/** Where a run is: the ticket it writes (an error there is that ticket's), or the stage of an error no ticket caused. */
+/**
+ * Where a run is: the ticket it writes (an error there is that ticket's), or the stage of an error no ticket caused.
+ */
 type At = { ticket: number | null; stage: ImportStage }
 
 const DELETED = new Set(["deleted"])
@@ -286,8 +291,6 @@ export class ZendeskImport {
     const runId = run.id
     const reader = new ArchiveReader(this.#dir)
 
-    const window = await importWindow(this.#db)
-    if (!window.open) return this.#finish(runId, "refused", "finished")
     const [config] = await this.#db.select().from(zendeskImport).where(eq(zendeskImport.id, 1))
     if (!config?.agentUserId) return this.#finish(runId, "refused", "no_agent")
 
@@ -385,7 +388,6 @@ export class ZendeskImport {
       await this.#hooks.afterPlan?.(zendeskId)
       const written = await this.#write(reader, runId, zendeskId, record, planned, context)
       at.ticket = null
-      if (written === "closed") return this.#finish(runId, "stopped", "finished")
       if (written === "cancelled") return CANCELLED
       await this.#hooks.afterTicket?.(zendeskId)
       if (!sameMark(mark, await reader.mark())) return this.#finish(runId, "stopped", "archive_changed")
@@ -394,16 +396,14 @@ export class ZendeskImport {
     // The links between imported tickets, once every ticket is in, and the numbers after the highest one.
     at.stage = "links"
     const linked = await this.#db.transaction(async (tx) => {
-      if (!(await importWindow(tx, "share")).open) return "closed"
-      if (!(await stillRunning(tx, runId))) return "cancelled"
+      if (!(await stillRunning(tx, runId))) return false
       await lockTicketNumbers(tx)
       // Set, not added: a retry after a crash between this commit and the end computes the same links again.
       await addCounts(tx, runId, {}, { links: await this.#link(tx) })
       await continueNumbers(tx)
-      return "linked"
+      return true
     })
-    if (linked === "closed") return this.#finish(runId, "stopped", "finished")
-    if (linked === "cancelled") return CANCELLED
+    if (!linked) return CANCELLED
     await this.#hooks.afterLinks?.()
     return this.#finish(runId, "done", null)
   }
@@ -609,10 +609,9 @@ export class ZendeskImport {
   }
 
   /**
-   * One ticket's transaction: the window again under the import's row, the run's row locked and still running, the
-   * ticket number lock, then the ticket and what belongs to it (its files stored under their hashes' locks, after the
-   * ticket's), the run's position, its counts, and its report rows. Returns "closed" when the import was finished, and
-   * "cancelled" when an admin cancelled the run.
+   * One ticket's transaction: the run's row locked and still running, the ticket number lock, then the ticket and what
+   * belongs to it (its files stored under their hashes' locks, after the ticket's), the run's position, its counts,
+   * and its report rows. Returns "cancelled" when an admin cancelled the run.
    */
   async #write(
     reader: ArchiveReader,
@@ -621,9 +620,8 @@ export class ZendeskImport {
     record: ZendeskTicketRecord,
     planned: PlannedTicket | null,
     context: Context,
-  ): Promise<"written" | "skipped" | "closed" | "cancelled"> {
+  ): Promise<"written" | "skipped" | "cancelled"> {
     return this.#db.transaction(async (tx) => {
-      if (!(await importWindow(tx, "share")).open) return "closed"
       if (!(await stillRunning(tx, runId))) return "cancelled"
       await lockTicketNumbers(tx)
       await this.#hooks.inTicket?.(zendeskId)
@@ -818,7 +816,7 @@ export class ZendeskImport {
           .onConflictDoUpdate({ target: message.zendeskKey, set: values })
           .returning({ id: message.id })
         if (!row) throw new Error("the message was not written")
-        // The block event, once per field the scanner refused (plan 2.3's policy, P12).
+        // The block event, once per field the scanner refused (plan 2.3's policy).
         await auditBlockedFields(
           tx,
           row.id,
@@ -827,8 +825,8 @@ export class ZendeskImport {
         )
         if (blocked) reports.push({ reason: "blocked_content", detail: item.key })
         await this.#writeFiles(tx, reader, ticketId, row.id, item.files, headersOk)
-        // A file the manifest marks failed, and one the scanner refused, by its name; by its ID when the scanner blocked
-        // the names (P12).
+        // A file the manifest marks failed, and one the scanner refused, by its name; by its ID when the scanner
+        // blocked the names.
         const fileDetail = (file: { id: string; name: string | null }) => (headersOk ? (file.name ?? file.id) : file.id)
         for (const file of item.failed) fileReports.push({ reason: "file_failed", detail: fileDetail(file) })
         // A file with no ID the import can use has only its name to name it.
@@ -979,27 +977,25 @@ function sameRecorded(run: { archiveRuns: number | null; coveredUntil: Date | nu
 }
 
 /**
- * Locks a run's row and says whether it is still running. Every transaction of a run that writes calls it first (after
- * the import's row), so a cancel, which updates that row, waits for it, and a transaction after a cancel writes
- * nothing.
+ * Locks a run's row and says whether it is still running. Every transaction of a run that writes tickets or counts
+ * calls it first, so a cancel, which updates that row, waits for it, and a transaction after a cancel writes nothing.
  */
 async function stillRunning(tx: Tx, runId: string): Promise<boolean> {
   const [row] = await tx.select({ state: importRun.state }).from(importRun).where(eq(importRun.id, runId)).for("update")
   return row?.state === "running"
 }
 
-/** Adds to a run's counts, and sets the ones in `set`, in the caller's transaction. */
+/**
+ * Adds to a run's counts, and sets the ones in `set`, in the caller's transaction, which holds the run's row
+ * (`stillRunning`).
+ */
 async function addCounts(
   tx: Tx,
   runId: string,
   add: Partial<ImportCounts>,
   set: Partial<ImportCounts> = {},
 ): Promise<void> {
-  const [row] = await tx
-    .select({ counts: importRun.counts })
-    .from(importRun)
-    .where(eq(importRun.id, runId))
-    .for("update")
+  const [row] = await tx.select({ counts: importRun.counts }).from(importRun).where(eq(importRun.id, runId))
   const counts = { ...emptyImportCounts(), ...((row?.counts ?? {}) as Partial<ImportCounts>) }
   for (const [key, value] of Object.entries(add) as [keyof ImportCounts, number][]) counts[key] += value
   Object.assign(counts, set)
@@ -1022,7 +1018,6 @@ async function continueNumbers(tx: Tx): Promise<void> {
     ) as highest) as numbers`)
 }
 
-/** A list in batches of at most `size` items, in order. */
 export function batches<T>(items: T[], size: number): T[][] {
   const out: T[][] = []
   for (let start = 0; start < items.length; start += size) out.push(items.slice(start, start + size))

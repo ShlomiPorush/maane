@@ -7,7 +7,6 @@ export type NavPage = {
   id: "home" | "intake" | "organizations" | "categories" | "import" | "users" | "settings" | "audit"
   to: string
   icon: LucideIcon
-  /** Only for the admin role. */
   admin: boolean
 }
 
@@ -25,12 +24,10 @@ export const NAV: readonly NavPage[] = [
 /** The Account page: outside the navigation, opened from the account menu. */
 export const ACCOUNT_PATH = "/account"
 
-/** The pages a role sees in the navigation. */
 export function navFor(role: string | undefined): readonly NavPage[] {
   return NAV.filter((page) => !page.admin || role === "admin")
 }
 
-/** The navigation item that a path belongs to. */
 export function navPageFor(pathname: string): NavPage | null {
   // A ticket belongs to the ticket list, the home page.
   if (pathname === "/" || pathname.startsWith("/tickets/")) return NAV[0] ?? null

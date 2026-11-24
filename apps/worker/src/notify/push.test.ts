@@ -49,8 +49,7 @@ describe("notificationOf", () => {
     // Joined, but not the customer's mail: not a customer reply (isCustomerReply), so nobody is notified.
     for (const classification of ["automated", null])
       expect(notificationOf(live("joined", classification), "m")).toBeNull()
-    for (const outcome of ["automated", "copy", "no_address", "unreadable"])
-      expect(notificationOf(live(outcome), "m")).toBeNull()
+    for (const outcome of ["automated", "copy", "unreadable"]) expect(notificationOf(live(outcome), "m")).toBeNull()
     expect(notificationOf(live("joined", "customer", null), "m")).toBeNull()
     expect(notificationOf(live("new_ticket", "customer", null), "m")).toBeNull()
   })

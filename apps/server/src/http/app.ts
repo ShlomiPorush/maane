@@ -40,7 +40,7 @@ import { linkRoutes } from "./links.ts"
 import { notificationRoutes } from "./notifications.ts"
 import { organizationRoutes } from "./organizations.ts"
 import { replyRoutes } from "./replies.ts"
-import type { ApiEnv, AppUser } from "./request.ts"
+import { type ApiEnv, adminOnly } from "./request.ts"
 import { ticketRoutes } from "./tickets.ts"
 import { workflowRoutes } from "./workflow.ts"
 
@@ -59,7 +59,9 @@ export interface AppContext {
   onSettingsChanged?: () => Promise<void>
   /** The job queue: the server only queues jobs the worker runs, and reads their state. */
   jobs: JobQueue
-  /** MAANE_TRUSTED_PROXIES: only a request from one of these may name its client in X-Forwarded-For (the link routes). */
+  /**
+   * MAANE_TRUSTED_PROXIES: only a request from one of these may name its client in X-Forwarded-For (the link routes).
+   */
   trustedProxies: string[]
   /** The read-only directory of the GeoLite2 City and ASN files, or null for no location. */
   geoipDir: string | null
@@ -69,10 +71,8 @@ export interface AppContext {
   archiveDir: string
 }
 
-type User = AppUser
 type Env = ApiEnv
 
-/** The output the worker's self-test job returns, read back with its shape checked. */
 const selfTestOutput = z.object({
   address: z.string(),
   ok: z.boolean(),
@@ -81,7 +81,6 @@ const selfTestOutput = z.object({
   checkedAt: z.string(),
 })
 
-/** The output the worker's Graph connection test returns, read back with its shape checked. */
 const graphTestOutput = z.object({
   ok: z.boolean(),
   problem: z.enum(GRAPH_PROBLEMS).nullable(),
@@ -91,7 +90,6 @@ const graphTestOutput = z.object({
   checkedAt: z.string(),
 })
 
-/** The output the worker's SMTP connection test returns, read back with its shape checked. */
 const smtpTestOutput = z.object({
   provider: z.enum(PROVIDERS),
   ok: z.boolean(),
@@ -241,13 +239,8 @@ export function createApp(ctx: AppContext) {
     await next()
   })
 
-  const adminOnly = async (
-    c: { get: (k: "user") => User; json: (b: unknown, s: 403) => Response },
-    next: () => Promise<void>,
-  ) => {
-    if (c.get("user").role !== "admin") return c.json({ error: "forbidden" }, 403)
-    await next()
-  }
+  // Every route under /admin, here or in a router, is for admins: after the checks above, before any route.
+  api.use("/admin/*", adminOnly)
 
   api.get("/me", (c) => c.json(c.get("user")))
 
@@ -264,8 +257,6 @@ export function createApp(ctx: AppContext) {
       if (error instanceof SettingsError) {
         return c.json({ error: error.code, key: error.key }, error.code === "setting_locked" ? 409 : 400)
       }
-      // The intake mode's rule (live needs a default address): its code and the key it refuses.
-      if (error instanceof Refusal) return c.json({ error: error.code, ...error.details }, error.status)
       throw error
     }
     await ctx.onSettingsChanged?.()
@@ -311,8 +302,8 @@ export function createApp(ctx: AppContext) {
     return c.json(view)
   })
 
-  // The Graph connection test (plan 2.3, P12): the worker reads the intake mailbox's Inbox folder metadata with the
-  // saved settings and reports success or Graph's error code. It reads no message and writes nothing.
+  // The Graph connection test (plan 2.3): the worker reads the intake mailbox's Inbox folder metadata with the saved
+  // settings and reports success or Graph's error code. It reads no message and writes nothing.
   api.post("/settings/graph/test", adminOnly, async (c) => {
     const id = await ctx.jobs.send(GRAPH_TEST)
     return c.json({ id }, 202)
@@ -370,7 +361,7 @@ export function createApp(ctx: AppContext) {
 
   // An agent's display name, which every reply's From line carries (plan 3.1). Better Auth's documented server API
   // updates it, with the admin's own session and the name only; its HTTP route /admin/update-user stays closed.
-  api.put("/admin/users/:id/name", adminOnly, async (c) => {
+  api.put("/admin/users/:id/name", async (c) => {
     const userId = c.req.param("id")
     const parsed = AgentName.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success || userId.length === 0 || userId.length > 200) return c.json({ error: "name_invalid" }, 400)
@@ -432,6 +423,7 @@ export function createApp(ctx: AppContext) {
   app.onError((error, c) => {
     // An error answer never keeps a policy its route declared for success.
     c.set("security", undefined)
+    if (error instanceof Refusal) return c.json({ error: error.code, ...error.details }, error.status)
     log.error("request failed", { path: loggedPath(new URL(c.req.url).pathname), ...errorFacts(error) })
     return c.json({ error: "internal" }, 500)
   })

@@ -18,7 +18,6 @@ import type { Settings } from "@maane/server/settings/service"
 import { DELIVERY_POLL_MAX_AGE_DAYS, FINAL_DELIVERY_STATUSES } from "@maane/shared"
 import { and, eq, gte, isNotNull, isNull, min, notInArray, or } from "drizzle-orm"
 
-/** SMTP2GO's API (its documented base URL). */
 export const SMTP2GO_API = "https://api.smtp2go.com/v3"
 /** How far before the cursor each window starts again. */
 export const POLL_OVERLAP_MS = 60 * 60_000

@@ -20,8 +20,8 @@ const CODE_CHAR = `[${REFERENCE_ALPHABET}]`
 const CODE_IN_TEXT = new RegExp(`(?<![A-Za-z0-9-])(${CODE_CHAR}{4}-${CODE_CHAR}{4})(?![A-Za-z0-9-])`, "g")
 
 /**
- * How many reference codes and subject numbers one message may name (review G12): the first ones in the text, where
- * Maane's code sits at the top of a reply, looked up in one query each.
+ * How many reference codes and subject numbers one message may name: the first ones in the text, where Maane's code
+ * sits at the top of a reply, looked up in one query each.
  */
 export const MAX_CANDIDATES = 20
 
@@ -36,7 +36,10 @@ function firstDistinct<T>(text: string, pattern: RegExp, read: (match: RegExpExe
   return [...found]
 }
 
-/** The reference codes in a text, in order, each once, at most MAX_CANDIDATES. Capital letters only, as Maane writes them. */
+/**
+ * The reference codes in a text, in order, each once, at most MAX_CANDIDATES. Capital letters only, as Maane writes
+ * them.
+ */
 export function referenceCodesIn(text: string | null): string[] {
   if (!text) return []
   return firstDistinct(text, CODE_IN_TEXT, (match) => match[1] ?? null)
@@ -51,7 +54,7 @@ export function ticketNumbersIn(subject: string | null): number[] {
   })
 }
 
-/** The most Message-IDs one message may refer to (review G2): every query over them stays small. */
+/** The most Message-IDs one message may refer to: every query over them stays small. */
 export const MAX_REFERENCED = 50
 
 /**

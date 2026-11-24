@@ -474,7 +474,6 @@
     "too_large": "Message too large",
     "invalid_characters": "Invalid characters replaced",
     "reused_message_id": "Message-ID used before",
-    "no_default_address": "No default address",
     "part_too_large": "A file too large to scan",
     "store_failed": "Could not be stored",
     "blocked_content": "Content blocked",
@@ -500,7 +499,6 @@
       "copy": "Copy of an earlier message",
       "automated": "Automated mail",
       "unreadable": "Content not read",
-      "no_address": "No support address",
       "new_ticket": "New ticket",
       "joined": "Joined a ticket",
       "new_linked_ticket": "New linked ticket"
@@ -514,7 +512,6 @@
       "unavailable": "Gone from the mailbox before Maane read it",
       "unparsed": "Maane could not read it",
       "too_large": "Larger than the file size limit",
-      "no_default_address": "No support address matched, and no default address is set",
       "sender_not_participant": "The sender is not a participant of the ticket it matched",
       "ambiguous_original": "A late original that several tickets wait for",
       "auto_submitted": "Auto-Submitted header",
@@ -1440,8 +1437,7 @@
       "agent_reply": "An agent replied again, so it was cancelled.",
       "delivery_failed": "The reply it followed bounced, was rejected, or was reported as spam, so it was cancelled.",
       "no_template": "At its time the organization had no reminder text, so Maane sent nothing.",
-      "no_recipients": "At its time the ticket had no customer to write to, so Maane sent nothing.",
-      "imported": "The waiting period came from the import, so Maane sends no reminder for it."
+      "no_recipients": "At its time the ticket had no customer to write to, so Maane sent nothing."
     },
     "thenPending": "When it goes, the ticket is set to pending.",
     "thenStatus": "When it goes, the status stays as it is.",
@@ -1515,7 +1511,6 @@
         "refused": "Refused"
       },
       "reason": {
-        "finished": "The import is finished, so nothing more can be imported.",
         "went_live": "Maane had gone live, so the import was closed.",
         "not_listening": "Intake was live, so the import was closed.",
         "no_agent": "No user was chosen for Zendesk agents' comments.",

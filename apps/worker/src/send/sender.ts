@@ -189,11 +189,11 @@ export class ReplySender {
       }
       if (row.state !== "pending") return null
       // The ticket's organization, read under a lock a move waits for (FOR KEY SHARE against its FOR UPDATE; the move
-      // is the only writer of the organization), taken after the outbox row as every path that holds both takes them:
-      // a move and this claim serialize, so the checks below and the switch to `sending` see the organization the
-      // ticket has while the reply goes. KEY SHARE, not SHARE (review S7): the webhook locks a recipient row and then
-      // the ticket FOR NO KEY UPDATE to refresh its delivery flag, which KEY SHARE does not block, so a claim waiting
-      // for that recipient row below never holds up the webhook it waits for.
+      // is the only writer of the organization), taken after the outbox row as every path that holds both takes them: a
+      // move and this claim serialize, so the checks below and the switch to `sending` see the organization the ticket
+      // has while the reply goes. KEY SHARE, not SHARE: the webhook locks a recipient row and then the ticket
+      // FOR NO KEY UPDATE to refresh its delivery flag, which KEY SHARE does not block, so a claim waiting for that
+      // recipient row below never holds up the webhook it waits for.
       const [held] = await tx
         .select({ organizationId: ticket.organizationId, status: ticket.status })
         .from(ticket)
@@ -257,7 +257,6 @@ export class ReplySender {
           state: "sending",
           attempt,
           problem: null,
-          attempts: sql`${outbox.attempts} + 1`,
           updatedAt: this.#now(),
         })
         .where(eq(outbox.messageId, messageId))
@@ -281,7 +280,8 @@ export class ReplySender {
    * asked for it, sets the ticket to pending by the one status writer, as its author, and starts a new waiting period
    * with its reminder. The ticket is locked FOR NO KEY UPDATE (it does not conflict with the KEY SHARE this claim and
    * others hold, so two claims of one ticket wait for each other instead of deadlocking) and its status read again
-   * under that lock. A ticket the author may no longer set to pending (closed meanwhile, not an admin) keeps its status.
+   * under that lock. A ticket the author may no longer set to pending (closed meanwhile, not an admin) keeps its
+   * status.
    */
   async #replyGoes(
     tx: Db,

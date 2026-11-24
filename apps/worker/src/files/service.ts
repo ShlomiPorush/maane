@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm"
 import { type DetectedType, detectType } from "./detect.ts"
 import type { Scanner } from "./scanner.ts"
 import { recordSelfTest, runSelfTest, type SelfTestResult } from "./self-test.ts"
-import { type FileStore, lockStoredFile, type WriteHooks } from "./store.ts"
+import { type FileStore, lockStoredFile } from "./store.ts"
 import type { Tx } from "./types.ts"
 
 // The file service the worker calls (plan 2.2): scan bytes, store scanned content under its hash's lock, and sweep
@@ -88,7 +88,6 @@ export class FileService {
     this.#now = options.now ?? (() => new Date())
   }
 
-  /** Where the file of this hash lives in the store. */
   storedPath(sha256: string): string {
     return this.#store.path(sha256)
   }
@@ -161,7 +160,7 @@ export class FileService {
    * row. The file is published and synced before the row is written, so a committed row always has its file. Refuses
    * every other status and content that does not match its scan, before touching the disk.
    */
-  async storeIn(tx: Tx, bytes: Uint8Array, outcome: ScanOutcome, hooks?: WriteHooks) {
+  async storeIn(tx: Tx, bytes: Uint8Array, outcome: ScanOutcome) {
     if (!(STORED_STATUSES as readonly ScanStatus[]).includes(outcome.status))
       throw new Error(`content with status ${outcome.status} is never stored`)
     const status = outcome.status as StoredStatus
@@ -170,7 +169,7 @@ export class FileService {
     await lockStoredFile(tx, outcome.sha256)
     const [existing] = await tx.select().from(storedFile).where(eq(storedFile.sha256, outcome.sha256))
     if (!existing || !(await this.#store.has(outcome.sha256, outcome.size)))
-      await this.#store.write(outcome.sha256, bytes, hooks)
+      await this.#store.write(outcome.sha256, bytes)
     // A scanner's answer replaces an earlier one; "not scanned" never replaces a scanner's answer.
     if (existing && status === "not_scanned" && existing.scanStatus !== "not_scanned") return existing
     const row = {
@@ -190,8 +189,8 @@ export class FileService {
   }
 
   /** storeIn in a transaction of its own. */
-  async store(bytes: Uint8Array, outcome: ScanOutcome, hooks?: WriteHooks) {
-    return this.#db.transaction((tx) => this.storeIn(tx, bytes, outcome, hooks))
+  async store(bytes: Uint8Array, outcome: ScanOutcome) {
+    return this.#db.transaction((tx) => this.storeIn(tx, bytes, outcome))
   }
 
   /**
@@ -245,7 +244,7 @@ export interface BlockedPart {
 }
 
 /**
- * Writes the audit row of a blocked file (plan 2.2, P10) in the caller's transaction: the ticket, the message, the
+ * Writes the audit row of a blocked file (plan 2.2) in the caller's transaction: the ticket, the message, the
  * part, the file name, and the signature or the blocked type, never the content. Only when the part's status becomes
  * blocked: a retry of a part that was already blocked writes nothing. Returns whether it wrote the row.
  */

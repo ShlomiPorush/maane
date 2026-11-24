@@ -15,7 +15,6 @@ import {
 import { AuthCallError, type AuthError } from "./auth.ts"
 import { ApiError } from "./client.ts"
 
-/** Every server code the UI explains, and the locale key that does. */
 export const ERROR_TEXT: Record<string, string> = {
   // Maane's API (/api/v1, /api/setup)
   unauthorized: "errors.code.unauthorized",
@@ -159,7 +158,6 @@ function fromAuth(answer: AuthError): { status: number; code: string } {
   return { status: answer?.status ?? 0, code: (answer?.code ?? "").toUpperCase() }
 }
 
-/** The locale key that explains a failure. */
 export function errorKey(error: unknown): string {
   const { status, code } = failureOf(error)
   if (status === 0 || code === "NETWORK" || code === "network") return STATUS_TEXT.network
@@ -174,7 +172,6 @@ export function errorKey(error: unknown): string {
   return STATUS_TEXT.unexpected
 }
 
-/** The sentence that explains a failure, in the current language. */
 export function errorText(t: (key: string, vars?: Record<string, string | number>) => string, error: unknown): string {
   return t(errorKey(error), ERROR_VARS)
 }

@@ -30,8 +30,6 @@ export type PartStatus = (typeof PART_STATUSES)[number]
  * - `unavailable`, `parse_failed`, `too_large`: stage one kept only the Graph metadata.
  * - `invalid_characters`: a decoded text held U+0000 or an unpaired surrogate, replaced by U+FFFD before storing.
  * - `reused_message_id`: another message has the same Message-ID with other content.
- * - `no_default_address`: no support address matched and no default existed, so it opened no ticket (records from
- *   before phase 6: since then a message waits until a default address exists).
  * - `part_too_large`: a part was over files.maxBytes and was not scanned or kept.
  * - `blocked_content`: a stored text field (the text, the HTML, or the header values) scanned infected or blocked
  *   and was not stored.
@@ -44,7 +42,6 @@ export const MESSAGE_FLAGS = [
   "too_large",
   "invalid_characters",
   "reused_message_id",
-  "no_default_address",
   "part_too_large",
   "store_failed",
   "blocked_content",
@@ -95,21 +92,11 @@ export type LinkReason = (typeof LINK_REASONS)[number]
  *   (its own Message-ID from its own From address, reason `sent_by_maane`); nothing else changes.
  * - `automated`: automated mail; it never opens, joins, or reopens a ticket.
  * - `unreadable`: only Graph metadata was kept (see MESSAGE_CONTENTS).
- * - `no_address`: it needed a new ticket, but no support address matched and no default existed. Since phase 6 no
- *   message is processed while no default address exists (it waits), so only records from before carry it.
  * - `new_ticket`, `joined`: a new ticket, or a ticket it matched and whose participant sent it.
  * - `new_linked_ticket`: a new ticket linked to the ticket or tickets it matched (sender not a participant, or a late
  *   original several tickets wait for).
  */
-export const INTAKE_OUTCOMES = [
-  "copy",
-  "automated",
-  "unreadable",
-  "no_address",
-  "new_ticket",
-  "joined",
-  "new_linked_ticket",
-] as const
+export const INTAKE_OUTCOMES = ["copy", "automated", "unreadable", "new_ticket", "joined", "new_linked_ticket"] as const
 export type IntakeOutcome = (typeof INTAKE_OUTCOMES)[number]
 
 /** The signs of automated mail (RFC 3834, RFC 3464, RFC 8098, RFC 2919, RFC 2369), as the intake record names them. */
@@ -125,8 +112,8 @@ export type AutomatedSign = (typeof AUTOMATED_SIGNS)[number]
 
 /**
  * Every reason an intake record can give (its `reason` column, a comma-separated list for automated mail): why a
- * message is a copy, unreadable, without an address, or linked, and each sign of automated mail. The intake log shows
- * each in words; apps/web/src/guards.test.ts fails on a reason the worker can write that is not listed here.
+ * message is a copy, unreadable, or linked, and each sign of automated mail. The intake log shows each in words;
+ * apps/web/src/guards.test.ts fails on a reason the worker can write that is not listed here.
  */
 export const INTAKE_REASONS = [
   "copy",
@@ -135,7 +122,6 @@ export const INTAKE_REASONS = [
   "unavailable",
   "unparsed",
   "too_large",
-  "no_default_address",
   "sender_not_participant",
   "ambiguous_original",
   "follow_up",
@@ -202,9 +188,9 @@ export interface GraphTestView {
 }
 
 /**
- * The text fields stage one stores and scans like files before it stores them (plan 2.3, review G1): the text body,
- * the sanitized HTML, and the header values Maane keeps (subject, names, every header line, part file names), as one
- * block. A field the scanner flags is not stored; one that cannot be scanned follows the unavailable policy.
+ * The text fields stage one stores and scans like files before it stores them (plan 2.3): the text body, the sanitized
+ * HTML, and the header values Maane keeps (subject, names, every header line, part file names), as one block. A field
+ * the scanner flags is not stored; one that cannot be scanned follows the unavailable policy.
  */
 export const TEXT_FIELDS = ["text", "html", "headers"] as const
 export type TextField = (typeof TEXT_FIELDS)[number]

@@ -1,13 +1,12 @@
-// The intake configuration rule (plan 2.1, P17; phase 6): mail becomes tickets only while a default address exists,
-// and once one exists it can only be replaced, never removed. Every change that could touch the default (setting the
-// default, removing an address) takes one transaction-scoped advisory lock first and then reads the default inside the
-// same transaction. While no default exists, stage two of intake processes nothing (apps/worker/src/intake/process.ts).
+// The intake configuration rule (plan 2.1; phase 6): mail becomes tickets only while a default address exists, and once
+// one exists it can only be replaced, never removed. Every change that could touch the default (setting the default,
+// removing an address) takes one transaction-scoped advisory lock first and then reads the default inside the same
+// transaction. While no default exists, stage two of intake processes nothing (apps/worker/src/intake/process.ts).
 
 import { eq, sql } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
 import { supportAddress } from "../db/schema.ts"
 
-/** A transaction of Maane's connection. */
 export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
 /** The name of the advisory lock; PostgreSQL keys it by the 64-bit hash of this text. */

@@ -14,7 +14,6 @@ type Chrome = { actionsSlot: HTMLElement | null }
 
 export const ChromeContext = createContext<Chrome>({ actionsSlot: null })
 
-/** Whether a media query matches, kept up to date. */
 export function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() => typeof matchMedia === "function" && matchMedia(query).matches)
   useEffect(() => {
