@@ -181,7 +181,6 @@ export function CodeField({
   const input = useRef<HTMLInputElement>(null)
   const sent = useRef("")
 
-  // The field comes back to focus after an answer.
   useEffect(() => {
     if (!busy) input.current?.focus()
   }, [busy])

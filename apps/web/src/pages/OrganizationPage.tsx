@@ -56,7 +56,6 @@ export function OrganizationPage() {
   )
 }
 
-/** Runs a change, says what happened, and reads the organization and the list again. */
 function useChange(id: string, name: string) {
   const { t } = useI18n()
   const queryClient = useQueryClient()

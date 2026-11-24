@@ -459,7 +459,7 @@ function MailFrame({ message }: { message: MessageView }) {
   )
 }
 
-/** An imported file (plan 5.2) the scanner refused was never stored: its original is in the Zendesk archive, not the mailbox. */
+/** A refused imported file (plan 5.2) was never stored: its original is in the Zendesk archive, not the mailbox. */
 const IMPORTED_HINTS = new Set(["infected", "blocked_type"])
 
 function Files({

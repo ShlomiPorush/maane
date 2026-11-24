@@ -22,7 +22,6 @@ export interface PushDevice {
   supported(): boolean
   /** The browser's notification permission: "denied" means the user blocked Maane in the browser's settings. */
   permission(): NotificationPermission
-  /** This browser's subscription, or null. */
   current(): Promise<DeviceSubscription | null>
   /** Asks for the permission when needed and subscribes with Maane's public key. */
   subscribe(publicKey: string): Promise<DeviceSubscription>

@@ -322,7 +322,7 @@ describe("account", () => {
       expect(found).toBeDefined()
       return found as HTMLElement
     })
-    // Not dir="auto" (nor a bdi, which is auto without dir): the browser's name comes first and would turn it left to right.
+    // Not dir="auto" (nor a bdi, auto without dir): the browser's name comes first and would turn it left to right.
     expect(label.tagName).not.toBe("BDI")
     expect(label.closest("[dir]")?.getAttribute("dir")).toBe("rtl")
   })
@@ -2814,7 +2814,7 @@ describe("tickets", () => {
     )
     // The recipients show once, in the sending list, not again in the header.
     expect(card.querySelector(".ui-message-to")).toBeNull()
-    // Mark as sent is per recipient, and only for one whose fate is unknown (review R4).
+    // Mark as sent is per recipient, and only for one whose fate is unknown.
     expect(card.querySelector('[data-mark="ron@example.com"]')).toBeNull()
     await act(async () => card.querySelector<HTMLButtonElement>('[data-mark="dana@example.com"]')?.click())
     await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())

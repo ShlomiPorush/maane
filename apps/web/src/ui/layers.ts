@@ -145,7 +145,6 @@ function releaseEntry(): void {
   })
 }
 
-/** Registers an open layer; returns its removal. */
 export function openLayer(options: LayerOptions): () => void {
   const layer: Layer = { ...options, id: nextId++, opener: document.activeElement }
   stack.push(layer)

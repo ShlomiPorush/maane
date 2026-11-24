@@ -5,13 +5,14 @@
 // (setting_invalid) and an unknown key (setting_unknown); each refusal is explained and points at its field. A
 // refresh never touches a field being edited: the draft holds only what was changed. A field edited again while a
 // save is on its way keeps its new text: a save takes out of the draft only what it sent. Files and scanning (phase
-// 2.2) shows the scanner's latest self-test and a connection test the worker runs: the page queues it and reads its state until it is done (the server never calls the scanner). Microsoft
-// Graph (phase 2.3) holds the tenant, the application, its client secret (write only: the page shows whether one is
-// set, never the value, and an empty field keeps it), and the intake mailbox, and a connection test the worker runs the
-// same way: it reads only the mailbox's Inbox folder details and reports Graph's error code. Sending (phase 3.1) holds
-// SMTP2GO's SMTP server and API key, the failover server, and the bounce address, with a connection test of each
-// server that the worker runs the same way (it connects with TLS and logs in, and sends nothing). Link tracking (phase
-// 3.4) turns tracking on or off and sets the link domain.
+// 2.2) shows the scanner's latest self-test and a connection test the worker runs: the page queues it and reads its
+// state until it is done (the server never calls the scanner). Microsoft Graph (phase 2.3) holds the tenant, the
+// application, its client secret (write only: the page shows whether one is set, never the value, and an empty field
+// keeps it), and the intake mailbox, and a connection test the worker runs the same way: it reads only the mailbox's
+// Inbox folder details and reports Graph's error code. Sending (phase 3.1) holds SMTP2GO's SMTP server and API key, the
+// failover server, and the bounce address, with a connection test of each server that the worker runs the same way (it
+// connects with TLS and logs in, and sends nothing). Link tracking (phase 3.4) turns tracking on or off and sets the
+// link domain.
 
 import {
   BLOCKED_TYPE,
@@ -145,7 +146,6 @@ export function settingText(key: SettingKey, value: unknown): string {
   return String(value ?? "")
 }
 
-/** A loaded value as the field shows it. */
 const shown = (view: SettingView | undefined) => (view ? settingText(view.key, view.value) : "")
 
 /** The value the server takes for a field's text, or null when the text is not a valid value. */
@@ -323,7 +323,6 @@ function Settings() {
 
   /** A value that differs from its default: Changed, and Reset puts the default in the draft (FS-6). */
   const resetOf = (key: SettingKey) => {
-    // A Graph field has no default to go back to: it is empty until the owner sets it.
     if (lockOf(key) || !views.has(key) || NO_DEFAULT.includes(key)) return null
     const fallback = SETTINGS[key].defaultValue
     if (sameValue(key, value(key), fallback)) return null
@@ -399,7 +398,7 @@ function Settings() {
     const sendingRow = (key: SettingKey) => {
       const id = `${sendingIds}-${key}`
       const label = t(labelKey(key))
-      // The whole address is the value, isolated as one: an isolated domain after "bounces@" read out of order in Hebrew.
+      // The whole address is one isolated value: an isolated domain after "bounces@" read out of order in Hebrew.
       const hint = t(`settings.sending.${key}.hint`, { example: "bounces@example.com" })
       if (key === "failover.security")
         return (
@@ -1088,7 +1087,6 @@ export function engineOf(version: string | null): { version: string; signatures:
   return match?.[1] && match[2] ? { version: match[1], signatures: match[2] } : null
 }
 
-/** The label of a setting. */
 export function labelKey(key: SettingKey): string {
   if (key === "general.defaultLocale") return "settings.defaultLocale.label"
   if (key === "scanner.address") return "settings.scannerAddress.label"
