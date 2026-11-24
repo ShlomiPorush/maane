@@ -1,15 +1,12 @@
 import { crc32 } from "node:zlib"
 
-// Tiny ZIP archives for the stack check, built at run time so that no binary fixture is tracked: one entry, stored
-// without compression (PKWARE APPNOTE, local file header, central directory, end of central directory).
-
 export function storedZip(name: string, content: Buffer): Buffer {
   const fileName = Buffer.from(name, "utf8")
   const crc = crc32(content)
   const local = Buffer.alloc(30)
   local.writeUInt32LE(0x04034b50, 0)
   local.writeUInt16LE(20, 4)
-  local.writeUInt16LE(0x21, 12) // 1980-01-01
+  local.writeUInt16LE(0x21, 12)
   local.writeUInt32LE(crc, 14)
   local.writeUInt32LE(content.length, 18)
   local.writeUInt32LE(content.length, 22)
@@ -33,7 +30,6 @@ export function storedZip(name: string, content: Buffer): Buffer {
   return Buffer.concat([local, fileName, content, central, fileName, end])
 }
 
-/** Text inside `depth` archives, each inside the next: deeper than clamd's MaxRecursion (17) when depth exceeds it. */
 export function nestedZip(depth: number): Buffer {
   let content: Buffer = Buffer.from("Maane stack check: nested archives.\n", "utf8")
   let name = "note.txt"

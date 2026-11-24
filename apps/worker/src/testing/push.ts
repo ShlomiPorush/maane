@@ -1,9 +1,3 @@
-// A stand-in push service for the notification tests (plan 4.5): HTTPS on 127.0.0.1 with a certificate made for it,
-// trusted only through the https.Agent it hands to web-push's documented `agent` option (never process-wide). It
-// records every request (path, headers, body) and answers 201, or what a test sets for a path: 404 and 410 as a
-// revoked subscription, a redirect with a Location. A test may also give work the next request waits for. Nothing
-// reaches a real push service.
-
 import { createECDH, randomBytes } from "node:crypto"
 import { Agent, createServer } from "node:https"
 import type { AddressInfo } from "node:net"
@@ -13,12 +7,9 @@ export type PushRequest = { path: string; headers: Record<string, string | strin
 
 export interface StandInPush {
   origin: string
-  /** A new endpoint path on the stand-in. */
   endpoint(): string
   received: PushRequest[]
-  /** What the stand-in answers on one endpoint from now on. */
   answer(endpoint: string, status: number, headers?: Record<string, string>): void
-  /** Work the next request waits for before it is answered, once: a change made while a push is pending. */
   during(work: (() => Promise<void>) | null): void
   agent: Agent
   close(): Promise<void>
@@ -68,7 +59,6 @@ export async function startStandInPush(): Promise<StandInPush> {
   }
 }
 
-/** A browser's side of a subscription: its P-256 key pair and auth secret, new for each call. */
 export function browserKeys() {
   const curve = createECDH("prime256v1")
   curve.generateKeys()

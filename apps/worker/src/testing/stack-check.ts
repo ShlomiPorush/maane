@@ -12,12 +12,6 @@ import { FileService } from "../files/service.ts"
 import { FileStore } from "../files/store.ts"
 import { nestedZip } from "./zip.ts"
 
-// The file checks of the container stack (scripts/verify.sh), run in a container of the worker service, with its
-// configuration, network, read-only root, and /data, against the real ClamAV: the self-test, EICAR, an encrypted ZIP,
-// an encrypted PDF, and a file beyond a scan limit through the worker's file service, then a clean file stored under
-// /data/files. It prints "stored <sha256>" for the script, which reads that file back from the server. Bundled by
-// verify.sh into apps/worker/dist/stack-check; never part of the image.
-
 let failed = false
 const check = (ok: boolean, what: string) => {
   console.log(`    ${ok ? "ok" : "FAIL"}: ${what}`)
@@ -73,7 +67,6 @@ try {
     )
   }
 
-  // A stream past StreamMaxLength (100M in docker/clamav/clamd.conf): clamd refuses it, and the client says so.
   const target = parseScannerAddress(selfTest.address)
   const overLimit = target
     ? await scanStream(target, Buffer.alloc(101 * 1024 * 1024), { deadlineMs: 60_000 }).then(

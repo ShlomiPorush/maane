@@ -3,29 +3,19 @@ import { createServer, type Server } from "node:https"
 import { trustCertificate } from "./graph.ts"
 import { standInCertificate } from "./smtp.ts"
 
-// A stand-in for SMTP2GO's activity search (plan 3.3), `POST /v3/activity/search` as SMTP2GO documents it: HTTPS with a
-// certificate made for this stand-in (trusted in this process only), and an API key generated for the run, the only
-// one it accepts (`X-Smtp2go-Api-Key`). It answers the events a test gave it whose date falls in the request's window
-// (start inclusive, end exclusive), a page of `limit` at a time with a `continue_token`, and keeps every request's
-// body. Nothing real is ever called.
-
 export interface ActivityEventFixture {
   event: string
   email_id: string
   recipient: string
-  /** RFC 3339 in UTC. */
   date: string
   reason?: string
 }
 
 export interface StandInSmtp2goApi {
-  /** The base URL, as `https://127.0.0.1:<port>/v3`. */
   baseUrl: string
   apiKey: string
   events: ActivityEventFixture[]
-  /** Every request's JSON body, in order, and whether its key was accepted. */
   requests: { body: Record<string, unknown>; authorized: boolean }[]
-  /** Makes every request fail with this status until cleared (null). */
   failWith: number | null
   close(): Promise<void>
 }

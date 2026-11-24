@@ -1,15 +1,3 @@
-// The activity poll (plan 3.3), the `delivery-poll` job: a safety net for SMTP2GO webhook events that never arrived.
-// It reads SMTP2GO's documented `POST /v3/activity/search` with the API key of the sending settings (3.1), only while a
-// recipient SMTP2GO accepted still has no final delivery status, and writes what it finds through the same
-// applyDeliveryEvent as the webhook (newer events only; an unknown ID is dropped).
-//
-// The window: from a little before where the last complete run ended (the durable cursor, `delivery_poll`), so an
-// event the provider listed late is read again; never earlier than the oldest such recipient's acceptance, nor than
-// DELIVERY_POLL_MAX_AGE_DAYS ago. Every page of a window is read before the cursor moves; a run that fails keeps it.
-// A run that reaches its page limit keeps SMTP2GO's documented `continue_token` and its window beside the cursor, and
-// the next run goes on from that page with the same window, so no page past the limit is out of reach.
-// The API's address is a constant here; only test code gives a stand-in's.
-
 import type { Db } from "@maane/server/db/client"
 import { deliveryPoll, outboxRecipient } from "@maane/server/db/schema"
 import { ACTIVITY_EVENTS, applyDeliveryEvent, detailOf, eventTime } from "@maane/server/delivery/service"
@@ -19,14 +7,11 @@ import { DELIVERY_POLL_MAX_AGE_DAYS, FINAL_DELIVERY_STATUSES } from "@maane/shar
 import { and, eq, gte, isNotNull, isNull, min, notInArray, or } from "drizzle-orm"
 
 export const SMTP2GO_API = "https://api.smtp2go.com/v3"
-/** How far before the cursor each window starts again. */
 export const POLL_OVERLAP_MS = 60 * 60_000
-/** Events per page (the documented maximum), and the most pages one run reads (SMTP2GO allows 60 requests a minute). */
 export const POLL_PAGE_SIZE = 1000
 export const POLL_PAGES_MAX = 20
 const DAY_MS = 24 * 60 * 60_000
 
-/** The fields of an activity event Maane reads; every other field is ignored. */
 interface ActivityEvent {
   event: string | null
   emailId: string | null
@@ -35,7 +20,6 @@ interface ActivityEvent {
   detail: string | null
 }
 
-/** A page of the activity search, read field by field: null when its shape is not the documented one. */
 export function activityPage(body: unknown): { events: ActivityEvent[]; token: string | null } | null {
   const data = (body as { data?: unknown } | null)?.data
   if (typeof data !== "object" || data === null) return null
@@ -57,7 +41,6 @@ export function activityPage(body: unknown): { events: ActivityEvent[]; token: s
   }
 }
 
-/** A request the API refused or answered with something else: its status only, never its body. */
 export class ActivityError extends Error {
   constructor(readonly status: number) {
     super(`SMTP2GO's activity search answered ${status}`)
@@ -68,16 +51,13 @@ export class ActivityError extends Error {
 export interface ActivityPollOptions {
   db: Db
   settings: Settings
-  /** Test code only: a stand-in's address. */
   baseUrl?: string
   now?: () => Date
   timeoutMs?: number
-  /** Events per page and pages per run (tests make them small). */
   pageSize?: number
   pagesMax?: number
 }
 
-/** ISO 8601 in UTC without fractions, as the activity search's dates. */
 const isoSeconds = (date: Date) => date.toISOString().replace(/\.\d{3}Z$/, "Z")
 
 export class ActivityPoll {
@@ -108,7 +88,6 @@ export class ActivityPoll {
     if (!key) return { state: "not_configured", events: 0, applied: 0 }
     const now = this.#now()
     const floor = new Date(now.getTime() - DELIVERY_POLL_MAX_AGE_DAYS * DAY_MS)
-    // Recipients SMTP2GO accepted, with its queue ID, still without a final status, accepted within the age bound.
     const [pending] = await this.#db
       .select({ oldest: min(outboxRecipient.acceptedAt) })
       .from(outboxRecipient)
@@ -123,7 +102,6 @@ export class ActivityPoll {
       )
     if (!pending?.oldest) return { state: "nothing_pending", events: 0, applied: 0 }
     const [cursor] = await this.#db.select().from(deliveryPoll).where(eq(deliveryPoll.id, 1))
-    // A window the last run did not finish goes on from its next page; otherwise a new window ends now.
     const resumed = cursor?.continueToken && cursor.windowStart && cursor.windowEnd ? cursor : null
     let start: Date
     let end: Date
@@ -146,7 +124,7 @@ export class ActivityPoll {
       try {
         page = await this.#page(key, start, end, token)
       } catch (error) {
-        // A kept token SMTP2GO no longer takes: the next run starts its window again.
+        // Keeping the token past a failure would repeat a refused one in every run, and the poll would stay stuck.
         if (resumed && token === resumed.continueToken) await this.#keep(cursor?.until ?? start, null, null, null)
         throw error
       }
@@ -168,7 +146,6 @@ export class ActivityPoll {
       token = page.token
     } while (token && pages < this.#pagesMax)
     if (token) {
-      // Not every page of the window was read: the cursor stays, and the next run goes on from this token.
       await this.#keep(cursor?.until ?? start, token, start, end)
       log.warn("the activity poll stopped at its page limit; the next run goes on from there", { pages })
       return { state: "partial", events, applied }
@@ -178,7 +155,6 @@ export class ActivityPoll {
     return { state: "done", events, applied }
   }
 
-  /** The cursor, and the window still being paged through (with its token), or none. */
   async #keep(until: Date, continueToken: string | null, windowStart: Date | null, windowEnd: Date | null) {
     const values = { until, continueToken, windowStart, windowEnd }
     await this.#db

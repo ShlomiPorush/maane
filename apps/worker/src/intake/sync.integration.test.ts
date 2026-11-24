@@ -44,7 +44,6 @@ const cursorOf = async (h: IntakeHarness, folder = "inbox") =>
 
 const count = async (h: IntakeHarness) => (await h.database.db.select().from(message)).length
 
-/** Every value of every row of the tables intake writes, as text. */
 async function everythingStored(h: IntakeHarness): Promise<string> {
   const tables = [
     "message",
@@ -77,7 +76,6 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     const h = await start()
     h.graph.pageSize = 2
     const ids = Array.from({ length: 5 }, (_, i) => h.graph.add(mime({ subject: `paging ${i}` })))
-    // The worker "crashes" after the first page's messages are committed, before the page's link is stored.
     await expect(
       h.sync.run({
         afterMessages: async (folder, page) => {
@@ -87,7 +85,6 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     ).rejects.toThrow("crash")
     expect(await count(h)).toBe(2)
     expect(await cursorOf(h)).toBeUndefined()
-    // A crash after the first page's cursor: the next run goes on from the second page.
     await expect(
       h.sync.run({
         afterMessages: async (folder, page) => {
@@ -100,13 +97,11 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     const before = h.graph.requests.length
     const summary = await h.sync.run()
     expect(summary).toMatchObject({ status: "done", stored: 1 })
-    // It went on from the stored nextLink (page two again, whose messages are skipped), not from the start.
     const deltaRequests = h.graph.requests.slice(before).filter((line) => line.includes("/inbox/messages/delta"))
     expect(deltaRequests[0]).toContain("$skiptoken=")
     expect((await h.database.db.select().from(message)).map((row) => row.graphId).sort()).toEqual([...ids].sort())
     expect((await cursorOf(h))?.link).toContain("$deltatoken=")
     expect((await cursorOf(h, "junkemail"))?.link).toContain("$deltatoken=")
-    // Every Graph request asked for immutable IDs.
     expect(h.graph.withoutImmutableIds).toEqual([])
   })
 
@@ -129,12 +124,9 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     const h = await start()
     const kept = h.graph.add(mime({ subject: "kept" }))
     await h.sync.run()
-    // Deleted in the mailbox after Maane stored it: Maane keeps it.
     h.graph.remove(kept)
-    // Added and deleted between two rounds: an @removed entry for a message never stored.
     const never = h.graph.add(mime({ subject: "never stored" }))
     h.graph.remove(never)
-    // Listed by the delta query, gone by the time $value is read.
     const vanished = h.graph.add(mime({ messageId: "vanished@example.com", subject: "vanished" }))
     h.graph.vanish(vanished)
     const after = h.graph.add(mime({ subject: "after" }))
@@ -219,8 +211,6 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
   it("opens a ticket for mail whose Message-IDs are too long for an index only in bytes", async () => {
     const h = await start()
     await h.organization("Example Support", [{ value: "support@example.com", isDefault: true }])
-    // 950 CJK ideographs, three bytes each in UTF-8 and random so PostgreSQL cannot compress them: fewer than 998
-    // characters, yet more bytes than one btree index entry may hold. As encoded words, which mailparser decodes.
     const id = () =>
       Array.from({ length: 95 }, () =>
         encodedWord(fromCodePoints(...Array.from({ length: 10 }, () => randomInt(0x4e00, 0xa000)))),
@@ -285,7 +275,6 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     expect(await h.messageOf(cesu)).toMatchObject({ subject: replacement, reviewFlags: ["invalid_characters"] })
     expect(await h.messageOf(afterNul)).toMatchObject({ subject: "after the nul", reviewFlags: [] })
     expect(await h.messageOf(afterCesu)).toMatchObject({ subject: "after the surrogate", reviewFlags: [] })
-    // Stage two takes them too, once a default address exists.
     await h.organization("Example Support", [{ value: "support@example.com", isDefault: true }])
     await h.processor.run()
     expect((await h.messageOf(cesu)).state).toBe("processed")
@@ -293,7 +282,6 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
 })
 
 describe("waiting and the raw MIME (review G6, G7)", () => {
-  /** A scanner that gives no verdict for content holding `marker` while `down` is set, the stand-in clamd otherwise. */
   const flaky = (marker: (bytes: Uint8Array) => boolean) => {
     const state = { down: true }
     const scanner: Scanner = {
@@ -350,7 +338,6 @@ describe("waiting and the raw MIME (review G6, G7)", () => {
     await h.settings.update({ "scanner.address": clamd.address }, SYSTEM)
     expect(await h.retry.run()).toMatchObject({ messages: MAX_RETRIES_PER_RUN, stillWaiting: MAX_RETRIES_PER_RUN })
     expect((await h.messageOf(last)).subject).toBeNull()
-    // The second run took the 51st and the failing ones again.
     expect(await h.retry.run()).toMatchObject({
       messages: MAX_RETRIES_PER_RUN,
       decided: 1,
@@ -395,7 +382,6 @@ describe("stage one: Hebrew, encodings, and parts", () => {
     expect(pdf).toMatchObject({ fileName: `${INVOICE}.pdf`, kind: "attachment", status: "clean" })
     expect(pdf?.storedSha256).toBe(pdf?.sha256)
     expect(await h.messageOf(ids.plainOnly)).toMatchObject({ textBody: `${SHALOM}\nline two`, htmlBody: null })
-    // Every part and the raw message were clean: the raw MIME is kept.
     expect((await h.messageOf(ids.subject)).rawSha256).toMatch(/^[0-9a-f]{64}$/)
   })
 
@@ -423,9 +409,7 @@ describe("stage one: Hebrew, encodings, and parts", () => {
         ["attachment", "infected", null],
       ])
     }
-    // Without a text part, the text comes from the sanitized HTML: no image, no data: URL.
     expect((await h.messageOf(withoutText)).textBody).toMatch(/^See\s+and\s+x$/)
-    // Nothing of the bytes anywhere: no column, no stored file, raw or base64.
     const everything = await everythingStored(h)
     expect(everything).not.toContain("EICAR-STANDARD-ANTIVIRUS-TEST-FILE")
     expect(everything).not.toContain(encoded)
@@ -439,7 +423,6 @@ describe("stage one: Hebrew, encodings, and parts", () => {
       expect(file.includes("EICAR-STANDARD-ANTIVIRUS-TEST-FILE")).toBe(false)
       expect(file.includes(encoded)).toBe(false)
     }
-    // One audit row per blocked part, with its message and file name.
     const audits = await h.database.db.select().from(auditLog).where(eq(auditLog.action, "file.blocked"))
     expect(audits).toHaveLength(4)
     expect(audits.map((row) => (row.details as { fileName: string }).fileName).sort()).toEqual([
@@ -459,9 +442,7 @@ describe("stage one: Hebrew, encodings, and parts", () => {
     await h.sync.run()
     expect((await h.partsOf(later))[0]).toMatchObject({ status: "waiting", storedSha256: null })
     expect(await h.messageOf(later)).toMatchObject({ rawStatus: "waiting", rawSha256: null })
-    // Still down: nothing changes.
     expect(await h.retry.run()).toMatchObject({ messages: 2, stillWaiting: 2 })
-    // The scanner is back; one message is gone from the mailbox.
     await h.settings.update({ "scanner.address": clamd.address }, SYSTEM)
     h.graph.vanish(gone)
     expect(await h.retry.run()).toMatchObject({ messages: 2, decided: 1, unavailable: 1 })
@@ -505,13 +486,11 @@ describe("text fields scanned like files (review G1)", () => {
     expect((await h.messageOf(cases.text)).textBody).toBeNull()
     expect(await h.messageOf(cases.subject)).toMatchObject({ subject: null, headers: [] })
     expect((await h.messageOf(cases.title)).htmlBody).toBeNull()
-    // Without a text part, the text comes from the sanitized HTML; an attribute is not text, so it is clean and kept.
     expect((await h.messageOf(cases.title)).textBody).toBe("hello")
     expect(await h.messageOf(cases.node)).toMatchObject({ htmlBody: null, textBody: "plain" })
     expect(await h.messageOf(valid)).toMatchObject({ subject: "after the blocked fields", reviewFlags: [] })
     const audits = await h.database.db.select().from(auditLog).where(eq(auditLog.action, "message.content_blocked"))
     expect(audits).toHaveLength(5)
-    // Processing goes on.
     await h.organization("Example Support", [{ value: "support@example.com", isDefault: true }])
     await h.processor.run()
     const everything = await everythingStored(h)
@@ -565,7 +544,6 @@ describe("the intake source", () => {
     await hold.reached
     const other = "other-intake@example.com"
     h.graph.allow(other)
-    // The change does not wait for the fetch: nothing holds the source while Graph answers.
     await h.settings.update({ "graph.mailbox": other }, SYSTEM)
     hold.release()
     expect(await round).toMatchObject({ status: "source_changed", stored: 0 })
@@ -615,7 +593,6 @@ describe("the intake source", () => {
     const next = "next-intake@example.com"
     h.graph.allow(next)
     const newId = h.graph.add(mime({ subject: "new mailbox" }), { mailbox: next })
-    // The worker restarts with MAANE_GRAPH_MAILBOX set to another mailbox.
     const restarted = new Settings(h.database.db, createSettingsCipher([{ version: 1, value: h.cipherKey }]), {
       "graph.mailbox": next,
     })
@@ -635,7 +612,6 @@ describe("the intake source", () => {
     const sync = new IntakeSync({ db: h.database.db, settings: restarted, files: h.files, graph: h.gateway })
     expect(await sync.run()).toMatchObject({ status: "done", stored: 1 })
     expect((await h.messageOf(newId)).sourceId).toBe(current?.id)
-    // The old source is read-only: a sync with the old settings finds it no longer current.
     expect(await h.sync.run()).toMatchObject({ status: "no_source" })
   })
 
@@ -672,7 +648,6 @@ describe("the Graph connection test", () => {
     expect(await count(h)).toBe(0)
     expect(await cursorOf(h)).toBeUndefined()
 
-    // Another mailbox the application may not read.
     await h.settings.update({ "graph.mailbox": "someone-else@example.com" }, SYSTEM)
     expect(await graphTest(h.settings, h.gateway)).toMatchObject({
       ok: false,
@@ -680,7 +655,6 @@ describe("the Graph connection test", () => {
       code: "ErrorAccessDenied",
       status: 403,
     })
-    // A wrong secret, assembled at run time.
     await h.settings.update(
       { "graph.mailbox": h.graph.mailbox, "graph.clientSecret": `${h.graph.clientSecret}x` },
       SYSTEM,
@@ -690,7 +664,6 @@ describe("the Graph connection test", () => {
       problem: "credential",
       code: "AADSTS7000215",
     })
-    // Not configured.
     const empty = new Settings(h.database.db, createSettingsCipher([{ version: 1, value: h.cipherKey }]), {
       "graph.tenantId": "",
     })

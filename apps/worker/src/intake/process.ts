@@ -1,20 +1,3 @@
-// Stage two of intake (plan 2.3): processes stored messages, oldest first by Graph's receive time, each in its own
-// transaction, idempotent by the message's state. Maane is live from the first moment (phase 6): every message is
-// processed into tickets. Messages already stored are processed whatever the current source is: they are mail that
-// really arrived. A message waits while one of its text fields waits for the scanner (content.ts), and while a message
-// it refers to is stored but not processed yet, for at most DEPENDENCY_WAIT_MS. While no default address exists,
-// nothing is processed at all (no message is picked, no attempt counted): every waiting message is processed once, in
-// the usual order, after one exists (apps/server/src/organizations/intake.ts).
-//
-// For each message: a copy of an earlier one is recorded and changes nothing; automated mail opens, joins, and reopens
-// nothing; otherwise the support address (To, then Cc, then the default) and the threading layers decide between
-// joining a ticket, a new ticket, and a new ticket linked to the ones it matched (plan 4.1: a participant's reply to a
-// closed ticket opens a follow-up linked to it; the closed ticket is not changed). Joining a ticket is a customer
-// reply, which takes effect in apps/server/src/tickets/customer-reply.ts. Lock order: the ticket number lock
-// (apps/server/src/tickets/numbers.ts), the message, then the ticket; the sender's participation and the ticket's
-// status are read under the ticket's lock (phase 6), so a rerun of the import that changed the participants just before
-// is never acted on with a stale answer.
-
 import type { Db } from "@maane/server/db/client"
 import {
   intakeRecord,
@@ -55,18 +38,11 @@ type MessageRow = typeof message.$inferSelect
 type Rule = { kind: "exact" | "pattern"; value: string; isDefault: boolean; organizationId: string }
 
 export interface ProcessHooks {
-  /** Right after the transaction took the ticket number lock: a test holds a transaction here. */
   afterLock?: (messageId: string) => Promise<void>
 }
 
-/** The most messages one run processes; the next run (every minute) goes on. */
 export const MAX_PER_RUN = 500
-/** Failed runs on one message before it is recorded for review instead of being tried for ever. */
 export const MAX_PROCESS_ATTEMPTS = 3
-/**
- * How long a reply may wait, counted from its own storing, for a stored message it refers to that is not processed yet.
- * Past this it is processed whatever arrived meanwhile, so no sender can delay it longer.
- */
 export const DEPENDENCY_WAIT_MS = 60 * 60_000
 
 type Match =
@@ -76,11 +52,6 @@ type Match =
 
 type RecordFields = Omit<typeof intakeRecord.$inferInsert, "messageId" | "outcome"> & { outcome: IntakeOutcome }
 
-/**
- * Whether a processed message notifies agents (plan 4.5), the one place that decides it: a message that opened a
- * ticket (among them the follow-up a reply to a closed ticket opens, plan 4.1), and exactly what `isCustomerReply`
- * (apps/server/src/tickets/customer-reply.ts) counts as a customer reply. Automated mail and copies never notify.
- */
 export function notificationOf(record: IntakeFacts, messageId: string): PushJob | null {
   const ticketId = record.ticketId
   if (!ticketId) return null
@@ -90,7 +61,6 @@ export function notificationOf(record: IntakeFacts, messageId: string): PushJob 
   return null
 }
 
-/** Queues a notification inside the transaction that stores its message (pg-boss's documented `db` option). */
 export type Notify = (jobs: QueueDb, job: PushJob) => Promise<void>
 
 const sameTime = (a: Date | null, b: Date | null) => (a === null || b === null ? a === b : a.getTime() === b.getTime())
@@ -100,13 +70,10 @@ const addressesOf = (value: unknown): MailAddress[] =>
     ? value.filter((entry): entry is MailAddress => typeof (entry as MailAddress)?.address === "string")
     : []
 
-/** A message whose text fields still wait for the scanner: processing waits for the retry to decide them. */
 const FIELDS_WAITING = sql`(${message.content} = 'parsed' and jsonb_path_exists(${message.fieldScans}, '$.* ? (@.status == "waiting")'))`
 
-/** A database error the message's own values caused (data exception, program limit, a protocol violation). */
 const isRefused = (error: unknown) => /^(22|54|08P01)/.test(databaseError(error)?.code ?? "")
 
-/** The first item of a list that a query found, in the list's order. */
 const firstFound = <T>(order: readonly T[], found: Map<T, string>) => {
   for (const item of order) {
     const ticketId = found.get(item)
@@ -126,21 +93,12 @@ export class IntakeProcessor {
     this.#now = options.now ?? (() => new Date())
   }
 
-  /**
-   * Processes stored messages, oldest first, while a default address exists. A message whose transaction fails stays
-   * stored and is skipped for the rest of this run; after MAX_PROCESS_ATTEMPTS failed runs, or at once when the
-   * database refuses one of its values, it is recorded for review, so no message is tried for ever.
-   */
   async run(hooks: ProcessHooks = {}, limit = MAX_PER_RUN): Promise<{ processed: number; failed: number }> {
     const failed: string[] = []
     let processed = 0
     while (processed + failed.length < limit) {
-      // No default address: nothing is picked and no attempt is counted; the messages wait for one.
       if (!(await hasDefaultAddress(this.#db))) break
       const since = new Date(this.#now().getTime() - DEPENDENCY_WAIT_MS)
-      // A reply waits while a message it refers to was stored strictly before it and is not processed yet, and only
-      // while the reply itself was stored less than the limit ago. Strictly earlier: two messages never wait for each
-      // other, and nothing stored later can hold it.
       const waitsForOriginal = sql`(${message.createdAt} > ${since} and exists (select 1 from message o
         where o.state = 'stored' and o.created_at < ${message.createdAt} and o.message_id_header is not null
         and o.message_id_header = any(${message.inReplyTo} || ${message.references})))`
@@ -177,7 +135,6 @@ export class IntakeProcessor {
     return { processed, failed: failed.length }
   }
 
-  /** A message processing cannot finish: processed without a ticket, flagged, and recorded. */
   async #giveUp(id: string): Promise<boolean> {
     return this.#db.transaction(async (tx) => {
       const [row] = await tx
@@ -199,13 +156,8 @@ export class IntakeProcessor {
     })
   }
 
-  /**
-   * One message in its own transaction. Does nothing when it was processed already, or while no default address
-   * exists (the message stays stored, and nothing counts as an attempt).
-   */
   async processOne(id: string, hooks: ProcessHooks = {}): Promise<void> {
     const work = async (tx: Tx, jobs: QueueDb | null) => {
-      // Before the message and any ticket: the same order as the import's (apps/server/src/tickets/numbers.ts).
       await lockTicketNumbers(tx)
       await hooks.afterLock?.(id)
       const [row] = await tx
@@ -214,11 +166,9 @@ export class IntakeProcessor {
         .where(and(eq(message.id, id), eq(message.state, "stored")))
         .for("update")
       if (!row) return
-      // A default address, once it exists, is only ever replaced, never removed (organizations/service.ts).
       if (!(await hasDefaultAddress(tx))) return
       const notifications: PushJob[] = []
       await this.#process(tx, row, notifications)
-      // The notification's job commits with the message, or neither does (plan 4.5).
       if (jobs && this.#notify) for (const job of notifications) await this.#notify(jobs, job)
     }
     const notify = this.#notify
@@ -240,8 +190,6 @@ export class IntakeProcessor {
 
     if (msg.content !== "parsed") return finish({}, { outcome: "unreadable", reason: msg.content })
 
-    // Maane's own reply coming back into the mailbox (a support address among its recipients, a copy a provider kept):
-    // its own Message-ID from its own From address (plan 3.1). It opens, joins, and reopens nothing.
     if (msg.messageIdHeader && msg.fromAddress) {
       const [own] = await tx
         .select({ id: outbox.messageId, ticketId: message.ticketId })
@@ -255,7 +203,6 @@ export class IntakeProcessor {
         )
     }
 
-    // A copy: the same Message-ID, From, Date, and decoded content as an earlier message. Recorded, nothing else.
     if (msg.messageIdHeader) {
       const earlier = await tx
         .select({
@@ -293,7 +240,6 @@ export class IntakeProcessor {
       if (earlier.length > 0) flags.add("reused_message_id" satisfies MessageFlag)
     }
 
-    // Classified at stage one from the parsed headers, also when their stored text was dropped.
     if (msg.classification === null) throw new Error("a parsed message was stored without its classification")
     const classification: Classification = {
       automated: msg.classification === "automated",
@@ -310,8 +256,6 @@ export class IntakeProcessor {
       .from(supportAddress)) as Rule[]
     const to = addressesOf(msg.toAddresses)
     const cc = addressesOf(msg.ccAddresses)
-    // To, then Cc, against the address table; no match uses the default, which processOne checked exists. The
-    // concrete address is kept.
     const resolution = resolveSupportAddress(
       [...to, ...cc].map((entry) => entry.address),
       rules,
@@ -336,8 +280,6 @@ export class IntakeProcessor {
       automatedReasons: classification.signs,
     }
 
-    // Automated mail never opens, joins, or reopens a ticket (requirements 2.2). A report keeps its original
-    // Message-ID; a delivery report about one of Maane's replies updates its recipients' delivery status (plan 3.3).
     if (classification.automated) {
       const report = await applyDeliveryReport(tx, msg)
       return finish(patch, {
@@ -353,27 +295,20 @@ export class IntakeProcessor {
     let linkReason: LinkReason | null = null
     if (match.kind === "ticket") {
       const ticketId = match.ticketId
-      // The ticket's lock first, then what decides: its status and the sender's participation, read under the lock.
       const locked = await lockTicket(tx, ticketId)
       const participant = sender !== null && (await this.#isParticipant(tx, ticketId, sender))
       if (participant && locked?.status !== "closed") {
         await this.#keepPending(tx, msg, ticketId)
-        // Only the ticket the message joined stops waiting for it.
         if (msg.messageIdHeader) await this.#resolvePending(tx, ticketId, msg.messageIdHeader, msg.id)
         const record: RecordFields = { ...base, ticketId, outcome: "joined" }
-        // The one place a customer reply takes effect (apps/server/src/tickets/customer-reply.ts).
         if (isCustomerReply(record)) await customerReplied(tx, ticketId, this.#now())
         await finish({ ...patch, ticketId }, record)
-        // The same mail may have come in through the import too (phase 6): both stay, the ticket is flagged.
         await flagSameMail(tx, ticketId)
         return
       }
-      // Every layer is only a hint: a sender who is not a participant opens a new ticket, linked to the old one. A
-      // participant's reply to a closed ticket opens a follow-up linked to it, and the closed ticket stays as it is.
       links = [ticketId]
       linkReason = participant ? "follow_up" : "sender_not_participant"
     } else if (match.kind === "ambiguous") {
-      // A late original that more than one ticket waits for: its own ticket, linked to each, never one at random.
       links = match.holders
       linkReason = "ambiguous_original"
     }
@@ -381,7 +316,6 @@ export class IntakeProcessor {
     const outcome: IntakeOutcome = linkReason ? "new_linked_ticket" : "new_ticket"
     const ticketFlags: TicketFlag[] = []
     if (classification.possiblyAutomated) ticketFlags.push("possibly_automated")
-    // A follow-up needs no review; the other links do.
     if (linkReason && linkReason !== "follow_up") ticketFlags.push(linkReason)
     const opened = await this.#open(tx, {
       organizationId: address.organizationId,
@@ -389,7 +323,6 @@ export class IntakeProcessor {
       subject: msg.subject,
       flags: ticketFlags,
     })
-    // Participants: From, and Cc addresses that are not support addresses.
     if (msg.fromAddress) await this.#addParticipant(tx, opened, msg.fromAddress, msg.fromName)
     for (const entry of cc)
       if (entry.address !== msg.fromAddress && !matchSupportAddress(entry.address, rules))
@@ -403,24 +336,20 @@ export class IntakeProcessor {
     return finish({ ...patch, ticketId: opened }, { ...base, ticketId: opened, outcome, reason: linkReason })
   }
 
-  /** The threading layers, in order (requirements 2.2). */
   async #match(tx: Tx, msg: MessageRow): Promise<Match> {
     for (const id of referencedIds(msg.inReplyTo, msg.references)) {
       const byMessage = await this.#ticketsOf(tx, id)
-      // A Message-ID on messages of more than one ticket is ambiguous and matches nothing in this layer.
       if (byMessage.length > 1) continue
       const tickets = new Set([...byMessage, ...(await this.#waitingFor(tx, id))])
       const [only] = tickets
       if (tickets.size === 1 && only) return { kind: "ticket", ticketId: only, layer: "header" }
     }
-    // A late original: the tickets whose messages referred to it while it was missing.
     if (msg.messageIdHeader) {
       const holders = await this.#waitingFor(tx, msg.messageIdHeader)
       const [only] = holders
       if (holders.length === 1 && only) return { kind: "ticket", ticketId: only, layer: "original" }
       if (holders.length > 1) return { kind: "ambiguous", holders, layer: "original" }
     }
-    // The body reference code and the subject number (the first few, in one query each).
     const codes = referenceCodesIn(msg.textBody)
     if (codes.length) {
       const rows = await tx
@@ -442,7 +371,6 @@ export class IntakeProcessor {
     return { kind: "none" }
   }
 
-  /** The tickets of parsed messages carrying this Message-ID. */
   async #ticketsOf(tx: Tx, id: string): Promise<string[]> {
     const rows = await tx
       .selectDistinct({ ticketId: message.ticketId })
@@ -451,7 +379,6 @@ export class IntakeProcessor {
     return rows.flatMap((row) => (row.ticketId ? [row.ticketId] : []))
   }
 
-  /** The tickets still waiting for this Message-ID, oldest first. */
   async #waitingFor(tx: Tx, id: string): Promise<string[]> {
     const rows = await tx
       .select({ ticketId: ticketPendingReference.ticketId })
@@ -469,7 +396,6 @@ export class IntakeProcessor {
     return rows.length > 0
   }
 
-  /** A number from the sequence (under the ticket number lock), a reference code from the CSPRNG (drawn again on the rare collision). */
   async #open(
     tx: Tx,
     values: { organizationId: string; supportAddress: string; subject: string | null; flags: TicketFlag[] },
@@ -498,7 +424,6 @@ export class IntakeProcessor {
     await tx.insert(ticketParticipant).values({ ticketId, address, name }).onConflictDoNothing()
   }
 
-  /** Each Message-ID the message refers to that no processed message carries waits on the ticket. */
   async #keepPending(tx: Tx, msg: MessageRow, ticketId: string): Promise<void> {
     const ids = referencedIds(msg.inReplyTo, msg.references).filter((id) => id !== msg.messageIdHeader)
     if (ids.length === 0) return

@@ -1,8 +1,6 @@
 import { errorFacts, log } from "@maane/server/log"
 import { startWorker } from "./main.ts"
 
-// The worker process: started as configured, stopped gracefully on SIGTERM or SIGINT.
-
 async function main(): Promise<void> {
   const worker = await startWorker()
   const stop = async (signal: string) => {

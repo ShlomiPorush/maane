@@ -4,24 +4,11 @@ import { generate } from "selfsigned"
 import { SMTPServer, type SMTPServerAddress, type SMTPServerSession } from "smtp-server"
 import { trustCertificate } from "./graph.ts"
 
-// A stand-in SMTP server for the integration tests, the stack check, and the screenshots (plan 3.1): smtp-server, as it
-// documents itself, with TLS from a certificate made for this stand-in (a subject of its own, trusted in this process
-// only through Node's tls.setDefaultCACertificates) and a user and password generated for the run, the only ones it
-// accepts. Nothing real is ever sent: it keeps what it received in memory.
-//
-// What it does with a recipient follows the recipient's local part, so one stand-in plays every outcome:
-// - `refuse...`: RCPT TO answers 550; `defer...`: RCPT TO answers 451.
-// - `drop...`: the message's data is read and kept, then the connection is cut before the final reply.
-// - `reject...`: the final reply after the data is 554; `tempfail...`: 451.
-// - `stall...`: the message's data is read and kept, and the final reply never comes; the connection stays open.
-// Any other recipient is accepted, and the final reply is `250 OK id=<queue id>`, as SMTP2GO answers.
-
 export interface ReceivedMessage {
   from: string
   to: string[]
   raw: Buffer
   queueId: string
-  /** The connection was cut before the final reply. */
   dropped: boolean
 }
 
@@ -30,28 +17,20 @@ export interface StandInSmtp {
   port: number
   user: string
   password: string
-  /** TLS from the first byte (else STARTTLS). */
   secure: boolean
   received: ReceivedMessage[]
-  /** How many connections reached it. */
   connections(): number
   close(): Promise<void>
 }
 
 export interface StandInSmtpOptions {
-  /** TLS from the first byte instead of STARTTLS. */
   secure?: boolean
-  /** Speak no TLS at all: STARTTLS is neither offered nor accepted (a client that requires TLS must give up). */
   noTls?: boolean
-  /** Accept every recipient and every message, whatever its local part (a failover that takes what the first refused). */
   acceptAll?: boolean
-  /** Listen on this address (default 127.0.0.1). */
   host?: string
-  /** Trust the certificate in this process (default true). */
   trust?: boolean
 }
 
-/** A certificate for one stand-in, with a subject of its own (two stand-ins with one subject would be confused). */
 export async function standInCertificate(names: string[] = ["localhost"]) {
   return generate([{ name: "commonName", value: `maane-smtp-stand-in-${randomBytes(8).toString("hex")}` }], {
     keyType: "ec",
@@ -111,7 +90,6 @@ export async function startStandInSmtp(options: StandInSmtpOptions = {}): Promis
         received.push({ from, to, raw: Buffer.concat(chunks), queueId, dropped })
         if (locals.some((local) => local.startsWith("stall"))) return
         if (dropped) {
-          // Stored, then the connection is cut before the final reply: the client cannot know.
           sockets.get(session.remotePort)?.destroy()
           return
         }
@@ -148,7 +126,6 @@ export async function startStandInSmtp(options: StandInSmtpOptions = {}): Promis
   }
 }
 
-/** A server that accepts connections and never says a word: the client's own deadlines must end the attempt. */
 export async function startSilentServer(): Promise<{ port: number; close(): Promise<void> }> {
   const sockets = new Set<Socket>()
   const server: Server = createServer((socket) => {

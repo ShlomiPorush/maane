@@ -39,24 +39,17 @@ import type { SmtpTimeouts } from "./send/smtp.ts"
 import { smtpTest } from "./send/test.ts"
 import { scanUpload } from "./send/uploads.ts"
 
-/** The file the worker's health check reads: the time of the last heartbeat job, in milliseconds. */
 export const HEARTBEAT_FILE = process.env.MAANE_HEARTBEAT_FILE || "/tmp/maane-worker-heartbeat"
 
-/** A heartbeat older than this means the queue stopped running jobs. */
 export const HEARTBEAT_MAX_AGE_MS = 3 * 60_000
 
 export interface JobOptions {
   heartbeatFile?: string
   now?: () => number
-  /** The file service; without it (tests of the heartbeat alone) the file jobs are not registered. */
   files?: FileService
-  /** Graph intake; without it (tests of other jobs) the intake jobs are not registered. */
   intake?: IntakeJobs
-  /** Replies (plan 3.1): sending, the composer's uploads, and the SMTP connection tests. Needs `files`. */
   send?: SendJobs
-  /** Browser notifications (plan 4.5); registered before intake, which queues them. */
   push?: PushNotifier
-  /** The import from the Zendesk archive (plan 5.1), with the pool its run lock takes a connection from. */
   zendeskImport?: { pool: LockPool; importer: ZendeskImport }
 }
 
@@ -64,14 +57,11 @@ export interface SendJobs {
   db: Db
   settings: Settings
   sender: ReplySender
-  /** SMTP2GO's activity search for delivery statuses (plan 3.3); without it the poll is not registered. */
   poll?: ActivityPoll
-  /** The connection tests' timeouts (tests make them short). */
   timeouts?: SmtpTimeouts
 }
 
 export interface IntakeJobs {
-  /** The pool the run locks take a connection of their own from. */
   pool: LockPool
   settings: Settings
   graph: GraphGateway
@@ -80,7 +70,6 @@ export interface IntakeJobs {
   retry: WaitingFiles
 }
 
-/** The Graph connection test: the saved settings, the Inbox folder's metadata, nothing else. */
 export async function graphTest(settings: Settings, graph: GraphGateway): Promise<GraphTestResult> {
   const config = await graphConfig(settings)
   if (!config)
@@ -95,10 +84,6 @@ export async function graphTest(settings: Settings, graph: GraphGateway): Promis
   return graph.test(config)
 }
 
-/**
- * The heartbeat is a scheduled job that proves the queue picks up and finishes work. The scanner self-test's output is
- * the result the Settings page polls for.
- */
 export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Promise<void> {
   const heartbeatFile = options.heartbeatFile ?? HEARTBEAT_FILE
   const now = options.now ?? Date.now
@@ -116,7 +101,6 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
   await boss.createQueue(FILES_SWEEP)
   await boss.schedule(FILES_SWEEP, "37 3 * * *")
   await boss.work(FILES_SWEEP, async () => files.sweep())
-  // The self-test on start: scans trust no scanner until it passed.
   await boss.send(SCANNER_SELF_TEST, {})
 
   const send = options.send
@@ -137,8 +121,6 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
       if ((PROVIDERS as readonly unknown[]).includes(provider))
         return smtpTest(send.settings, provider as Provider, send.timeouts)
     })
-    // Timed actions and snoozes (plan 4.2): an action's job carries the version it was queued for, and an older one
-    // does nothing; a snooze's job ends the ticket's snooze only once its time has come.
     const actions = new TimedActions({
       db: send.db,
       settings: send.settings,
@@ -155,13 +137,11 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
       const ticketId = job?.data.ticketId
       if (typeof ticketId === "string") return { ended: await snoozeEnded(send.db, ticketId) }
     })
-    // What a failed or lost job left waiting past its time is queued again (pg-boss's documented schedule).
     await boss.createQueue(TIMED_RECOVER, { policy: "exclusive", expireInSeconds: 5 * 60 })
     await boss.schedule(TIMED_RECOVER, "*/5 * * * *")
     await boss.work(TIMED_RECOVER, async () => requeueOverdue(send.db, (name, data) => boss.send(name, data)))
     const poll = send.poll
     if (poll) {
-      // One run at a time; a failed run leaves the cursor where it was, and the next one reads its window again.
       await boss.createQueue(DELIVERY_POLL, { policy: "exclusive", expireInSeconds: 30 * 60 })
       await boss.schedule(DELIVERY_POLL, "*/10 * * * *")
       await boss.work(DELIVERY_POLL, async () => poll.run())
@@ -170,9 +150,6 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
 
   const zendesk = options.zendeskImport
   if (zendesk) {
-    // One job works at a time (a session lock, also against a run pg-boss expired that still works). Another one fails
-    // while the lock is held, so pg-boss tries it again later by its documented retry instead of completing it unrun:
-    // a new run's only job may meet the lock of a cancelled run's job that is still finishing.
     await boss.createQueue(ZENDESK_IMPORT, QUEUE_OPTIONS[ZENDESK_IMPORT])
     await boss.work<{ runId?: unknown }>(ZENDESK_IMPORT, async ([job]) => {
       const runId = job?.data.runId
@@ -186,8 +163,6 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
 
   const push = options.push
   if (push) {
-    // Created before intake's jobs run: intake queues notifications in its own transactions, and pg-boss refuses a job
-    // for a queue that does not exist.
     await boss.createQueue(PUSH_NOTIFY, QUEUE_OPTIONS[PUSH_NOTIFY])
     await boss.work(PUSH_NOTIFY, async ([job]) => pushNotifyJob(push, job?.data))
   }
@@ -196,8 +171,6 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
   if (!intake) return
   await boss.createQueue(GRAPH_TEST)
   await boss.work(GRAPH_TEST, async () => graphTest(intake.settings, intake.graph))
-  // One sync and one processing run at a time: the queue holds one job queued or active, and a session lock guards
-  // against a run pg-boss expired while its handler still works.
   await boss.createQueue(INTAKE_SYNC, {
     policy: "exclusive",
     expireInSeconds: 30 * 60,
@@ -214,7 +187,6 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
     try {
       return await runExclusive(intake.pool, INTAKE_SYNC, () => intake.sync.run())
     } finally {
-      // Stored messages are processed after each round, also when the round failed halfway.
       await boss.send(INTAKE_PROCESS, {}).catch((error) => log.warn("could not queue processing", errorFacts(error)))
     }
   })
@@ -222,6 +194,5 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
   await boss.work(INTAKE_FILES_RETRY, async () =>
     runExclusive(intake.pool, INTAKE_FILES_RETRY, () => intake.retry.run()),
   )
-  // Processing at start: what stage one stored is processed even while Graph cannot be reached.
   await boss.send(INTAKE_PROCESS, {})
 }

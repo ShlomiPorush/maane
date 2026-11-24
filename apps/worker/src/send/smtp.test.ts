@@ -2,10 +2,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { type StandInSmtp, startSilentServer, startStandInSmtp } from "../testing/smtp.ts"
 import { deliver, type SmtpConfig, type SmtpTimeouts, sendFailure } from "./smtp.ts"
 
-// One attempt against stand-in SMTP servers (plan 3.1): what each outcome of nodemailer's SMTPConnection means for
-// the recipients. The stand-ins use TLS with certificates made for this run, trusted in this process only, and accept
-// only the user and password they generated.
-
 const QUICK: SmtpTimeouts = { connection: 2000, greeting: 1500, socket: 3000, setup: 4000, send: 5000 }
 const MIME = Buffer.from(
   "From: Agent <help@example.com>\r\nTo: dana@example.com\r\nSubject: Hello\r\nMessage-ID: <a@example.com>\r\n\r\nHello\r\n",

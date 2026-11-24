@@ -10,14 +10,12 @@ import { blockedBy } from "./service.ts"
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 const utf8 = (text: string) => Buffer.from(text, "utf8")
-/** Hebrew text from code points: no file but he.json holds literal Hebrew. */
 const hebrew = String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)
 
 describe("self-test samples", () => {
   it("EICAR is the 68-byte standard test file, built at run time", () => {
     const file = eicar()
     expect(file.length).toBe(68)
-    // The published SHA-256 of the 68-byte EICAR test file.
     expect(sha256(file)).toBe("275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f")
   })
 
@@ -46,7 +44,6 @@ describe("verdicts", () => {
       "Heuristics.Limits.Exceeded.MaxRecursion",
     ])
       expect(verdictOf(alert)).toEqual({ kind: "not_fully_scanned", signature: alert })
-    // Another heuristic is a detection, not a limit.
     expect(verdictOf("Heuristics.Phishing.Email.SpoofedDomain").kind).toBe("infected")
   })
 })
@@ -75,7 +72,6 @@ describe("the clamd client against the stand-in", () => {
     })
     expect(await clamdScanner.scan(clamd.address, CLEAN_SAMPLE)).toEqual({ kind: "clean" })
     expect(await clamdScanner.scan(clamd.address, new Uint8Array(0))).toEqual({ kind: "clean" })
-    // Three chunks of 64 KiB and a remainder arrive as one stream.
     const large = Buffer.alloc(200_000, 0x61)
     expect(await clamdScanner.scan(clamd.address, large)).toEqual({ kind: "clean" })
     expect(clamd.scanned.at(-1)?.equals(large)).toBe(true)
@@ -134,7 +130,6 @@ describe("detected types", () => {
     expect((await detectType(utf8(`Hello\t${hebrew}\r\n\fend`))).mime).toBe(TEXT_TYPE)
     expect(isPlainText(utf8(""))).toBe(true)
     expect(isPlainText(Buffer.from([0xef, 0xbb, 0xbf, 0x68, 0x69]))).toBe(true)
-    // NUL, another control character, invalid UTF-8, and a C1 control character are not text.
     expect(isPlainText(Buffer.from([0x61, 0x00, 0x62]))).toBe(false)
     expect(isPlainText(Buffer.from([0x61, 0x01, 0x62]))).toBe(false)
     expect(isPlainText(Buffer.from([0x61, 0xff, 0x62]))).toBe(false)

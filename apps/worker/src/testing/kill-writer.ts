@@ -6,11 +6,6 @@ import { clamdScanner } from "../files/scanner.ts"
 import { FileService, sha256Of } from "../files/service.ts"
 import { FileStore } from "../files/store.ts"
 
-// A writer for the crash test of files.integration.test.ts, run as its own process: it stores content as the worker
-// does, says "published" once the file is renamed into place and synced and its row is written, and then waits inside
-// the open transaction, before the commit, until the test kills it. Arguments: the database URL, the store directory,
-// and the content as hex.
-
 const [url, dir, hex] = process.argv.slice(2)
 if (!url || !dir || hex === undefined) throw new Error("usage: kill-writer <database url> <store dir> <hex>")
 const database = openDatabase(url, 2)
@@ -32,6 +27,5 @@ const outcome = {
 await database.db.transaction(async (tx) => {
   await files.storeIn(tx, bytes, outcome)
   process.stdout.write("published\n")
-  // Never settles; the interval keeps the process alive until it is killed.
   await new Promise(() => setInterval(() => {}, 1_000))
 })

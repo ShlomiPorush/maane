@@ -55,12 +55,10 @@ describe("worker jobs", () => {
     await registerJobs(boss, { heartbeatFile: join(dir, "heartbeat"), files })
     const names = (await boss.getSchedules()).map((s) => s.name)
     expect(names).toEqual(expect.arrayContaining([SCANNER_SELF_TEST, FILES_SWEEP]))
-    // The self-test queued at start writes the scanner's status.
     await expect
       .poll(async () => (await database.db.select().from(scannerCheck))[0]?.ok, { timeout: 20_000 })
       .toBe(true)
 
-    // The server's side: queue a connection test and read its state until the worker finished it.
     const queue = await openJobQueue(database.url)
     try {
       const id = await queue.send(SCANNER_SELF_TEST)
@@ -90,14 +88,12 @@ describe("worker jobs", () => {
         await expect
           .poll(async () => (await queue.job(SCANNER_SELF_TEST, id))?.state, { timeout: 25_000 })
           .toBe("completed")
-        // PING waits at most its 10-second deadline, then the job ends with the check that failed.
         expect(Date.now() - started).toBeLessThan(25_000)
         expect((await queue.job(SCANNER_SELF_TEST, id))?.output).toMatchObject({
           address: stuck.address,
           ok: false,
           failedCheck: "connection",
         })
-        // The queue goes on: the next test is picked up and finished too.
         const next = await queue.send(SCANNER_SELF_TEST)
         await expect
           .poll(async () => (await queue.job(SCANNER_SELF_TEST, next))?.state, { timeout: 25_000 })
@@ -128,7 +124,6 @@ describe("worker jobs", () => {
       files,
       zendeskImport: { pool: database.pool, importer },
     })
-    // Another job of the import (a cancelled run's, still finishing) holds the run lock.
     let release = () => {}
     const held = new Promise<void>((resolve) => {
       release = resolve
@@ -139,7 +134,6 @@ describe("worker jobs", () => {
       await held
     })
     await vi.waitFor(() => expect(holding).toBe(true))
-    // A new run's only job, with a short fixed delay between tries (pg-boss's per-job retry options).
     const id = (await boss.send(
       ZENDESK_IMPORT,
       { runId: "new-run" },
@@ -150,7 +144,6 @@ describe("worker jobs", () => {
       .toBeGreaterThan(0)
     expect(["retry", "active"]).toContain((await boss.getJobById(ZENDESK_IMPORT, id))?.state)
     expect(runs).toEqual([])
-    // The lock frees: the job runs once and completes.
     release()
     await holder
     await expect

@@ -1,8 +1,3 @@
-// How a Zendesk record becomes Maane's rows (plan 5.1), without the database: the status, the participants, the
-// followers, the custom fields, the links, and each comment and side conversation message as a planned message. The
-// field paths follow Zendesk's API reference (Tickets, Ticket Comments, the Via object, Users, Ticket Fields, Side
-// Conversations); a field that is missing or of another shape reads as absent.
-
 import type { EmailIdentifiers, ImportedMessageSource, ImportedTicketSource } from "@maane/server/imports/source"
 import { type MailAddress, parseExactAddress, type TicketStatus } from "@maane/shared"
 import type {
@@ -15,7 +10,6 @@ import type {
   ZendeskVia,
 } from "@maane/zendesk"
 
-/** Zendesk's statuses map 1:1 (requirements 3.1); `hold` is Maane's `on_hold`. */
 const STATUSES: Record<string, TicketStatus> = {
   new: "new",
   open: "open",
@@ -26,7 +20,6 @@ const STATUSES: Record<string, TicketStatus> = {
   closed: "closed",
 }
 
-/** The Maane status of a Zendesk status; an unknown one reads as open. */
 export const statusOf = (status: string | null | undefined): TicketStatus => STATUSES[status ?? ""] ?? "open"
 
 const text = (value: unknown): string | null => (typeof value === "string" && value !== "" ? value : null)
@@ -34,7 +27,6 @@ const id = (value: unknown): string | null =>
   typeof value === "number" || (typeof value === "string" && /^\d{1,20}$/.test(value)) ? String(value) : null
 const ids = (value: unknown): string[] => (Array.isArray(value) ? value.flatMap((item) => id(item) ?? []) : [])
 
-/** An address as Maane keeps it (lower case), or null when it is not one plain address. */
 export function addressOf(value: unknown): string | null {
   const raw = text(value)
   if (raw === null) return null
@@ -42,7 +34,6 @@ export function addressOf(value: unknown): string | null {
   return parsed.ok ? parsed.value : null
 }
 
-/** The requester first, then every CC (Zendesk's email CCs and older collaborators), each once, with an address. */
 export function participantsOf(record: ZendeskTicketRecord, users: Map<string, ZendeskUser>): MailAddress[] {
   const people: MailAddress[] = []
   const seen = new Set<string>()
@@ -61,7 +52,6 @@ export function participantsOf(record: ZendeskTicketRecord, users: Map<string, Z
   return people
 }
 
-/** Followers as source information only, never recipients. */
 export function followersOf(record: ZendeskTicketRecord, users: Map<string, ZendeskUser>) {
   return ids(record.follower_ids).map((userId) => {
     const user = users.get(userId)
@@ -71,11 +61,9 @@ export function followersOf(record: ZendeskTicketRecord, users: Map<string, Zend
 
 export interface FieldDefinition {
   title: string
-  /** A drop-down's options: their values (tags) to their names. */
   options: Map<string, string>
 }
 
-/** The ticket fields by ID, from the `ticket_fields` collection. */
 export function fieldDefinitions(records: Record<string, unknown>[]): Map<string, FieldDefinition> {
   const definitions = new Map<string, FieldDefinition>()
   for (const record of records) {
@@ -93,7 +81,6 @@ export function fieldDefinitions(records: Record<string, unknown>[]): Map<string
   return definitions
 }
 
-/** The custom fields that have a value, by the field's name; a drop-down's value by its option's name. */
 export function fieldsOf(record: ZendeskTicketRecord, definitions: Map<string, FieldDefinition>) {
   const fields: { name: string; value: string }[] = []
   for (const field of Array.isArray(record.custom_fields) ? record.custom_fields : []) {
@@ -113,7 +100,6 @@ export function fieldsOf(record: ZendeskTicketRecord, definitions: Map<string, F
 export const tagsOf = (record: ZendeskTicketRecord): string[] =>
   Array.isArray(record.tags) ? [...new Set(record.tags.filter((tag): tag is string => typeof tag === "string"))] : []
 
-/** The ticket a via object names as merged or followed up (`source.rel`, with `source.from.ticket_id`). */
 function viaLinks(via: ZendeskVia | null | undefined): ImportedTicketSource["links"] {
   const rel = via?.source?.rel
   if (rel !== "merge" && rel !== "follow_up") return []
@@ -125,10 +111,6 @@ function viaLinks(via: ZendeskVia | null | undefined): ImportedTicketSource["lin
   }))
 }
 
-/**
- * The tickets this one names: a follow-up's original and the follow-ups it lists (`followup_ids`), and the tickets
- * merged into it, by the via of the ticket and of its audits.
- */
 export function linksOf(record: ZendeskTicketRecord, audits: ZendeskAudit[]): ImportedTicketSource["links"] {
   const links = [
     ...viaLinks(record.via),
@@ -145,7 +127,6 @@ export function linksOf(record: ZendeskTicketRecord, audits: ZendeskAudit[]): Im
   })
 }
 
-/** A message the import writes, before its text is scanned. */
 export interface PlannedMessage {
   key: string
   direction: "in" | "out" | "note"
@@ -155,7 +136,6 @@ export interface PlannedMessage {
   cc: MailAddress[]
   text: string | null
   html: string | null
-  /** The header block's values: the names and the subject the message shows. */
   headers: string[]
   source: ImportedMessageSource
 }
@@ -168,11 +148,6 @@ const dateOf = (value: unknown, fallback: Date): Date => {
 const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.flatMap((item) => (typeof item === "string" ? [item] : [])) : []
 
-/**
- * A comment's via objects, in the order the import reads them: `metadata.via` (where Zendesk's example response of
- * the comments keeps it), then the comment's own `via` (the field the reference lists). The sender, the recipient,
- * each list, and the channel are each taken whole from the first one that has them.
- */
 const viasOf = (comment: ZendeskFullComment): ZendeskVia[] =>
   [comment.metadata?.via, comment.via].filter((via): via is ZendeskVia => typeof via === "object" && via !== null)
 
@@ -192,11 +167,6 @@ function firstList<T>(vias: ZendeskVia[], pick: (via: ZendeskVia) => T[]): T[] {
   return []
 }
 
-/**
- * The email identifiers Zendesk recorded for a comment: its Message-ID (`metadata.system.message_id`, not in Zendesk's
- * reference, read when present), the original sender and recipients of its via objects (`metadata.via` first, then
- * `via`); or the mark that neither recorded any.
- */
 export function emailOf(comment: ZendeskFullComment): EmailIdentifiers {
   const system = (comment.metadata?.system ?? {}) as Record<string, unknown>
   const rawId = text(system.message_id)
@@ -206,7 +176,6 @@ export function emailOf(comment: ZendeskFullComment): EmailIdentifiers {
     strings(via.source?.from?.original_recipients).flatMap((value) => addressOf(value) ?? []),
   )
   const cc = firstList(vias, (via) => strings(via.source?.to?.email_ccs).flatMap((value) => addressOf(value) ?? []))
-  // A sender or a recipient as one pair (its address and name from the same via object), never mixed.
   const party = (side: "from" | "to") =>
     first(vias, (via) => {
       const address = addressOf(via.source?.[side]?.address)
@@ -226,7 +195,6 @@ export function emailOf(comment: ZendeskFullComment): EmailIdentifiers {
   }
 }
 
-/** The channel a comment came by: `metadata.via` first, then `via`. */
 function channelOf(comment: ZendeskFullComment): string | null {
   return first(viasOf(comment), (via) =>
     typeof via.channel === "string" || typeof via.channel === "number" ? String(via.channel) : null,
@@ -235,43 +203,29 @@ function channelOf(comment: ZendeskFullComment): string | null {
 
 const isAgent = (user: ZendeskUser | undefined) => user?.role === "agent" || user?.role === "admin"
 
-/** A file the manifest holds (status ok): what the import reads from the archive and stores (plan 5.2). */
 export interface ArchivedFile {
   id: string
   name: string | null
-  /** The type Zendesk declared, as the manifest keeps it. */
   declaredType: string | null
   inline: boolean
   sha256: string
   bytes: number
-  /** The address Zendesk gave the file, which an inline image in the comment's HTML names. */
   contentUrl: string | null
 }
 
 export interface FileFacts {
   files: ImportedMessageSource["files"]
   failed: { id: string; name: string | null }[]
-  /** The files the manifest holds, in the comment's order, each once. */
   archived: ArchivedFile[]
-  /** The files whose ID the import cannot use, so it cannot find them in the manifest: reported, never dropped. */
   unusable: { name: string | null }[]
 }
 
-/**
- * An attachment's ID as the manifest keys it (`String(attachment.id)`): a comment attachment's number, or a side
- * conversation attachment's string (Zendesk's Side Conversation Attachments reference shows one such as
- * `01M1BJQJ58GFNNX614V04CHXTS`). Only letters, digits, `_`, and `-`, as it is part of the file's `cid:`.
- */
 const attachmentId = (value: unknown): string | null =>
   (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) ||
   (typeof value === "string" && /^[0-9A-Za-z_-]{1,64}$/.test(value))
     ? String(value)
     : null
 
-/**
- * A comment's files as the manifest records them: those it holds are imported (plan 5.2), the others reported, and
- * one whose ID the import cannot use is reported too.
- */
 export function filesOf(attachments: unknown, manifest: Manifest): FileFacts {
   const files: ImportedMessageSource["files"] = []
   const failed: FileFacts["failed"] = []
@@ -307,16 +261,8 @@ export function filesOf(attachments: unknown, manifest: Manifest): FileFacts {
   return { files, failed, archived, unusable }
 }
 
-/** The content ID an imported file gets, which a `cid:` image of its message's HTML names (plan 5.2). */
 export const importedContentId = (attachmentId: string) => `zendesk-${attachmentId}`
 
-/**
- * The `cid:` address an image of a comment's HTML gets when its address is the Zendesk address of one of the comment's
- * own files the manifest holds (plan 5.2): the image then shows the file stored with the message, and nothing is
- * fetched. Any other image keeps its address (a remote image stays behind the remote-image rule). Matched on the exact
- * address the manifest keeps (`content_url`); Zendesk's reference does not say how its HTML names inline images, so
- * this stays unverified until a real archive.
- */
 export function inlineImages(files: ArchivedFile[]): { rewrite: (src: string) => string | null; used: Set<string> } {
   const byUrl = new Map(files.flatMap((file) => (file.contentUrl ? [[file.contentUrl, file.id] as const] : [])))
   const used = new Set<string>()
@@ -331,10 +277,6 @@ export function inlineImages(files: ArchivedFile[]): { rewrite: (src: string) =>
   }
 }
 
-/**
- * A comment: public from an end user is incoming, public from an agent is an outgoing reply, private is an internal
- * note. An unknown author is taken as an end user. The text is Zendesk's plain body, else its body.
- */
 export function commentMessage(
   ticketId: number,
   comment: ZendeskFullComment,
@@ -397,7 +339,6 @@ export function commentMessage(
   }
 }
 
-/** Each message of a side conversation, as an internal note (plan 5.1): its subject, sender, and text. */
 export function sideMessages(
   ticketId: number,
   sides: ZendeskSideConversation[],

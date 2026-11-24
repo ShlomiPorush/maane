@@ -32,7 +32,6 @@ afterEach(async () => {
 
 const SUPPORT = "support@example.com"
 
-/** A harness with one organization whose exact address is the default. */
 async function live(): Promise<IntakeHarness & { org: string }> {
   intake = await startIntake(clamd)
   const org = await intake.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
@@ -56,7 +55,6 @@ describe("tickets", () => {
     const fallback = h.graph.add(mime({ to: "unknown@example.com" }), { receivedAt: at(3) })
     await h.round()
     const one = await h.ticketOf(first)
-    // To has no support address; Cc has one: it decides, and the concrete address is kept.
     expect(one).toMatchObject({ organizationId: other, supportAddress: "billing@example.com", status: "new" })
     expect(one?.referenceCode).toMatch(REFERENCE_CODE)
     expect(await h.participantsOf(one?.id ?? "")).toEqual(["dana@example.com", "ron@example.com"])
@@ -114,7 +112,6 @@ describe("tickets", () => {
 
   it("treats a Message-ID on messages of two tickets as ambiguous in the header layer", async () => {
     const h = await live()
-    // The same Message-ID, other content, from two people: two messages, two tickets, the second flagged.
     const a = h.graph.add(mime({ messageId: "dup@example.com", text: { content: "one" } }), { receivedAt: at(1) })
     const b = h.graph.add(
       mime({ messageId: "dup@example.com", from: "Ron <ron@example.com>", text: { content: "two" } }),
@@ -136,7 +133,6 @@ describe("tickets", () => {
     const reused = h.graph.add(mime({ messageId: "twice@example.com", text: { content: "something else" } }), {
       receivedAt: at(3),
     })
-    // The same Message-ID, From, and content, but another Date: not a copy.
     const otherDate = h.graph.add(Buffer.from(raw.toString("latin1").replace("10:00:00", "11:00:00"), "latin1"), {
       receivedAt: at(4),
     })
@@ -146,7 +142,6 @@ describe("tickets", () => {
     expect(await h.recordOf(copy)).toMatchObject({ outcome: "copy", matchedTicketId: original.ticketId })
     expect(await h.messageOf(reused)).toMatchObject({ duplicateOf: null, reviewFlags: ["reused_message_id"] })
     expect((await h.messageOf(otherDate)).duplicateOf).toBeNull()
-    // Two copies with a Date mailparser cannot parse: no date on either, so the second is a copy.
     const malformed = Buffer.from(
       mime({ messageId: "baddate@example.com" })
         .toString("latin1")
@@ -157,13 +152,11 @@ describe("tickets", () => {
       h.graph.add(malformed, { receivedAt: at(9) }),
       h.graph.add(Buffer.from(malformed), { receivedAt: at(10) }),
     ]
-    // Two copies without a Date header: equal dates, so the second is a copy.
     const undated = mime({ messageId: "undated@example.com", date: null })
     const undatedIds = [
       h.graph.add(undated, { receivedAt: at(7) }),
       h.graph.add(Buffer.from(undated), { receivedAt: at(8) }),
     ]
-    // A message without a Message-ID is never a copy.
     const bare = mime({ messageId: null })
     const noId = [h.graph.add(bare, { receivedAt: at(5) }), h.graph.add(Buffer.from(bare), { receivedAt: at(6) })]
     await h.round()
@@ -243,7 +236,6 @@ describe("missing originals", () => {
     const original = h.graph.add(mime({ messageId: "same-round@example.com" }), { receivedAt: at(2) })
     await h.round()
     expect((await h.ticketOf(original))?.id).toBe((await h.ticketOf(reply))?.id)
-    // The reply was stored first, so it does not wait for the original: the original joins it late.
     expect(await h.recordOf(original)).toMatchObject({ outcome: "joined", matchLayer: "original" })
     expect(await h.tickets()).toHaveLength(1)
   })
@@ -271,14 +263,12 @@ describe("missing originals", () => {
     const reply = h.graph.add(mime({ inReplyTo: "real@example.com" }), { receivedAt: at(5) })
     await h.round()
     const danas = await h.ticketOf(reply)
-    // Mallory sends a message carrying the Message-ID Dana's ticket waits for.
     const forged = h.graph.add(mime({ messageId: "real@example.com", from: "Mallory <mallory@example.com>" }), {
       receivedAt: at(6),
     })
     await h.round()
     expect((await h.ticketOf(forged))?.id).not.toBe(danas?.id)
     expect((await h.ticketOf(forged))?.reviewFlags).toEqual(["sender_not_participant"])
-    // Dana's real original arrives later and still joins her ticket.
     const original = h.graph.add(mime({ messageId: "real@example.com", text: { content: "the real one" } }), {
       receivedAt: at(7),
     })
@@ -324,7 +314,6 @@ describe("no default address", () => {
     await h.round()
     expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
     for (const id of ids) expect(await h.messageOf(id)).toMatchObject({ state: "stored", processAttempts: 0 })
-    // Calling one message directly does nothing either: it stays stored, with no record.
     await h.processor.processOne((await h.messageOf(ids[0] ?? "")).id)
     expect(await h.database.db.select().from(intakeRecord)).toEqual([])
     expect(await h.tickets()).toEqual([])
@@ -412,7 +401,6 @@ describe("review round 2", () => {
       receivedAt: at(2),
     })
     await h.round()
-    // The original waits for the scanner, and Ron's reply waits for the original.
     expect((await h.messageOf(original)).state).toBe("stored")
     expect((await h.messageOf(ron)).state).toBe("stored")
     state.down = false
@@ -437,7 +425,6 @@ describe("review round 2", () => {
     const original = h.graph.add(mime({ messageId: "thread@example.com" }), { receivedAt: at(1) })
     await h.round()
     const opened = await h.ticketOf(original)
-    // Mallory sends records with the thread's Message-ID that wait for the scanner, before and after Dana's reply.
     const attack = (n: number) =>
       h.graph.add(
         mime({
@@ -451,10 +438,8 @@ describe("review round 2", () => {
     await h.sync.run()
     const reply = h.graph.add(mime({ inReplyTo: "thread@example.com" }), { receivedAt: at(10) })
     await h.sync.run()
-    // Right after storing, the reply waits for the attack records stored before it.
     expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
     expect((await h.messageOf(reply)).state).toBe("stored")
-    // Mallory goes on: one more pair, stored just before the clock below, every few minutes.
     const after = [attack(3), attack(4)]
     await h.sync.run()
     const storedAt = (await h.messageOf(reply)).createdAt.getTime()
@@ -463,14 +448,11 @@ describe("review round 2", () => {
       .update(message)
       .set({ createdAt: new Date(later.getTime() - 2 * 60_000) })
       .where(inArray(message.graphId, after))
-    // The first pair stays stored strictly before the reply and still waits for the scanner: only the reply's own
-    // one-hour limit can release it.
     for (const id of before) {
       const row = await h.messageOf(id)
       expect(row.state).toBe("stored")
       expect(row.createdAt.getTime()).toBeLessThan(storedAt)
     }
-    // An hour after the reply was stored, it is processed whatever arrived meanwhile.
     const clock = new IntakeProcessor({ db: h.database.db, now: () => later })
     expect((await clock.run()).processed).toBe(1)
     expect((await h.messageOf(reply)).ticketId).toBe(opened?.id)
@@ -494,7 +476,6 @@ describe("the source and the queue", () => {
     const h = await live()
     const ids = [h.graph.add(mime()), h.graph.add(mime({ from: "Ron <ron@example.com>" }))]
     await h.sync.run()
-    // The worker stopped after stage one; Graph refuses; the worker starts again.
     h.graph.refuse(true)
     const boss = new PgBoss({ connectionString: h.database.url, schema: "pgboss" })
     await boss.start()

@@ -27,7 +27,6 @@ describe("pushPayload", () => {
     expect(shownName(`Dana${rlo} moc.elpmaxe${isolate}\n\tCustomer`)).toBe("Dana moc.elpmaxe Customer")
     expect([...shownName("x".repeat(500))]).toHaveLength(NAME_MAX)
     expect(shownName("   ")).toBe("")
-    // A display name that is, or holds, an address shows nothing.
     expect(shownName("dana@example.com")).toBe("")
     expect(shownName("Dana Customer (dana@example.com)")).toBe("")
     expect(pushPayload("en", "new_ticket", 3, "dana@example.com").body).toBe("")
@@ -43,10 +42,8 @@ describe("notificationOf", () => {
 
   it("notifies for a ticket a message opened, and for exactly what 4.1 counts as a customer reply", () => {
     expect(notificationOf(live("new_ticket"), "m")).toEqual({ kind: "new_ticket", ticketId: "t", messageId: "m" })
-    // Among them the follow-up a reply to a closed ticket opens (plan 4.1).
     expect(notificationOf(live("new_linked_ticket"), "m")?.kind).toBe("new_ticket")
     expect(notificationOf(live("joined"), "m")).toEqual({ kind: "customer_reply", ticketId: "t", messageId: "m" })
-    // Joined, but not the customer's mail: not a customer reply (isCustomerReply), so nobody is notified.
     for (const classification of ["automated", null])
       expect(notificationOf(live("joined", classification), "m")).toBeNull()
     for (const outcome of ["automated", "copy", "unreadable"]) expect(notificationOf(live(outcome), "m")).toBeNull()

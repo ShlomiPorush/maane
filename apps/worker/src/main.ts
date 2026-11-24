@@ -21,22 +21,15 @@ import { PushNotifier } from "./notify/push.ts"
 import { ReplySender } from "./send/sender.ts"
 import type { SmtpTimeouts } from "./send/smtp.ts"
 
-// The worker: the PostgreSQL job queue (pg-boss). It refuses to start on the same unsafe configuration as the
-// server, so a stack never runs half configured. index.ts starts it as configured; the stack check starts it the same
-// way with stand-ins' settings given to its own process only (apps/worker/src/testing/stack-worker.ts).
-
-/** How long one statement of a send may take, a lock wait included. */
 export const SEND_STATEMENT_TIMEOUT_MS = 30_000
 
 export interface WorkerOptions {
-  /** Settings this process alone uses, on top of the environment's (the stack check's stand-ins). */
   overrides?: Partial<Record<SettingKey, string>>
   timeouts?: SmtpTimeouts
 }
 
 export async function startWorker(options: WorkerOptions = {}): Promise<{ stop(): Promise<void> }> {
   const config = loadConfig()
-  // The store and its shard directories exist and are synced before any job runs (plan 2.2).
   const store = new FileStore(config.filesDir)
   await store.prepare()
   const database = openDatabase(config.databaseUrl, 5)
@@ -45,9 +38,7 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
     ...options.overrides,
   })
   const files = new FileService({ db: database.db, settings, scanner: clamdScanner, store })
-  // The intake source of the tenant and mailbox in effect is current before any job runs (plan 2.3).
   await reconcileIntakeSource(database.db, settings)
-  // The queue first: intake queues browser notifications through it, in the transaction that stores each message.
   const boss = new PgBoss({ connectionString: config.databaseUrl, schema: "pgboss" })
   boss.on("error", (error) => log.error("the job queue reported an error", errorFacts(error)))
   const notify: Notify = async (jobs, job) => {
@@ -63,8 +54,6 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
     process: new IntakeProcessor({ db: database.db, notify }),
     retry: new WaitingFiles({ db: database.db, settings, files, graph }),
   }
-  // Sending reads the database through a pool of its own whose every statement is bounded, so an attempt cannot hang
-  // on a read between its claim and its send (plan 3.1).
   const sending = openDatabase(config.databaseUrl, 2, { statementTimeoutMs: SEND_STATEMENT_TIMEOUT_MS })
   const sendSettings = new Settings(sending.db, createSettingsCipher(config.settingsKeys), {
     ...config.overrides,
@@ -76,7 +65,6 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
     sender: new ReplySender({
       db: sending.db,
       settings: sendSettings,
-      // A scheduled reply that sets pending starts a waiting period in its claim, whose reminder waits for its time.
       queue: (jobs, name, data, startAfter) => boss.send(name, data, { db: jobs, startAfter }),
       timeouts: options.timeouts,
     }),
@@ -87,7 +75,6 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
   const push = new PushNotifier({ db: database.db, vapid: config.vapid, publicUrl: config.publicUrl })
 
   await boss.start()
-  // The import from the Zendesk archive (plan 5.1), read from its read-only mount.
   const zendeskImport = {
     pool: database.pool,
     importer: new ZendeskImport({ db: database.db, files, archiveDir: config.archiveDir }),

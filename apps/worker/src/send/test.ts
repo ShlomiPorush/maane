@@ -1,7 +1,3 @@
-// The SMTP connection test of one provider (plan 3.1), the `smtp-test` job the Settings page queues: nodemailer's
-// documented transporter.verify() connects with the saved settings (TLS required), logs in, and quits. It sends
-// nothing.
-
 import type { Settings } from "@maane/server/settings/service"
 import type { Provider, SmtpProblem, SmtpTestResult } from "@maane/shared"
 import { createTransport } from "nodemailer"
@@ -9,7 +5,6 @@ import { SMTP_TIMEOUTS, type SmtpTimeouts, smtpConfig } from "./smtp.ts"
 
 const RESPONSE_MAX = 500
 
-/** What an error of verify() means for the person reading the Settings page. */
 function problemOf(code: string | undefined): SmtpProblem {
   if (code === "EAUTH" || code === "ENOAUTH") return "auth"
   if (code === "ETLS") return "tls"

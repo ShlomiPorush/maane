@@ -1,24 +1,3 @@
-// A timed action at its time (plan 4.2), the `timed-action` job: one rule for every timed action
-// (apps/server/src/actions/timed.ts). In one transaction, after the ticket (FOR UPDATE) and the action (FOR UPDATE),
-// in the order every path takes them: the job's version must still be the action's and
-// the action still `scheduled` (else a change or a cancellation replaced it, and the job does nothing); the customer
-// must not have written since the action was made; and the send point's checks must pass (the From address still
-// the ticket's organization's, the author still allowed on it). A failed check ends the action without
-// sending, with its reason. Otherwise the reply is written from the version the server built, with its outbox row
-// (at most one per action and version) and its `send-reply` job, and the action becomes `handed`; the send point checks
-// it once more in the transaction that takes the row to `sending`. A rerun after a crash finds the action no longer
-// `scheduled` and makes no second message. The message gets a submission ID of its own on each run: the
-// composer's belongs to the scheduling, and a later version must never meet an earlier version's message.
-//
-// "Send and set pending" is not applied here: the send point's claim applies it, in the transaction that hands the
-// reply to `sending` (apps/worker/src/send/sender.ts), so a reply stopped before it goes leaves the status as it was.
-//
-// A reminder (plan 4.3) is the same rule's second kind: at its time, under the same locks, its waiting period must
-// still be Maane's own and open, the ticket still pending, the customer silent since, and the reply that started the
-// period not bounced (apps/server/src/reminders/checks.ts); then its email is built here, now, from the organization's
-// template (apps/server/src/reminders/mail.ts: 3.2's builder, without history, so without sharp), written with its
-// outbox row as a reply without an author, and checked once more at the send point. It never changes the status.
-
 import { randomUUID } from "node:crypto"
 import { lockAction, setActionState, ticketOfAction } from "@maane/server/actions/timed"
 import { SYSTEM, writeAudit } from "@maane/server/audit"
@@ -37,14 +16,11 @@ import type { ActionReason, Locale, MailAddress } from "@maane/shared"
 import { and, eq, sql } from "drizzle-orm"
 import type { Db as QueueDb } from "pg-boss"
 
-/** What one run did: wrote the reply (`handed`), found the job stale, or ended the action for this reason. */
 export type TimedResult = "handed" | "stale" | ActionReason
 
 export interface TimedActionsOptions {
   db: Db
-  /** The default language: a reminder's email is written in it (plan 4.3). */
   settings: Settings
-  /** Queues a job inside the transaction (pg-boss's documented `db` option). */
   queue: (db: QueueDb, name: string, data: object) => Promise<unknown>
 }
 
@@ -88,7 +64,6 @@ export class TimedActions {
         {
           ticketId: locked.id,
           authorUserId: action.authorUserId,
-          // Its own on each run, so a later version never meets this version's message.
           submissionId: randomUUID(),
           at,
           ready: {
@@ -132,7 +107,6 @@ export class TimedActions {
     })
   }
 
-  /** A reminder at its time (plan 4.3), in run's transaction with its locks held: checked, built, and written. */
   async #reminder(
     tx: Db,
     jobs: QueueDb,
@@ -163,7 +137,6 @@ export class TimedActions {
       {
         ticketId: locked.id,
         authorUserId: null,
-        // Its own on each run, so a later version never meets this version's message.
         submissionId: randomUUID(),
         at,
         ready,
@@ -187,19 +160,8 @@ export class TimedActions {
   }
 }
 
-/**
- * How long past its time a scheduled reply, a reminder, or a snooze waits for its own job before `timed-recover` queues
- * another.
- */
 export const OVERDUE = "5 minutes"
 
-/**
- * The `timed-recover` job (TIMED_RECOVER): queues again the `timed-action` job of every action still `scheduled` (a
- * scheduled reply or a reminder) and the
- * `snooze-end` job of every snooze still on, OVERDUE past their time by the database's clock. A job that failed for good,
- * or that the queue no longer holds after a long outage, is made up for; one that still runs meanwhile is harmless, as
- * an action's job names its version and a snooze ends only once. Returns how many it queued.
- */
 export async function requeueOverdue(
   db: Db,
   send: (name: string, data: object) => Promise<unknown>,
@@ -219,7 +181,6 @@ export async function requeueOverdue(
   return { actions: actions.length, snoozes: snoozes.length }
 }
 
-/** Runs a timed action and logs what failed around it: the queue tries again, and the version keeps it safe. */
 export async function timedActionJob(actions: TimedActions, actionId: string, version: number): Promise<TimedResult> {
   try {
     return await actions.run(actionId, version)

@@ -27,10 +27,6 @@ import { IntakeSync } from "../intake/sync.ts"
 import type { StandInClamd } from "./clamd.ts"
 import { type StandInGraph, startStandInGraph } from "./graph.ts"
 
-// The pieces of intake wired together for one integration test: a migrated database of its own, a file store in a
-// temporary directory, a stand-in Graph with a secret new for the test, the shared stand-in clamd, and the settings
-// that point at both (which make the stand-in's mailbox the current intake source).
-
 export interface IntakeHarness {
   database: Awaited<ReturnType<typeof createTestDatabase>>
   graph: StandInGraph
@@ -42,12 +38,10 @@ export interface IntakeHarness {
   processor: IntakeProcessor
   retry: WaitingFiles
   dir: string
-  /** A new organization with its addresses; returns its ID. */
   organization(
     name: string,
     addresses: { value: string; kind?: "exact" | "pattern"; isDefault?: boolean }[],
   ): Promise<string>
-  /** Stage one, then stage two. */
   round(): Promise<void>
   messageOf(graphId: string): Promise<typeof message.$inferSelect>
   partsOf(graphId: string): Promise<(typeof messagePart.$inferSelect)[]>

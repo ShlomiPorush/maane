@@ -53,7 +53,6 @@ afterEach(async () => {
 
 const utf8 = (text: string) => Buffer.from(text, "utf8")
 const unique = (label: string) => utf8(`${label} ${randomBytes(8).toString("hex")}\n`)
-/** Every name in the shard of this hash that belongs to it: the file and any writer's temporary file. */
 const namesOf = async (sha256: string) =>
   (await readdir(join(dir, sha256.slice(0, 2)))).filter((name) => name.includes(sha256))
 const rowOf = async (sha256: string) =>
@@ -85,7 +84,6 @@ describe("scanning and storing", () => {
     expect((await readFile(path)).equals(bytes)).toBe(true)
     expect((await stat(path)).mode & 0o777).toBe(0o600)
     expect(await namesOf(outcome.sha256)).toEqual([outcome.sha256])
-    // The same content again: one file, one row.
     await files.store(bytes, await files.scan(bytes, "again.txt"))
     expect(await namesOf(outcome.sha256)).toEqual([outcome.sha256])
     expect((await database.db.select().from(storedFile)).length).toBe(1)
@@ -108,7 +106,6 @@ describe("scanning and storing", () => {
     expect(infected).toMatchObject({ status: "infected", signature: "Eicar-Test-Signature" })
     const blocked = await files.scan(unique("echo hi"), "run.bat")
     expect(blocked).toMatchObject({ status: "blocked_type", blockedBy: "bat" })
-    // A program renamed as a picture is blocked by its detected type.
     const program = Buffer.concat([Buffer.from("MZ"), Buffer.alloc(200)])
     expect(await files.scan(program, "photo.jpg")).toMatchObject({
       status: "blocked_type",
@@ -148,9 +145,7 @@ describe("the scanner contract", () => {
       expect(outcome.status).toBe("waiting")
       const [status] = await database.db.select().from(scannerCheck)
       expect(status).toMatchObject({ address: lax.address, ok: false, failedCheck: "encrypted_zip" })
-      // The scanner got EICAR and the encrypted ZIP, failed there, and never got the file itself.
       expect(lax.scanned).toHaveLength(2)
-      // Right after a failed self-test, a scan does not test again; the policy decides at once.
       await settings.update({ "scanner.unavailablePolicy": "allow" }, SYSTEM)
       expect((await files.scan(CLEAN_SAMPLE, "note.txt")).status).toBe("not_scanned")
       expect(lax.scanned).toHaveLength(2)
@@ -167,7 +162,6 @@ describe("the scanner contract", () => {
       expect((await files.scan(unique("second"), "b.txt")).status).toBe("clean")
       const [status] = await database.db.select().from(scannerCheck)
       expect(status).toMatchObject({ address: other.address, ok: true })
-      // The self-test samples, then the file.
       expect(other.scanned.length).toBe(5)
     } finally {
       await other.close()
@@ -201,7 +195,6 @@ describe("the audit row of a blocked file", () => {
     await database.db.transaction(async (tx) => {
       expect(await auditBlockedPart(tx, null, outcome, part)).toBe(true)
     })
-    // A retry of the same part, already blocked, writes nothing.
     await database.db.transaction(async (tx) => {
       expect(await auditBlockedPart(tx, "infected", outcome, part)).toBe(false)
     })
@@ -272,7 +265,6 @@ describe("the sweep", () => {
     })
     await holding
     const sweeping = files.sweep(0)
-    // The sweep found no row, and now waits for the writer's lock.
     await expect
       .poll(
         async () =>
@@ -302,7 +294,6 @@ describe("the sweep", () => {
     const holding = new Promise<void>((resolve) => {
       locked = resolve
     })
-    // A writer in the middle of its write: the lock taken, its temporary file on disk (aged, as by a slow clock).
     const writer = database.db.transaction(async (tx) => {
       await lockStoredFile(tx, sha256)
       await writeFile(temp, bytes)
@@ -379,7 +370,6 @@ describe("a crash between the rename and the commit", () => {
 
       expect((await readFile(files.storedPath(sha256))).equals(bytes)).toBe(true)
       expect(await rowOf(sha256)).toBeUndefined()
-      // Not yet a day old: kept. Older: removed, under the lock the killed writer no longer holds.
       expect((await files.sweep()).removed).toBe(0)
       await age(files.storedPath(sha256), 2)
       expect((await files.sweep()).removed).toBe(1)
