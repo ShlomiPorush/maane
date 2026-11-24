@@ -24,7 +24,7 @@ import { visibleOrganizations } from "../organizations/scope.ts"
 import type { Replies } from "../replies/service.ts"
 import { wellFormedText } from "../text.ts"
 import { CursorError, type FileAccess, Tickets } from "../tickets/service.ts"
-import type { ApiEnv } from "./request.ts"
+import { type ApiEnv, adminOnly } from "./request.ts"
 
 /**
  * Security headers a route declares for its successful answer, in place of the UI's (app.ts). A refusal or an error of
@@ -183,8 +183,7 @@ export function ticketRoutes(db: Db, filesDir: string, replies: Replies): Hono<A
     return serve(c, access, type === "text/plain" ? "text/plain; charset=utf-8" : type, "inline")
   })
 
-  routes.get("/intake", async (c) => {
-    if (c.get("user").role !== "admin") return c.json({ error: "forbidden" }, 403)
+  routes.get("/intake", adminOnly, async (c) => {
     const flagged = c.req.query("flagged")
     if (flagged !== undefined && flagged !== "1") return invalid(c)
     try {

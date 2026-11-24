@@ -20,20 +20,6 @@ const SubscribeBody = z.object({
 })
 const UnsubscribeBody = z.object({ endpoint: Endpoint })
 
-type Handler = (c: Context<ApiEnv>) => Promise<Response>
-
-/** Runs a handler and answers a refusal with its code; anything else goes to the app's error handler. */
-const refusals =
-  (handler: Handler): Handler =>
-  async (c) => {
-    try {
-      return await handler(c)
-    } catch (error) {
-      if (error instanceof Refusal) return c.json({ error: error.code, ...error.details }, error.status)
-      throw error
-    }
-  }
-
 async function body<T>(c: Context<ApiEnv>, schema: z.ZodType<T>): Promise<T> {
   const parsed = schema.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) throw new Refusal("push_subscription_invalid", 400)
@@ -44,31 +30,22 @@ export function notificationRoutes(subscriptions: Subscriptions, vapidPublicKey:
   const routes = new Hono<ApiEnv>()
 
   // The key this device subscribes with, and whether the device's subscription (if it has one) is the user's own.
-  routes.post(
-    "/state",
-    refusals(async (c) => {
-      const { endpoint } = await body(c, StateBody)
-      const on = endpoint !== null && (await subscriptions.isOn(c.get("user").id, endpoint))
-      return c.json({ publicKey: vapidPublicKey, on })
-    }),
-  )
+  routes.post("/state", async (c) => {
+    const { endpoint } = await body(c, StateBody)
+    const on = endpoint !== null && (await subscriptions.isOn(c.get("user").id, endpoint))
+    return c.json({ publicKey: vapidPublicKey, on })
+  })
 
-  routes.put(
-    "/subscription",
-    refusals(async (c) => {
-      await subscriptions.subscribe(c.get("user").id, await body(c, SubscribeBody))
-      return c.json({ on: true })
-    }),
-  )
+  routes.put("/subscription", async (c) => {
+    await subscriptions.subscribe(c.get("user").id, await body(c, SubscribeBody))
+    return c.json({ on: true })
+  })
 
-  routes.delete(
-    "/subscription",
-    refusals(async (c) => {
-      const { endpoint } = await body(c, UnsubscribeBody)
-      await subscriptions.unsubscribe(c.get("user").id, endpoint)
-      return c.json({ on: false })
-    }),
-  )
+  routes.delete("/subscription", async (c) => {
+    const { endpoint } = await body(c, UnsubscribeBody)
+    await subscriptions.unsubscribe(c.get("user").id, endpoint)
+    return c.json({ on: false })
+  })
 
   return routes
 }

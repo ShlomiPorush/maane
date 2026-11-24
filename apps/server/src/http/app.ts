@@ -29,6 +29,7 @@ import { Geo } from "../links/geo.ts"
 import { Links } from "../links/service.ts"
 import { errorFacts, log, loggedPath } from "../log.ts"
 import { Subscriptions } from "../notifications/service.ts"
+import { Refusal } from "../organizations/refusal.ts"
 import { Organizations } from "../organizations/service.ts"
 import { Replies } from "../replies/service.ts"
 import { type Settings, SettingsError } from "../settings/service.ts"
@@ -39,7 +40,7 @@ import { linkRoutes } from "./links.ts"
 import { notificationRoutes } from "./notifications.ts"
 import { organizationRoutes } from "./organizations.ts"
 import { replyRoutes } from "./replies.ts"
-import type { ApiEnv, AppUser } from "./request.ts"
+import { type ApiEnv, adminOnly } from "./request.ts"
 import { ticketRoutes } from "./tickets.ts"
 import { workflowRoutes } from "./workflow.ts"
 
@@ -68,7 +69,6 @@ export interface AppContext {
   archiveDir: string
 }
 
-type User = AppUser
 type Env = ApiEnv
 
 /** The output the worker's self-test job returns, read back with its shape checked. */
@@ -240,13 +240,8 @@ export function createApp(ctx: AppContext) {
     await next()
   })
 
-  const adminOnly = async (
-    c: { get: (k: "user") => User; json: (b: unknown, s: 403) => Response },
-    next: () => Promise<void>,
-  ) => {
-    if (c.get("user").role !== "admin") return c.json({ error: "forbidden" }, 403)
-    await next()
-  }
+  // Every route under /admin, here or in a router, is for admins: after the checks above, before any route.
+  api.use("/admin/*", adminOnly)
 
   api.get("/me", (c) => c.json(c.get("user")))
 
@@ -367,7 +362,7 @@ export function createApp(ctx: AppContext) {
 
   // An agent's display name, which every reply's From line carries (plan 3.1). Better Auth's documented server API
   // updates it, with the admin's own session and the name only; its HTTP route /admin/update-user stays closed.
-  api.put("/admin/users/:id/name", adminOnly, async (c) => {
+  api.put("/admin/users/:id/name", async (c) => {
     const userId = c.req.param("id")
     const parsed = AgentName.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success || userId.length === 0 || userId.length > 200) return c.json({ error: "name_invalid" }, 400)
@@ -429,6 +424,7 @@ export function createApp(ctx: AppContext) {
   app.onError((error, c) => {
     // An error answer never keeps a policy its route declared for success.
     c.set("security", undefined)
+    if (error instanceof Refusal) return c.json({ error: error.code, ...error.details }, error.status)
     log.error("request failed", { path: loggedPath(new URL(c.req.url).pathname), ...errorFacts(error) })
     return c.json({ error: "internal" }, 500)
   })
