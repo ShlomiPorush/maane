@@ -1,6 +1,6 @@
 # Maane product requirements
 
-Status: approved by the owner, not implemented. Nothing in this document exists yet. The repository contract, the order of work, and the status of each part are in [project-foundation.md](project-foundation.md).
+Status: approved by the owner and built: phases 0 to 6 are merged on `main`, and no version is released yet. The repository contract, the order of work, and the status of each part are in [project-foundation.md](project-foundation.md).
 
 Maane is a self-hosted helpdesk for email only. It replaces the owner's Zendesk account and keeps all Zendesk history. Correct Hebrew and right-to-left text, in the agent UI and in the email customers receive, is the hard requirement. Volume is low.
 
