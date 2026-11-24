@@ -2,11 +2,6 @@ import { randomBytes } from "node:crypto"
 import { connect, createServer } from "node:net"
 import { resetState, saveState } from "./state.ts"
 
-/**
- * Forgets the shared state of an earlier run, makes a password for the first admin of this run, and, with E2E_TARGET
- * (host:port, set by scripts/verify.sh for its throwaway stack), forwards 127.0.0.1:8095 to the server, so pages load
- * from the stack's public URL and every request carries its Origin.
- */
 export default async function globalSetup(): Promise<(() => Promise<void>) | undefined> {
   resetState()
   const target = process.env.E2E_TARGET

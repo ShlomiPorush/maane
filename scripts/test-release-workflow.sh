@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Tests the wiring of .github/workflows/release.yml: which jobs and steps run on the two CI paths (a
-# reused green CI run, or the CI run by the release) with and without dry_run, and what the Release
-# step passes to scripts/release.sh. The job and step conditions are read from the file and evaluated
-# with Node against each case; the Release step's script runs with stand-ins for git, docker and
-# release.sh. Run with the guards (scripts/lib/guards.sh).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,10 +19,6 @@ check() {
   fi
 }
 
-# --- the parts of the workflow ---------------------------------------------------------------
-
-# Writes the conditions and the Release step's script to $WORK: verify-if, release-if, recheck-if,
-# release-step-if (empty when the step has none) and release-run. Fails when a part is missing.
 node - "$WORKFLOW" "$WORK" <<'EOF' || {
 const fs = require("node:fs")
 const [file, out] = process.argv.slice(2)
@@ -75,11 +66,6 @@ EOF
   exit 1
 }
 
-# Evaluates a condition for one case: evaluate KIND EXPR FIND_RESULT REUSE VERIFY_RESULT DRY_RUN
-# [CANCELLED] [REF], with KIND job or step. Exits 0 when it holds, 1 when it does not and 2 on an
-# expression with names or operators these conditions do not use. A job condition without a status
-# function gets GitHub's implicit success() of the jobs it needs; for a step, the earlier steps of
-# its job are taken to have succeeded.
 evaluate() {
   node - "$@" <<'EOF'
 const [kind, expr, find, reuse, verify, dryRun, cancelled = "false", ref = "refs/heads/main"] = process.argv.slice(2)
@@ -108,9 +94,6 @@ VERIFY_IF="$(cat "$WORK/verify-if")"
 RELEASE_IF="$(cat "$WORK/release-if")"
 RECHECK_IF="$(cat "$WORK/recheck-if")"
 
-# --- the two paths, with and without a dry run -----------------------------------------------
-
-# The verify job needs only find, so its own result is given as success.
 for dry in false true; do
   check "reused CI (dry_run=$dry): verify is skipped" skips job "$VERIFY_IF" success true success "$dry"
   check "reused CI (dry_run=$dry): the release job runs" runs job "$RELEASE_IF" success true skipped "$dry"
@@ -120,8 +103,6 @@ for dry in false true; do
   check "fresh CI (dry_run=$dry): no check of a reused run" skips step "$RECHECK_IF" success false success "$dry"
 done
 check "the Release step runs whenever its job runs" [ -z "$(cat "$WORK/release-step-if")" ]
-
-# --- what stops the release job --------------------------------------------------------------
 
 for verify in failure cancelled skipped; do
   check "fresh CI, verify $verify: no release" skips job "$RELEASE_IF" success false "$verify" false
@@ -136,8 +117,6 @@ check "find gave no result: no verify" skips job "$VERIFY_IF" success "" success
 check "the run was cancelled: no release" skips job "$RELEASE_IF" success true skipped false true
 check "not on main: no release" skips job "$RELEASE_IF" success true skipped false false refs/heads/other
 check "not on main: no verify" skips job "$VERIFY_IF" success false success false false refs/heads/other
-
-# --- what the Release step passes to release.sh ----------------------------------------------
 
 mkdir -p "$WORK/bin" "$WORK/repo/scripts"
 cat >"$WORK/bin/git" <<'EOF'
@@ -156,7 +135,6 @@ EOF
 chmod +x "$WORK/bin/git" "$WORK/bin/docker" "$WORK/repo/scripts/release.sh"
 SHA="1111111111111111111111111111111111111111"
 
-# Runs the step's script as GitHub runs a bash step; sets RC.
 release_step() {
   export CALLS="$WORK/calls"
   : >"$CALLS"
@@ -175,9 +153,6 @@ check "dry_run=false: the step succeeds" [ $RC -eq 0 ]
 check "  and releases without --dry-run" called "release.sh --target ghcr --bump minor --skip-verify --expect-sha $SHA"
 check "  after logging in to GHCR" called "docker login ghcr.io --username actor --password-stdin"
 
-# --- the CI the release calls ----------------------------------------------------------------
-
-# Read as lines, not through yq: YAML 1.1 reads the key "on" as a boolean.
 CI_FILE="$REPO/.github/workflows/ci.yml"
 check "the verify job calls ci.yml" grep -qx "    uses: ./.github/workflows/ci.yml" "$WORKFLOW"
 check "ci.yml can be called (workflow_call)" grep -qx "  workflow_call:" "$CI_FILE"

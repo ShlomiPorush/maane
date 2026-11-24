@@ -5,9 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Archive, type ArchiveState } from "./archive.ts"
 import { ArchiveReader } from "./reader.ts"
 
-// The archive reader's own behavior, on files written here (no backup run): state.json is parsed again only when the
-// file changed, and the newest record of each ticket and user is chosen page by page.
-
 let dir: string
 
 beforeEach(async () => {
@@ -35,11 +32,9 @@ describe("the archive reader", () => {
     await reader.mark()
     expect(first).toEqual({ runs: 7, coveredUntil: "2025-05-01T09:00:00.000Z", locked: false })
     expect(parsed).toHaveBeenCalledTimes(1)
-    // The same length of text (7 to 8 runs, a time of the same form), saved through a temporary name and a rename.
     await archive.saveState({ ...state, runs: 8, coveredUntil: "2025-05-01T09:01:00.000Z" })
     expect(await reader.mark()).toEqual({ runs: 8, coveredUntil: "2025-05-01T09:01:00.000Z", locked: false })
     expect(parsed).toHaveBeenCalledTimes(2)
-    // The backup's lock is looked at every time.
     await writeFile(join(dir, ".lock"), "{}\n")
     expect((await reader.mark()).locked).toBe(true)
     expect(parsed).toHaveBeenCalledTimes(2)

@@ -110,10 +110,7 @@ function parse(argv: string[]): Parsed {
   return { command, out: values.out, subdomain: subdomain.toLowerCase(), email, maxFileMb }
 }
 
-/** True when the path, or the nearest folder above it that exists, belongs to a Git working tree. */
 export async function insideGitWorkTree(path: string): Promise<boolean> {
-  // The physical path: the nearest folder that exists, with every link and junction resolved, so a link outside a
-  // repository that points into one is seen for what it is. A folder that cannot be read refuses, to be safe.
   let existing = resolve(path)
   for (;;) {
     try {

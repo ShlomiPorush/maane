@@ -2,17 +2,11 @@ import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 
-/**
- * A stand-in Zendesk API for tests, on 127.0.0.1. Files live on a second server (another origin), which the
- * API redirects to, the way Zendesk hands attachments to its content host. Every record is invented.
- */
 export interface StandInFile {
-  /** Zendesk's attachment ID: a number, or a string such as a side conversation attachment's. */
   id: number | string
   name: string
   content: Buffer
   inline?: boolean
-  /** "redirect": served by the file host after a redirect; "direct": served by the API host; "missing": 404. */
   serve: "redirect" | "direct" | "missing"
 }
 
@@ -21,7 +15,6 @@ export interface StandInComment {
   public: boolean
   body: string
   files: StandInFile[]
-  /** More fields of the comment record (author_id, html_body, created_at, via, metadata), as Zendesk names them. */
   extra?: Record<string, unknown>
 }
 
@@ -30,13 +23,9 @@ interface Ticket {
   status: string
   updatedAt: string
   comments: StandInComment[]
-  /** The comments endpoint answers 404: deleted after the export listed it. */
   gone?: boolean
-  /** More fields of the ticket record (brand_id, requester_id, tags, custom_fields, via), as Zendesk names them. */
   record?: Record<string, unknown>
-  /** The audits, in place of the ones made from the comments. */
   audits?: Record<string, unknown>[]
-  /** Side conversations in place of ticket 1's own: each with its events, and the files their messages carry. */
   sides?: { id: string; subject: string; events: Record<string, unknown>[]; files?: StandInFile[] }[]
 }
 
@@ -46,39 +35,26 @@ export class StandInZendesk {
   readonly authorization: string
   apiOrigin = ""
   fileOrigin = ""
-  /** Authorization headers the file host received. Must stay empty. */
   readonly fileHostAuthorizations: string[] = []
   readonly requests: string[] = []
-  /** After this many API requests every API request answers 500, to stop a run part way. */
   failAfter = Number.POSITIVE_INFINITY
-  /** Every API request whose path and query this returns true for answers 500. */
   failWhen: ((pathAndQuery: string) => boolean) | null = null
-  /** The ticket export answers with an ID that tries to leave the archive folder. */
   badTicketId = false
-  /** The Date header of the last ticket export page. */
   lastDate: string | null = null
-  /** Tickets deleted in Zendesk right after their comments and audits were read: side conversations answer 404. */
   readonly deletedDuringSave = new Set<number>()
-  /** A collection whose next link points at another origin. */
   foreignLinkIn: string | null = null
-  /** Collections that answer 403, as for an account without the feature. */
   readonly forbiddenCollections = new Set<string>()
-  /** False: the account has no side conversations add-on, and its routes answer 404. */
   sideConversationsAvailable = true
-  /** More side conversations listed for ticket 1 after its own; their events answer 404, which stops a run. */
   readonly brokenSideConversations: string[] = []
-  /** Ticket 1's side conversation, with one message that carries a file. */
   readonly sideFile: StandInFile = { id: 401, name: "side.txt", content: randomBytes(48), serve: "redirect" }
 
   readonly tickets = new Map<number, Ticket>()
-  /** The ticket export's change log; a cursor is a position in it. */
   readonly ticketLog: number[] = []
   readonly users: { id: number; name: string; email: string | null; role?: string }[] = [1, 2, 3].map((id) => ({
     id,
     name: `User ${id}`,
     email: `user${id}@example.com`,
   }))
-  /** Records of a collection in place of the three made up from its name. */
   readonly collectionRecords = new Map<string, Record<string, unknown>[]>()
   readonly organizations = [1, 2, 3].map((id) => ({ id, name: `Organization ${id}`, updated_ts: 1000 + id }))
   #clock = Date.parse("2026-01-01T00:00:00Z")
@@ -126,7 +102,6 @@ export class StandInZendesk {
     this.ticketLog.push(id)
   }
 
-  /** Changes a ticket (its record, comments, audits, or side conversations): a new version in the export. */
   change(ticketId: number, edit: (ticket: Ticket) => void): void {
     const ticket = this.tickets.get(ticketId)
     if (!ticket) throw new Error(`no ticket ${ticketId}`)
@@ -135,7 +110,6 @@ export class StandInZendesk {
     this.ticketLog.push(ticketId)
   }
 
-  /** A new comment on an existing ticket: a new version in the export. */
   addComment(ticketId: number, comment: StandInComment): void {
     const ticket = this.tickets.get(ticketId)
     if (!ticket) throw new Error(`no ticket ${ticketId}`)
@@ -144,12 +118,10 @@ export class StandInZendesk {
     this.ticketLog.push(ticketId)
   }
 
-  /** The export returns the ticket again with the same updated_at, as Zendesk does for some system updates. */
   relist(ticketId: number): void {
     this.ticketLog.push(ticketId)
   }
 
-  /** A status change, such as a deletion: a new version in the export. */
   setStatus(ticketId: number, status: string): void {
     const ticket = this.tickets.get(ticketId)
     if (!ticket) throw new Error(`no ticket ${ticketId}`)
@@ -195,7 +167,6 @@ export class StandInZendesk {
     if (url.pathname.startsWith("/attachments/token/")) return this.#attachment(url, res)
     if (req.headers.authorization !== this.authorization) return send(res, 401, { error: "Couldn't authenticate you" })
 
-    // The first request of the users export is rate limited once.
     if (url.pathname.includes("/incremental/users/") && !this.#rateLimited.has("users")) {
       this.#rateLimited.add("users")
       res.writeHead(429, { "Retry-After": "0" })
@@ -241,7 +212,6 @@ export class StandInZendesk {
   }
 
   #ticketExport(url: URL, res: ServerResponse) {
-    // The Date header the client reads its coverage time from; kept so tests can compare.
     this.lastDate = new Date().toUTCString()
     res.setHeader("Date", this.lastDate)
     const start = Number(url.searchParams.get("cursor")?.replace("pos-", "") ?? 0)
@@ -398,7 +368,6 @@ export class StandInZendesk {
     const id = /^\/f\/([^/]+)$/.exec(req.url ?? "")?.[1]
     const file = this.allFiles().find((f) => String(f.id) === id)
     if (!file) return send(res, 404, { error: "not found" })
-    // No Content-Length: the size limit must hold while streaming, too.
     res.writeHead(200, { "Content-Type": "application/octet-stream" })
     res.end(file.content)
   }

@@ -1,4 +1,3 @@
-# Shared helpers for the workflow scripts. Source it; do not execute it.
 # shellcheck shell=bash
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -21,14 +20,12 @@ require_docker() {
   docker info >/dev/null 2>&1 || die "docker is installed but not reachable. Start Docker and try again."
 }
 
-# Builds the toolchain image (cached by Docker when nothing changed).
 build_toolchain() {
   require_docker
   docker build --quiet -f "$REPO_ROOT/docker/toolchain.Dockerfile" -t "$TOOLCHAIN_IMAGE" "$REPO_ROOT/docker" >/dev/null ||
     die "building the toolchain image failed"
 }
 
-# Runs a command inside the toolchain container with the repository mounted at /repo.
 in_toolchain() {
   mkdir -p "$CACHE_DIR/pnpm-store"
   local tty=()
@@ -45,7 +42,6 @@ in_toolchain() {
 }
 TOOLCHAIN_EXTRA_ARGS=()
 
-# 32 bytes from the kernel's cryptographically secure generator, as hex.
 random_hex() {
   od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
 }
@@ -54,7 +50,6 @@ install_deps() {
   in_toolchain "pnpm install --frozen-lockfile --reporter=append-only"
 }
 
-# Builds the Maane image (server, worker, and web UI in one) with the given tag.
 build_image() {
   local tag="$1" version="${2:-$1}"
   require_docker
@@ -63,7 +58,6 @@ build_image() {
     die "building maane:$tag failed"
 }
 
-# Fails when any process of a running Compose service runs as UID 0.
 check_non_root() {
   local project="$1" service cid uids
   shift
@@ -79,7 +73,6 @@ check_non_root() {
   done
 }
 
-# Fails unless each named service holds no capability, cannot gain privileges, and has a read-only root.
 check_hardening() {
   local project="$1" service cid
   shift
@@ -95,7 +88,6 @@ check_hardening() {
   done
 }
 
-# Refuses a data directory on the Windows file system: development and test data live on Linux.
 require_linux_dir() {
   local resolved
   resolved="$(realpath -m "$1")"
@@ -104,7 +96,6 @@ require_linux_dir() {
   esac
 }
 
-# Refuses a data directory inside the repository: a stack's database and keys must never be committable.
 require_outside_repo() {
   local resolved
   resolved="$(realpath -m "$1")"
@@ -113,8 +104,6 @@ require_outside_repo() {
   esac
 }
 
-# Removes a project-owned data directory. PostgreSQL's files belong to its own UID, so the contents are deleted
-# from a throwaway container.
 remove_data_dir() {
   local dir="$1"
   [ -d "$dir" ] || return 0
@@ -124,14 +113,9 @@ remove_data_dir() {
   rmdir "$dir"
 }
 
-# --- Stack secrets ---
-# A development or verification stack's database password and keys are generated on this machine into two owner-only
-# files next to the database they open: postgres.env (only what PostgreSQL needs) and app.env (what the server and
-# the worker need). The repository holds none of them.
 POSTGRES_ENV_NAMES=(POSTGRES_USER POSTGRES_DB POSTGRES_PASSWORD)
 APP_ENV_NAMES=(DATABASE_URL MAANE_AUTH_SECRETS MAANE_SETTINGS_KEYS)
 
-# A regular file, mode 600, with a non-empty value for every name given.
 env_file_valid() {
   local file="$1" name
   shift
@@ -142,16 +126,12 @@ env_file_valid() {
   done
 }
 
-# Creates postgres.env and app.env once, before PostgreSQL first starts, and never rewrites them. A database without
-# its files is refused: new values would not open it.
 ensure_stack_env() {
   local dir="$1" contents password tmp lock has_postgres=0 has_app=0
   require_linux_dir "$dir"
   require_outside_repo "$dir"
   mkdir -p "$dir/postgres"
   chmod 700 "$dir"
-  # One run at a time checks and publishes the pair. The kernel releases the lock however a run ends, so a run that
-  # holds it and finds only one of the files knows that the start which wrote it has stopped.
   exec {lock}>"$dir/.secrets.lock" || die "cannot open the lock in $dir"
   flock "$lock" || die "cannot lock $dir"
   if [ ! -e "$dir/postgres.env" ] && [ ! -e "$dir/app.env" ]; then
@@ -166,7 +146,6 @@ ensure_stack_env() {
       printf 'DATABASE_URL=postgres://maane:%s@postgres:5432/maane\nMAANE_AUTH_SECRETS=1:%s\nMAANE_SETTINGS_KEYS=1:%s\n' \
         "$password" "$(random_hex)" "$(random_hex)" >"$tmp/app.env"
     )
-    # ln never replaces a file, also not one another tool put there meanwhile.
     if ln "$tmp/postgres.env" "$dir/postgres.env" 2>/dev/null; then
       ln "$tmp/app.env" "$dir/app.env" 2>/dev/null || true
     fi
@@ -188,25 +167,14 @@ ensure_stack_env() {
   exec {lock}>&-
 }
 
-# --- Browser notification keys (plan 4.5) ---
-# The VAPID key pair the server and the worker read from app.env. It is made by web-push's documented
-# generateVAPIDKeys, which the image runs (dist/worker/vapid-keys.js), so it is added once the image is built. A
-# development data directory gets it once, also when its app.env is older than phase 4, and never a second one:
-# replacing it would disconnect every device's notifications. Verification and try-pr stacks are new for each run.
 VAPID_ENV_NAMES=(MAANE_VAPID_PUBLIC_KEY MAANE_VAPID_PRIVATE_KEY)
-# A line that sets either key in any form Compose's env_file parser reads: leading whitespace, `export `, and spaces
-# or another separator after the name. The name must end there, so MAANE_VAPID_PUBLIC_KEY_OLD and comments do not count.
 VAPID_LINE='^[[:space:]]*(export[[:space:]]+)?MAANE_VAPID_(PUBLIC|PRIVATE)_KEY([^][A-Za-z0-9_.-]|$)'
 
-# Prints a new pair as the two lines app.env takes, from the given image, without network or privileges.
 vapid_generator() {
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --entrypoint node "$1" dist/worker/vapid-keys.js
 }
 
-# Appends a VAPID pair to DIR/app.env when it holds none. Both keys there: nothing changes. One of them, an empty one,
-# or one in another form Compose reads (VAPID_LINE): refused, because a new pair would replace the one the devices
-# subscribed with. The output is never printed.
 ensure_vapid_keys() {
   local dir="$1" image="$2" file lock keys shape separator
   file="$dir/app.env"
@@ -224,11 +192,9 @@ ensure_vapid_keys() {
     die "$file already sets a VAPID key, but not both as plain NAME=value lines. Fix it by hand; a new pair would disconnect every device's notifications"
   fi
   keys="$(vapid_generator "$image")" || die "the VAPID key generator in $image failed; $file is unchanged"
-  # The generator's two lines exactly: a 65-byte public key and a 32-byte private key, base64url without padding.
   shape=$'^MAANE_VAPID_PUBLIC_KEY=[A-Za-z0-9_-]{87}\nMAANE_VAPID_PRIVATE_KEY=[A-Za-z0-9_-]{43}$'
   [[ "$keys" =~ $shape ]] ||
     die "the VAPID key generator in $image printed something unexpected; $file is unchanged"
-  # A last line without its newline would take the first key as part of its value.
   separator=""
   if [ -n "$(tail -c 1 "$file")" ]; then separator=$'\n'; fi
   (
@@ -241,19 +207,11 @@ ensure_vapid_keys() {
   info "Added a VAPID key pair for browser notifications to $file"
 }
 
-# --- Data and signature directories ---
-# Next to the database, a stack has DIR/data, the attachments the server and the worker share (owned by UID 1000, the
-# image's node user), and DIR/clamav, ClamAV's signatures (owned by UID 100, the clamav user). Both are created by a
-# root container, because the host user is not always UID 1000 (a CI runner is not) and can never be UID 100.
 FILES_OWNER="1000:1000"
 CLAMAV_OWNER="100:101"
-# Signatures kept between stacks, so freshclam does not download them for every verification run. Stacks never mount
-# it: each copies it in and out under CLAMAV_CACHE_LOCK, so runs in several checkouts at once do not mix their files.
 CLAMAV_CACHE="$CACHE_DIR/clamav"
 CLAMAV_CACHE_LOCK="$CACHE_DIR/clamav.lock"
 
-# Creates DIR/data and DIR/clamav when missing, and gives them their owners. An empty signature directory is filled
-# from the cache when the cache holds signatures; otherwise ClamAV downloads them on its first start.
 ensure_stack_dirs() {
   local dir="$1" lock
   require_linux_dir "$dir"
@@ -279,8 +237,6 @@ ensure_stack_dirs() {
   exec {lock}>&-
 }
 
-# Replaces the signature cache with the signatures of a running or stopped stack, as one swap of directories under
-# the lock, so a run that copies from the cache meanwhile never sees half of an update.
 save_clamav_cache() {
   local dir="$1" lock
   [ -e "$dir/clamav/main.cvd" ] || [ -e "$dir/clamav/main.cld" ] || return 0
@@ -307,8 +263,6 @@ DEV_PROJECT="maane-dev"
 DEV_COMPOSE_FILE="$REPO_ROOT/docker-compose-dev.yml"
 DEV_DEFAULT_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/maane-dev"
 
-# Runs Compose on the developer's copy of the development template. MAANE_PORT and MAANE_PUBLIC_URL may come from
-# the shell; nothing else does.
 dev_compose() {
   [ -f "$DEV_COMPOSE_FILE" ] || die "docker-compose-dev.yml is missing. Create it with:
   cp docker/docker-compose-dev.example.yml docker-compose-dev.yml"

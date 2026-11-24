@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# Repository guards. scripts/verify.sh runs this inside the toolchain container; run it there, not on the host.
-# Usage: bash scripts/lib/guards.sh [ROOT]. Without ROOT it also runs the tests of the release scripts.
-# Checks tracked files and new files that are not ignored in ROOT (default: this repository), so a violation
-# fails before it is committed. scripts/lib/test-guards.sh runs it against a scratch repository.
 set -euo pipefail
 cd "${1:-$(dirname "${BASH_SOURCE[0]}")/../..}"
-# grep -P reads \x{...} code points only in a UTF-8 locale; in C or POSIX it fails on the Hebrew range.
 export LC_ALL=C.UTF-8
 
 HEBREW_LOCALE=packages/shared/src/locales/he.json
@@ -15,8 +10,6 @@ BINARY_EXTENSIONS='png|jpg|jpeg|gif|webp|ico|woff2|pdf|mmdb'
 
 fail=0
 
-# The file lists come from git into files first, so a failing git stops the guards instead of leaving the lists
-# empty and every content check silently skipped. NUL-separated, so no file name is quoted or split.
 listing="$(mktemp)"
 eol_listing="$(mktemp)"
 trap 'rm -f -- "$listing" "$eol_listing"' EXIT
@@ -41,7 +34,6 @@ for file in "${files[@]}"; do
   [[ "${file,,}" =~ \.($BINARY_EXTENSIONS)$ ]] || text_files+=("$file")
 done
 
-# Line endings per file, from `git ls-files --eol`: "i/<index> w/<worktree> attr/<...>\t<path>".
 binary_files=()
 crlf_files=()
 while IFS= read -r -d '' entry; do
@@ -53,8 +45,6 @@ while IFS= read -r -d '' entry; do
   if [[ "$index" =~ ^i/(crlf|mixed)$ || "$worktree" =~ ^w/(crlf|mixed)$ ]]; then crlf_files+=("$path"); fi
 done <"$eol_listing"
 
-# Runs grep with the given arguments (ending with -- and the files) and prints file:line[:match].
-# No match is fine; a grep error (exit 2) stops the guards, so a broken pattern never passes silently.
 search() {
   local rc=0
   [ "${*: -1}" = -- ] && return 0
@@ -65,7 +55,6 @@ search() {
   fi
 }
 
-# Prints file:line, and what matched only outside CI: CI logs of a public repository must not repeat it.
 report() {
   local what="$1" file line match
   while IFS=: read -r file line match; do
@@ -78,7 +67,6 @@ report() {
 }
 
 echo "--- Binary content only in images, fonts, PDFs and GeoIP databases"
-# grep skips binary files, so a NUL byte would hide a file from every text guard below.
 if [ ${#binary_files[@]} -gt 0 ]; then
   echo "Only images, fonts, PDFs and GeoIP databases may be binary; the text guards cannot read these:"
   printf '  %s\n' "${binary_files[@]}"
@@ -86,7 +74,6 @@ if [ ${#binary_files[@]} -gt 0 ]; then
 fi
 
 echo "--- Text files are valid UTF-8"
-# In a UTF-8 locale grep does not match across a malformed byte, so one would hide a line from every text guard.
 invalid="$(search -l -a -x -v '.*' -- "${text_files[@]}")"
 if [ -n "$invalid" ]; then
   echo "These files are not valid UTF-8; the text guards cannot read them reliably:"
@@ -103,7 +90,6 @@ if [ -n "$hebrew" ]; then
 fi
 
 echo "--- No literal bidirectional control characters"
-# Unicode's Bidi_Control set: ALM, LRM, RLM, the embeddings and overrides, and the isolates.
 bidi="$(search -P '[\x{061C}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]' -- "${files[@]}")"
 if [ -n "$bidi" ]; then
   echo "Write bidirectional control characters as escapes, never as literal characters:"
@@ -112,7 +98,6 @@ if [ -n "$bidi" ]; then
 fi
 
 echo "--- IPv4 addresses only from loopback, 0.0.0.0 and the documentation ranges"
-# Four dot-separated numbers inside a longer dotted run (1.2.3.4.5) are not an address.
 ips="$(search -o -P '(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)' -- "${files[@]}" |
   awk -F: '{
     n = split($NF, o, ".")
@@ -128,9 +113,6 @@ if [ -n "$ips" ]; then
 fi
 
 echo "--- Environment files only as examples, with no secret values"
-# The repository holds no value a stack runs on, not even a "fake" or "dev-only" one: stacks generate theirs.
-# An environment file is any name that starts with .env or holds .env as a part: .env, .env.local, server.env,
-# .env.production.example. Only those that end in .example may be tracked, and their secrets stay empty.
 env_examples=()
 for file in "${files[@]}"; do
   name="${file##*/}"
@@ -145,7 +127,6 @@ for file in "${files[@]}"; do
       ;;
   esac
 done
-# A value is anything but nothing, "" or ''.
 secret_values="$(search -P \
   '^\s*(export\s+)?(DATABASE_URL|[A-Z0-9_]*(PASSWORD|SECRET|SECRETS|KEY|KEYS|TOKEN))\s*=\s*(?!""\s*(#.*)?$|'"''"'\s*(#.*)?$)[^\s#]' \
   -- "${env_examples[@]}")"
@@ -156,10 +137,6 @@ if [ -n "$secret_values" ]; then
 fi
 
 echo "--- No secret-like values"
-# High-confidence formats only: private key blocks, known token formats, credentials inside a URL.
-# Tests that need such a value assemble it at run time, so the literal text never matches.
-# In a URL, only a placeholder password passes: $NAME, ${...} (a shell variable or a template expression), %s,
-# <name>, or asterisks. Any scheme case and any username characters count.
 secret_pattern='-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----'
 secret_pattern+='|\bgh[pousr]_[A-Za-z0-9]{36,}'
 secret_pattern+='|\bgithub_pat_[A-Za-z0-9_]{22,}'
@@ -169,7 +146,6 @@ secret_pattern+='|\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}'
 secret_pattern+='|\bAIza[0-9A-Za-z_-]{35}'
 secret_pattern+='|\bapi-[A-F0-9]{32}\b'
 secret_pattern+='|\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
-# The user part may be empty, and neither part crosses into the path, query, or fragment (?, #, /).
 secret_pattern+='|\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@?#]*:'
 secret_pattern+='(?!(?:\$[A-Za-z_][A-Za-z0-9_]*|\$\{(?:[^{}]|\{[^{}]*\})*\}|%s|<[^\s<>@]*>|\*+)@)[^\s/@?#]+@'
 secrets="$(search -P -e "$secret_pattern" -- "${files[@]}")"
@@ -180,7 +156,6 @@ if [ -n "$secrets" ]; then
 fi
 
 echo "--- No build: in the Compose files"
-# Read as YAML, so quoting and flow style cannot hide the key.
 for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.example.yml; do
   [ -f "$file" ] || continue
   if ! built="$(yq -r '[(.services // {})[]? | select(type == "object" and has("build"))] | length' "$file" 2>/dev/null)"; then
@@ -193,8 +168,6 @@ for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.
 done
 
 echo "--- Compose interpolates only the plain \${VAR} form"
-# No default, no error message, no unbraced $VAR: a value is either literal or set by .env or the scripts. Every
-# string is read as YAML, so quoting cannot hide one; $$ is a literal dollar for the container.
 for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.example.yml; do
   [ -f "$file" ] || continue
   if ! values="$(yq -r '.. | strings' "$file" 2>/dev/null)"; then
@@ -202,7 +175,6 @@ for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.
     fail=1
     continue
   fi
-  # Names only, as for secrets: a default or an error message may hold a value that must not reach CI logs.
   # shellcheck disable=SC2016 # regular expressions, not shell expansions
   if grep -qP '\$(?!\{[A-Za-z_][A-Za-z0-9_]*\})' <<<"${values//\$\$/}"; then
     # shellcheck disable=SC2016
@@ -216,9 +188,6 @@ for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.
 done
 
 echo "--- Secrets reach containers only through env_file"
-# A secret set under environment: or interpolated by Compose shows in `docker compose config`, even with
-# --no-env-resolution. Names only: the names under environment: (map or list form), and every name Compose would
-# interpolate in any value ($$ is a literal dollar for the container).
 secret_name='(DATABASE_URL|[A-Z0-9_]*(PASSWORD|SECRET|SECRETS|KEY|KEYS|TOKEN))'
 for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.example.yml; do
   [ -f "$file" ] || continue
@@ -260,7 +229,6 @@ else
 fi
 
 echo "--- Locale files have the same keys"
-# A file that does not parse is named, never quoted: a JSON error message repeats the text around the fault.
 node -e '
   const fs = require("node:fs")
   const keys = (v, p = "") => (typeof v === "object" && v !== null)
@@ -282,7 +250,6 @@ node -e '
 }
 
 echo "--- LF line endings"
-# Index (i/) and working tree (w/) line endings; a file with CRLF in either fails.
 if [ ${#crlf_files[@]} -gt 0 ]; then
   echo "Files must use LF line endings:"
   printf '  %s\n' "${crlf_files[@]}"
@@ -290,10 +257,8 @@ if [ ${#crlf_files[@]} -gt 0 ]; then
 fi
 
 echo "--- GitHub Actions pinned to a commit SHA"
-# A Docker action pinned by digest. Built in two parts so this line does not read as a URL with a password.
 digest_pinned='^docker:'
 digest_pinned+='//[^[:space:]]+@sha256:[0-9a-f]{64}$'
-# Read as YAML, so quoting and flow style cannot hide a `uses`.
 for file in "${files[@]}"; do
   [[ "$file" =~ ^\.github/(workflows/[^/]+|actions/.+/action)\.ya?ml$ ]] || continue
   if ! uses="$(yq -r '.. | objects | .uses? // empty | strings' "$file" 2>/dev/null)"; then
@@ -317,9 +282,6 @@ for file in "${files[@]}"; do
 done
 if [ ${#scripts[@]} -gt 0 ]; then
   if [ -n "${CI:-}" ]; then
-    # In CI only the place and the check's code: a message can quote the script's own text, and the output of a
-    # public repository's CI must not repeat a line that may hold what another guard just found.
-    # Exit status 1 means findings; above 1 means the scripts could not be checked.
     rc=0
     json="$(shellcheck -x -f json1 "${scripts[@]}" 2>/dev/null)" || rc=$?
     if [ "$rc" -gt 1 ] || ! findings="$(jq -r '.comments[] | "  \(.file):\(.line):\(.column): SC\(.code)"' <<<"$json")"; then
@@ -363,7 +325,6 @@ while read -r mode _ _ path; do
   }
 done <<<"$modes"
 
-# The tests of the release scripts belong to this repository, not to the scratch repositories test-guards.sh guards.
 if [ $# -eq 0 ]; then
   echo "--- Release script: refusals and resume paths against a local remote"
   bash scripts/test-release.sh || fail=1

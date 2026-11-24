@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Releases a version: the release commit and tag, the image on GHCR, and the GitHub Release. Deploys
-# nothing. Normally run by the Release workflow (.github/workflows/release.yml), which verifies the
-# commit first; run by hand it runs scripts/verify.sh itself.
-# Usage: scripts/release.sh --target ghcr --bump <patch|minor|major> [--skip-verify --expect-sha SHA] [--dry-run]
 set -euo pipefail
 
 # shellcheck source=scripts/lib/common.sh
@@ -19,7 +15,6 @@ EXPECT_SHA=""
 SKIP_VERIFY=0
 DRY_RUN=0
 RESUME=0
-# One release at a time, also a run by hand next to the workflow: a ref on origin that only one run can create.
 LOCK_REF="refs/maane/release-lock"
 LOCK_COMMIT=""
 SRC_DIR=""
@@ -50,7 +45,6 @@ git_() { git -C "$REPO_ROOT" "$@"; }
 
 image_ref() { echo "$REGISTRY/$IMAGE:$1"; }
 
-# Reads the version from package.json content on stdin.
 version_in() {
   sed -nE 's/^  "version": "([0-9]+\.[0-9]+\.[0-9]+)",$/\1/p' | head -1
 }
@@ -69,8 +63,6 @@ unreleased_notes() {
   awk '/^## \[Unreleased\]/ { on = 1; next } /^## \[/ { on = 0 } on && NF' "$REPO_ROOT/CHANGELOG.md"
 }
 
-# Prints the notes of one released version from CHANGELOG content on stdin. Fails unless the
-# CHANGELOG has exactly one dated section for it, with at least one entry.
 release_notes() {
   local version="$1" text count notes
   text="$(cat)"
@@ -89,7 +81,6 @@ release_notes() {
   printf '%s\n' "$notes"
 }
 
-# Prints "present" or "missing" for a GitHub Release. Any other failure stops the release.
 release_state() {
   local out
   if out="$(gh release view "$1" --json tagName 2>&1)"; then
@@ -101,8 +92,6 @@ release_state() {
   fi
 }
 
-# Prints "missing", "match" (built from the given commit) or "other" for an image tag. A registry
-# that cannot be read stops the release: it must never count as a free version.
 image_state() {
   local ref="$1" revision="$2" out
   if ! out="$(docker buildx imagetools inspect "$ref" --format '{{json .Image}}' 2>&1)"; then
@@ -112,7 +101,6 @@ image_state() {
     fi
     die "cannot read $ref from the registry: $out"
   fi
-  # The JSON comes indented; compare without white space.
   if grep -qF "\"org.opencontainers.image.revision\":\"$revision\"" <<<"$(tr -d '[:space:]' <<<"$out")"; then
     echo match
   else
@@ -157,7 +145,6 @@ preflight() {
   [ -n "$current" ] || die "cannot read the version from package.json"
   VERSION="$(next_version "$current")"
   TAG="v$VERSION"
-  # Tags are immutable: an existing tag (origin's were fetched above) is never moved or reused.
   git_ rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "tag $TAG already exists"
   state="$(image_state "$(image_ref "$VERSION")" none)"
   [ "$state" = missing ] || die "$(image_ref "$VERSION") is already published"
@@ -177,15 +164,10 @@ create_tag() {
   git_ commit --quiet -m "Release $TAG"
   git_ tag -a "$TAG" -m "$TAG"
   info "Pushing the release commit and $TAG"
-  # Both or neither: a tag on origin is what a later run finishes. Never forced.
   git_ push --quiet --atomic origin HEAD:refs/heads/main "refs/tags/$TAG" ||
     die "pushing the release commit and $TAG failed, so nothing was published. Run the release again."
 }
 
-# Takes the release lock: pushes a commit made for this run to LOCK_REF, which git accepts only while the ref does not
-# exist (--force-with-lease with an empty expected value). Another run, or a run that was killed, holds it otherwise.
-# The commit message holds a random nonce: two runs on different machines with the same pid in the same second would
-# otherwise make the same commit, and git reports a push of the commit a ref already holds as up to date.
 take_lock() {
   local tree held
   tree="$(git_ hash-object -t tree -w /dev/null)"
@@ -201,7 +183,6 @@ take_lock() {
   fi
 }
 
-# Removes the lock this run took, and nothing else: the lease names this run's commit.
 cleanup() {
   [ -z "$SRC_DIR" ] || rm -rf "$SRC_DIR"
   if [ -n "$LOCK_COMMIT" ]; then
@@ -234,7 +215,6 @@ publish_image() {
   esac
   state="$(image_state "$ref" "$revision")"
   [ "$state" = match ] || die "$ref is not the image built from $TAG"
-  # :latest moves only once the version's image is there.
   info "Pointing $(image_ref latest) at $VERSION"
   docker buildx imagetools create --tag "$(image_ref latest)" "$ref" ||
     die "moving $(image_ref latest) failed. Run the release again to finish $TAG."
@@ -246,7 +226,6 @@ publish_release() {
   git_ show "$TAG:CHANGELOG.md" | release_notes "$VERSION" >"$notes"
   info "Creating the GitHub Release $TAG"
   if ! gh release create "$TAG" --verify-tag --title "Maane $VERSION" --notes-file "$notes"; then
-    # The request may have succeeded with its answer lost.
     state="$(release_state "$TAG")"
     [ "$state" = present ] || die "creating the GitHub Release $TAG failed. Run the release again to finish it."
     echo "    the GitHub Release $TAG exists"
@@ -289,7 +268,6 @@ main() {
   [ $SKIP_VERIFY -eq 0 ] || [ -n "$EXPECT_SHA" ] || die "--skip-verify needs --expect-sha of the verified commit"
 
   trap cleanup EXIT
-  # Before preflight, so the run that decides what to publish is the only one running.
   [ $DRY_RUN -eq 1 ] || take_lock
   preflight
   if [ $DRY_RUN -eq 1 ]; then

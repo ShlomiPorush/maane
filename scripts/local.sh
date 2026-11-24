@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Development stack: build the image, start, stop, inspect, and reset.
-# Usage: scripts/local.sh <build|up|start|down|status|logs|nuke>
 set -euo pipefail
 
 # shellcheck source=scripts/lib/common.sh
@@ -9,7 +7,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 PROJECT="$DEV_PROJECT"
 export MAANE_DATA_DIR="${MAANE_DATA_DIR:-$DEV_DEFAULT_DATA_DIR}"
 SERVICES=(server worker postgres clamav)
-# The services that run with no capability, no new privileges, and a read-only root.
 HARDENED_SERVICES=(server worker clamav)
 
 usage() {
@@ -65,7 +62,6 @@ main() {
       ensure_stack_env "$MAANE_DATA_DIR"
       ensure_stack_dirs "$MAANE_DATA_DIR"
       build
-      # The image makes the VAPID keys, so they are added after the build; an existing pair is never replaced.
       ensure_vapid_keys "$MAANE_DATA_DIR" maane:dev
       dev_compose up --remove-orphans
       ;;
@@ -74,8 +70,6 @@ main() {
       ensure_stack_dirs "$MAANE_DATA_DIR"
       build
       ensure_vapid_keys "$MAANE_DATA_DIR" maane:dev
-      # The server first: its setup screen is open for 5 minutes from its start while no user exists, and ClamAV's
-      # first signature download can take longer than that.
       info "Starting the server of $PROJECT"
       dev_compose up -d --remove-orphans --wait --wait-timeout 180 server || {
         dev_compose ps
@@ -83,7 +77,6 @@ main() {
       }
       info "Server ready: http://$(dev_compose port server 8080) (the setup screen is open for 5 minutes while no user exists)"
       info "Starting the rest of $PROJECT"
-      # ClamAV loads its signatures before it turns healthy, and downloads them first on the first start.
       dev_compose up -d --remove-orphans --wait --wait-timeout 600 || {
         dev_compose ps
         die "the stack did not become healthy; see: scripts/local.sh logs"

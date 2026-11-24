@@ -1,11 +1,8 @@
 import { expect, type Page, test } from "@playwright/test"
 import { he, signIn } from "./helpers.ts"
 
-// The shell after sign-in: both languages with their direction, and both themes, through the account menu, which
-// every width shows.
 test.describe.configure({ mode: "serial" })
 
-/** The account button, found by its class: its name changes with the language. */
 async function openAccountMenu(page: Page) {
   await page.locator("button.ui-account-btn").filter({ visible: true }).first().click()
   return page.getByRole("menu")

@@ -12,7 +12,6 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-/** A fetch that records what it was asked and answers from a table of URLs. */
 function fakeFetch(answers: Record<string, () => Response>) {
   const calls: { url: string; authorization: string | null }[] = []
   const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -89,7 +88,6 @@ describe("ZendeskClient", () => {
       [`${api}/f`]: () => {
         n++
         if (n > 1) return new Response("whole")
-        // The first chunk is delivered and reaches the file, then the connection drops on the next read.
         let pulls = 0
         const body = new ReadableStream<Uint8Array>({
           async pull(controller) {

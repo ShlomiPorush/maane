@@ -4,23 +4,13 @@ import { rm } from "node:fs/promises"
 import { Readable, Transform } from "node:stream"
 import { pipeline } from "node:stream/promises"
 
-/** How the client reaches Zendesk. Only `apiOrigin` ever receives the token. */
 export interface ClientOptions {
-  /** The account's API origin, `https://<subdomain>.zendesk.com`. */
   apiOrigin: string
-  /** The value of the Authorization header for the API origin. Never logged. */
   authorization: string
-  /** Tests run the stand-in API over plain HTTP. The command-line tool never sets this. */
   allowHttp?: boolean
-  /**
-   * The hosts a file download may reach, the API origin's host aside. By default Zendesk's own hosts:
-   * `*.zendesk.com` and its content host `*.zdusercontent.com`. Anything else is refused, so a hostile link cannot
-   * reach a host inside the operator's network.
-   */
   fileHostAllowed?: (host: string) => boolean
   fetch?: typeof fetch
   sleep?: (ms: number) => Promise<void>
-  /** Attempts per request, including the first. */
   maxAttempts?: number
 }
 
@@ -35,10 +25,8 @@ export class ZendeskError extends Error {
 }
 
 export interface JsonResponse {
-  /** The body exactly as Zendesk sent it. */
   text: string
   json: unknown
-  /** The time on Zendesk's clock when it answered (its Date header), if it sent one. */
   serverDate: Date | null
 }
 
@@ -50,7 +38,6 @@ export interface Download {
 const MAX_REDIRECTS = 5
 const DOWNLOAD_ATTEMPTS = 3
 
-/** Basic authentication with an API token, as Zendesk documents it: `{email}/token:{token}`. */
 export function tokenAuthorization(email: string, token: string): string {
   return `Basic ${Buffer.from(`${email}/token:${token}`).toString("base64")}`
 }
@@ -60,7 +47,6 @@ export function isZendeskFileHost(host: string): boolean {
   return name.endsWith(".zendesk.com") || name.endsWith(".zdusercontent.com")
 }
 
-/** A path and query only, for messages: no host, so nothing in a log points at the account. */
 function describe(url: URL): string {
   return `${url.pathname}${url.search}`
 }
@@ -86,14 +72,12 @@ export class ZendeskClient {
     this.#maxAttempts = options.maxAttempts ?? 6
   }
 
-  /** Resolves a path or a URL the API returned. Refuses any other origin: the token goes nowhere else. */
   apiUrl(pathOrUrl: string): URL {
     const url = new URL(pathOrUrl, this.apiOrigin)
     if (url.origin !== this.apiOrigin) throw new ZendeskError(`refused a link to another host: ${describe(url)}`)
     return url
   }
 
-  /** GET on the API, with retries on rate limits, server errors, and dropped connections. */
   async getJson(pathOrUrl: string): Promise<JsonResponse> {
     const url = this.apiUrl(pathOrUrl)
     for (let attempt = 1; ; attempt++) {
@@ -128,12 +112,6 @@ export class ZendeskClient {
     }
   }
 
-  /**
-   * Downloads a file into `target`, hashing it on the way. The token goes only to the API origin; a redirect to
-   * another allowed host is followed without it. Every hop must use HTTPS and reach the API origin or an allowed
-   * file host. The answer must be a complete 200, at most `maxBytes`, and of `expectedBytes` when Zendesk gave a
-   * size. Rate limits, server errors, and dropped connections are retried. On failure nothing is left at `target`.
-   */
   async download(source: string, target: string, maxBytes: number, expectedBytes: number | null): Promise<Download> {
     for (let attempt = 1; ; attempt++) {
       try {
@@ -191,8 +169,6 @@ export class ZendeskClient {
       try {
         result = await save(response.body, target, maxBytes)
       } catch (error) {
-        // The connection dropped while the body arrived (fetch reports a TypeError): worth another attempt. A
-        // file system error (a full disk, no permission) is not, and stops the run.
         if (error instanceof TypeError) throw new RetryableError(`the download of ${describe(url)} was cut off`)
         throw error
       }
@@ -214,7 +190,6 @@ class RetryableError extends Error {
   }
 }
 
-/** Streams the body into a new file, hashing and counting it, and stops at the size limit. */
 async function save(body: ReadableStream<Uint8Array>, target: string, maxBytes: number): Promise<Download> {
   const hash = createHash("sha256")
   let bytes = 0
@@ -232,7 +207,6 @@ async function save(body: ReadableStream<Uint8Array>, target: string, maxBytes: 
   await pipeline(
     Readable.fromWeb(body as import("node:stream/web").ReadableStream),
     meter,
-    // flush: the content is on the disk before the file is renamed and recorded as ok.
     createWriteStream(target, { flags: "wx", flush: true }),
   )
   return { sha256: hash.digest("hex"), bytes }
@@ -253,7 +227,6 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** A random name for a file that is still being written. */
 export function temporaryName(): string {
   return `.partial-${randomBytes(8).toString("hex")}`
 }

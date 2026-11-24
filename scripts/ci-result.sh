@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Finds the CI result of a commit on main, for the Release workflow (.github/workflows/release.yml),
-# so a release can reuse a green CI run of the commit instead of running the whole CI again.
-# Usage: scripts/ci-result.sh --sha SHA (--wait | --expect-run ID)
 set -euo pipefail
 
 CI_WORKFLOW=".github/workflows/ci.yml"
@@ -72,7 +69,6 @@ for tool in gh jq timeout date; do
   command -v "$tool" >/dev/null || die_usage "$tool is not installed"
 done
 
-# Prints the result once, then exits: 0, except 1 when --expect-run did not find the run it expects.
 finish() {
   local reuse="$1" run_id="$2" reason="$3"
   echo "ci-result: $reason" >&2
@@ -83,16 +79,10 @@ finish() {
   exit 0
 }
 
-# A GET of the GitHub API that fails when it takes longer than CALL_TIMEOUT seconds (killed 5 seconds
-# later if it ignores the stop).
 api() { timeout --kill-after=5 "$CALL_TIMEOUT" gh api "$1"; }
 
 now() { date +%s; }
 
-# The newest CI run of SHA on main, judged by its current record (its latest attempt). Sets RUN_ID
-# (empty when there is none), RUN_ATTEMPT, RUN_STATE (success, failed or running) and RUN_DETAIL (the
-# conclusion or the status) and returns 0, or sets REASON and returns 1 when an answer fails or is not
-# what was expected. jq decides on the exact values; only numbers and fixed words leave it.
 newest_run() {
   local json workflow_id newest state
   RUN_ID="" RUN_ATTEMPT="" RUN_STATE="" RUN_DETAIL="" REASON=""
@@ -105,8 +95,6 @@ newest_run() {
     return 1
   fi
 
-  # One page holds every run of one commit on main; more than that is unexpected, not paginated.
-  # The event filter takes one value only, so push and workflow_dispatch are selected here.
   if ! json="$(api "repos/$GH_REPO/actions/workflows/$workflow_id/runs?head_sha=$SHA&branch=main&exclude_pull_requests=true&per_page=100")" ||
     ! newest="$(jq -er --arg sha "$SHA" --argjson workflow "$workflow_id" '
       if (.total_count | type) != "number" or (.workflow_runs | type) != "array" then error("unexpected list")
@@ -129,7 +117,6 @@ newest_run() {
   [ "$newest" != none ] || return 0
   RUN_ID="$newest"
 
-  # The run's current record holds its latest attempt, even one that started after the list was read.
   if ! json="$(api "repos/$GH_REPO/actions/runs/$RUN_ID")" ||
     ! state="$(jq -er --argjson id "$RUN_ID" --argjson workflow "$workflow_id" --arg sha "$SHA" '
       ["failure", "cancelled", "timed_out", "action_required", "neutral", "skipped", "stale", "startup_failure"] as $failed
@@ -167,12 +154,8 @@ if [ "$MODE" = expect ]; then
   esac
 fi
 
-# The wait ends by elapsed time, API calls included. Each round makes three calls of at most
-# CALL_TIMEOUT + 5 seconds, and no sleep goes past the deadline, so the script ends at most
-# 3 * (CALL_TIMEOUT + 5) seconds after it (105 seconds by default).
 deadline=$(($(now) + WAIT_SECONDS))
 while :; do
-  # Each round selects again, so a newer run or a new attempt that started meanwhile decides.
   newest_run || finish false "" "$REASON"
   [ -n "$RUN_ID" ] || finish false "" "no CI run of $SHA on main"
   case "$RUN_STATE" in

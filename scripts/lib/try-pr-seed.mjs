@@ -1,6 +1,3 @@
-// Creates the first admin of a pull request stack through the setup screen's sign-up, turns two-factor on with a
-// TOTP code computed here, and writes the sign-in to MAANE_ADMIN_FILE (mode 600). Prints none of it.
-// Run by scripts/try-pr.sh inside the toolchain container, on the stack's network. Node standard library only.
 import { createHmac, randomBytes } from "node:crypto"
 import { writeFile } from "node:fs/promises"
 
@@ -36,7 +33,6 @@ function base32Decode(input) {
   return Buffer.from(bytes)
 }
 
-// RFC 6238, as authenticator apps compute it: SHA-1, 6 digits, 30-second steps.
 function totp(secret) {
   const counter = Buffer.alloc(8)
   counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)))

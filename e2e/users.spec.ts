@@ -3,13 +3,11 @@ import { expect, test } from "@playwright/test"
 import { fillSecret, freshAddress, he, signIn, waitShown } from "./helpers.ts"
 import { totp } from "./totp.ts"
 
-// An admin adds an agent; the agent's first sign-in sets up two-factor, and admin pages stay closed to them.
 test.describe.configure({ mode: "serial" })
 
 const AGENT = "agent1"
 const agentPassword = randomBytes(18).toString("base64url")
 
-// The desktop project adds the agent; the phone project would add it twice.
 test.skip(({ isMobile }) => isMobile, "one project adds the agent")
 
 test("an admin adds an agent", async ({ page }) => {
@@ -36,7 +34,6 @@ test("the agent sets up two-factor on first sign-in and cannot open admin pages"
   const shown = page.getByTestId("totp-secret")
   await waitShown(page, '[data-testid="totp-secret"]')
   const secret = ((await shown.textContent()) ?? "").replace(/[^A-Z2-7]/g, "")
-  // The sixth digit sends the code. The agent's secret is new, so any current code is unused.
   await fillSecret(page.getByLabel(he("auth.code"), { exact: true }), totp(secret))
   await waitShown(page, '[data-testid="backup-codes"] li')
   await page.getByLabel(he("backupCodes.saved"), { exact: true }).check()

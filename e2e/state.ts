@@ -1,6 +1,3 @@
-// The run's shared state, in one owner-only file in the temporary directory: the first admin's password made for
-// scripts/verify.sh's throwaway stack, the TOTP secret made by the setup test, the last TOTP step used, and the last
-// documentation address given out.
 import { readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
