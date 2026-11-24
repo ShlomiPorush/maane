@@ -6,9 +6,6 @@ import { createTestApp } from "../testing/app.ts"
 import { TEST_ORIGIN, TestBrowser, testPassword } from "../testing/browser.ts"
 import { createTestDatabase } from "../testing/db.ts"
 
-// The audit log's client address (foundation "Client address"): the same rule as the link routes. The app is served on
-// a port of 127.0.0.1, so each request has a TCP peer; the test browser sends X-Forwarded-For with its own address.
-
 let database: Awaited<ReturnType<typeof createTestDatabase>>
 let app: ReturnType<typeof createTestApp>
 let server: ReturnType<typeof serve> | null = null
@@ -25,7 +22,6 @@ afterEach(async () => {
   await database.drop()
 })
 
-/** A browser whose requests reach the app through a real socket on 127.0.0.1. */
 async function browserThroughPort(trustedProxies: string[]): Promise<TestBrowser> {
   app = createTestApp(database, {}, undefined, "/nonexistent", { trustedProxies })
   await app.ready
@@ -47,7 +43,6 @@ async function browserThroughPort(trustedProxies: string[]): Promise<TestBrowser
   return new TestBrowser(through, FORWARDED)
 }
 
-/** Sets up the first admin, enrolls two-factor, and changes a setting: audit rows from Better Auth and from Maane. */
 async function act(b: TestBrowser) {
   expect((await b.setup("first.admin", password)).status).toBe(200)
   await b.enroll(password)

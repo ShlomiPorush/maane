@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# The single verification entry point, used locally and in CI.
-# Usage: scripts/verify.sh [--changed [BASE]] [--guards-only] [--skip-integration] [--only checks|integration|e2e]
 set -euo pipefail
 
 # shellcheck source=scripts/lib/common.sh
@@ -60,12 +58,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# The files changed since MERGE_BASE, committed or not, and new files that are not ignored. Runs in the main
-# shell (never in a pipe or a process substitution), so a failing git stops verify instead of looking like
-# "no changes".
 changed_files() {
   local committed untracked
-  # --no-renames lists both sides of a move, so moving code into docs/ is never a documentation-only change.
   committed="$(git -C "$REPO_ROOT" diff --name-only --no-renames "$MERGE_BASE")" ||
     die "git diff against $CHANGED_BASE failed"
   untracked="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || die "git ls-files failed"
@@ -79,7 +73,6 @@ run_guards() {
   in_toolchain "bash scripts/lib/test-guards.sh" || die "guard tests failed"
 }
 
-# Runs lint, types, unit tests and builds. FILTER selects packages ("" for all).
 run_checks() {
   local filter="$1" selector=""
   [ -n "$filter" ] && selector="--filter '$filter'"
@@ -90,10 +83,7 @@ run_checks() {
   info "Types, unit tests and builds${filter:+ ($filter)}"
   in_toolchain "pnpm -r $selector run typecheck && pnpm -r $selector run test && pnpm -r $selector --if-present run build"
   info "Database schema matches its migrations"
-  # A schema change without its migration would otherwise show only when the next migration is generated. The
-  # generator runs on a copy of the migrations, so a missing migration fails here without writing into the checkout.
   # shellcheck disable=SC2016 # expands inside the container
-  # drizzle-kit prefixes "./" to --out, so the copy is named relative to apps/server.
   in_toolchain 'copy="$(mktemp -d)" && cp -r apps/server/drizzle "$copy/drizzle" && cd apps/server &&
     out="$(pnpm exec drizzle-kit generate --dialect postgresql --schema ./src/db/schema.ts \
       --out "$(realpath --relative-to=. "$copy/drizzle")" --name schema-check 2>&1)"; rm -r -f -- "$copy";
@@ -101,8 +91,6 @@ run_checks() {
     die "apps/server/src/db/schema.ts has changes without a migration; run: pnpm --filter @maane/server db:generate --name <change>"
 }
 
-# Integration tests against a disposable PostgreSQL on a private Docker network. Its password is new for every run,
-# kept in an owner-only file in a temporary directory, and passed to containers only through --env-file.
 POSTGRES_IMAGE="postgres:18.6-bookworm"
 VERIFY_DIR=""
 VERIFY_NETWORK=""
@@ -148,10 +136,6 @@ run_integration() {
   trap - EXIT
 }
 
-# The production Compose file, with .env from .env.example and its two secret files filled in with values new for
-# this check: it must be valid with no variable missing, show no secret in `docker compose config --no-env-resolution`
-# (secrets come only through env_file), and give PostgreSQL only its own variables. Runs in a subshell, so the caller
-# removes the directory whatever happens.
 production_compose_checks() {
   local dir="$1" password auth keys vapid names
   password="$(random_hex)" auth="$(random_hex)" keys="$(random_hex)" vapid="$(random_hex)"
@@ -162,7 +146,6 @@ production_compose_checks() {
     printf 'POSTGRES_USER=maane\nPOSTGRES_DB=maane\nPOSTGRES_PASSWORD=%s\n' "$password" >"$dir/postgres.env"
     printf 'DATABASE_URL=postgres://maane:%s@postgres:5432/maane\nMAANE_AUTH_SECRETS=1:%s\nMAANE_SETTINGS_KEYS=1:%s\n' \
       "$password" "$auth" "$keys" >"$dir/app.env"
-    # Compose only passes them on here; their shape is the server's check, not this one's.
     printf 'MAANE_VAPID_PUBLIC_KEY=%s\nMAANE_VAPID_PRIVATE_KEY=%s\n' "$vapid" "${vapid:32}" >>"$dir/app.env"
   )
   production() {
@@ -173,11 +156,9 @@ production_compose_checks() {
     cat "$dir/warnings" >&2
     die "docker-compose.yml is not valid with its .env, postgres.env, and app.env"
   }
-  # Compose fills a variable .env lacks with an empty string and only warns.
   if grep -F "variable is not set" "$dir/warnings" >&2; then
     die "docker-compose.yml uses a variable that .env.example does not list"
   fi
-  # Never printed: the output holds this check's values when the file is wrong.
   production config --no-env-resolution >"$dir/unresolved.yml" || die "docker compose config failed"
   if grep -qF -e "$password" -e "$auth" -e "$keys" -e "$vapid" -e "${vapid:32}" "$dir/unresolved.yml"; then
     die "docker compose config --no-env-resolution shows a secret: docker-compose.yml interpolates one or sets it under environment:"
@@ -202,16 +183,10 @@ check_production_compose() {
   [ "$status" -eq 0 ] || exit "$status"
 }
 
-# The container stack: the image built from this checkout, started from the tracked development template with a data
-# directory and secrets new for this run, then health, readiness, runtime users, and hardening are checked, and the
-# worker's file service and intake run against the real ClamAV. The project and the image tag belong to this run alone, so a
-# verify running in another checkout cannot replace the image under it. ClamAV's signatures come from the cache
-# (ensure_stack_dirs) and go back to it once the stack ran, so freshclam downloads only what changed.
 RUN_ID="$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 STACK_PROJECT="maane-verify-stack-$RUN_ID"
 STACK_TAG="verify-$RUN_ID"
 STACK_DIR=""
-# The container of the sending worker (start_sender), while it runs.
 SENDER=""
 stack() {
   env -u COMPOSE_ENV_FILES MAANE_DATA_DIR="$STACK_DIR" MAANE_IMAGE_TAG="$STACK_TAG" MAANE_PORT=0 \
@@ -220,8 +195,6 @@ stack() {
     -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
 }
 
-# Stops the stack, then removes its data directory and image, but only once Docker confirms that no container of the
-# project is left: data a running container still uses is kept and reported instead.
 cleanup_stack() {
   local left
   [ -z "$SENDER" ] || docker rm -f "$SENDER" >/dev/null 2>&1 || true
@@ -240,8 +213,6 @@ cleanup_stack() {
   fi
 }
 
-# The file checks of the stack, as the worker runs them: apps/worker/src/testing/stack-check.ts, bundled here and run
-# in a container of the worker service (its user, networks, read-only root, and /data), never shipped in the image.
 run_file_checks() {
   local out sha stored
   info "Files: the worker's scanner and store against the real ClamAV ($STACK_PROJECT)"
@@ -261,10 +232,6 @@ run_file_checks() {
   echo "    /data/files/${sha:0:2}/$sha: the same content in the recreated server"
 }
 
-# Intake end to end, as the worker runs it: apps/worker/src/testing/stack-intake.ts (bundled by run_file_checks) in a
-# container of the worker service, against the stack's database and the real ClamAV, with a stand-in Graph inside
-# that container. Runs before the end-to-end tests, which read the tickets it makes (e2e/tickets.spec.ts): messages
-# become tickets of two organizations; the check leaves no source current and no default address.
 run_intake_checks() {
   local out
   info "Intake: stand-in Graph to tickets, with the real ClamAV ($STACK_PROJECT)"
@@ -276,10 +243,6 @@ run_intake_checks() {
   echo "$out"
 }
 
-# The worker that sends the end-to-end tests' replies: apps/worker/src/testing/stack-worker.ts (bundled by
-# run_file_checks), the worker as index.ts starts it, in a container of the worker service, with two stand-in SMTP
-# servers inside that container (their certificates trusted there only, their credentials generated for the run). The
-# stack's own worker stops meanwhile, so only this one takes the queue's jobs, and nothing reaches a real server.
 start_sender() {
   info "Sending: the worker with stand-in SMTP servers in its own process ($STACK_PROJECT)"
   stack stop worker >/dev/null 2>&1 || fail_stack "the stack's worker did not stop"
@@ -296,9 +259,6 @@ start_sender() {
   fail_stack "the sending worker did not get ready"
 }
 
-# What the stand-ins received while the end-to-end tests ran: the Hebrew reply with an English paragraph and an
-# attachment (e2e/replies.spec.ts) reached SMTP2GO's stand-in, with the reference line, the ticket number, and the
-# layout of plan 3.2: the header line first, the code before the first block, the history quoted, no dir="auto".
 check_sends() {
   local out line
   docker stop -t 30 "$SENDER" >/dev/null 2>&1 || true
@@ -316,8 +276,6 @@ fail_stack() {
   die "$1"
 }
 
-# Runs e2e/ in the Playwright image on the stack's network. e2e/global-setup.ts forwards 127.0.0.1:8095, the stack's
-# MAANE_PUBLIC_URL, to the server, so the server's Origin checks see its own address.
 run_e2e() {
   local image
   image="mcr.microsoft.com/playwright:v$(sed -nE 's|.*"@playwright/test": "([^"]+)".*|\1|p' "$REPO_ROOT/e2e/package.json")-noble"
@@ -330,7 +288,6 @@ run_e2e() {
 
 run_stack() {
   check_production_compose
-  # Set before the build, so an image built by a run that stops early is removed too.
   trap cleanup_stack EXIT
   build_image "$STACK_TAG" "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
   STACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-stack.XXXXXX")"
@@ -339,7 +296,6 @@ run_stack() {
   ensure_stack_dirs "$STACK_DIR"
 
   info "Container stack: health, readiness, runtime users, and hardening ($STACK_PROJECT)"
-  # ClamAV loads its signatures before it turns healthy, and downloads them first when the cache was empty.
   stack up -d --remove-orphans --wait --wait-timeout 600 || fail_stack "the stack did not become healthy"
   TOOLCHAIN_EXTRA_ARGS=(--network "${STACK_PROJECT}_default")
   # shellcheck disable=SC2016 # expands inside the container
@@ -401,8 +357,6 @@ main() {
       info "Documentation-only change: guards only"
       CHECKS=0
     elif ! grep -qvE '^(apps|packages)/[^/]+/' <<<"$CHANGED"; then
-      # Root files (manifests, lockfile, tool configuration, scripts) reach every package: those run everything.
-      # pnpm's documented filter: the packages changed since the commit, and every package that depends on them.
       filter="...[$MERGE_BASE]"
       info "Changes only inside packages: the changed packages and their dependents"
     fi

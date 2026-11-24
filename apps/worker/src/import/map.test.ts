@@ -13,8 +13,6 @@ import {
   statusOf,
 } from "./map.ts"
 
-// How a Zendesk record becomes Maane's rows (plan 5.1), without the database. Every record is invented.
-
 const record = (fields: Partial<ZendeskTicketRecord>): ZendeskTicketRecord => ({
   id: 10,
   updated_at: "2025-05-01T09:00:00Z",
@@ -118,7 +116,6 @@ describe("the import's mapping", () => {
   })
 
   it("reads the sender and recipients from metadata.via, as Zendesk's example keeps them, before the comment's via", () => {
-    // The shape of Zendesk's List Comments example: the via object inside metadata, beside system, and none at the top.
     const documented = {
       id: 1274,
       author_id: 123123,
@@ -147,7 +144,6 @@ describe("the import's mapping", () => {
     const planned = commentMessage(10, documented, users, { files: {} }, new Date("2025-05-01T09:00:00Z"))
     expect(planned.source.channel).toBe("email")
     expect(planned.from).toEqual({ address: "customer@example.com", name: "Customer" })
-    // metadata.via first; a value only the comment's via holds still counts.
     expect(
       emailOf({
         id: 2,
@@ -158,7 +154,6 @@ describe("the import's mapping", () => {
         },
       }),
     ).toMatchObject({ from: { address: "first@example.com", name: null }, to: { address: "help@example.com" } })
-    // A sender is one pair: a name from metadata.via is never joined to an address from via.
     expect(
       emailOf({
         id: 4,
@@ -166,7 +161,6 @@ describe("the import's mapping", () => {
         via: { channel: "email", source: { from: { address: "other@example.com", name: "Other" } } },
       }),
     ).toEqual({ kind: "none" })
-    // The example's web comment (empty from and to) recorded no identifiers in either place.
     expect(
       emailOf({
         id: 3,
@@ -187,7 +181,6 @@ describe("the import's mapping", () => {
       "note",
       "in",
     ])
-    // An author without an address has no sender address; the name stays in the source.
     const noAddress = as(3)
     expect(noAddress.from).toBeNull()
     expect(noAddress.source.author.name).toBe("No Address")
@@ -225,7 +218,6 @@ describe("the import's mapping", () => {
       ["1", true, url(1)],
       ["3", false, url(3)],
     ])
-    // Only an image whose address is one of these files is rewritten; a failed file's and any other image keep theirs.
     const images = inlineImages(facts.archived)
     expect(images.rewrite(url(1))).toBe("cid:zendesk-1")
     expect(images.rewrite(url(2))).toBeNull()

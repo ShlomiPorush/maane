@@ -1,10 +1,3 @@
-// Writing a reply or an internal note that is already built (plan 3.1), in the caller's transaction: the message, its
-// parts, and for a reply its outbox row, recipients, links, and the `send-reply` job. The server writes a reply sent at
-// once with it; the worker writes a scheduled reply at its time with it (plan 4.2), from the version the server built,
-// and a reminder at its time (plan 4.3).
-// Kept apart from the reply service so the worker never loads sharp. The ticket's status, its last activity, and the
-// audit row are the caller's.
-
 import type { MailAddress } from "@maane/shared"
 import type { Db } from "../db/client.ts"
 import { message, messagePart, outbox, outboxRecipient, trackedLink } from "../db/schema.ts"
@@ -12,10 +5,8 @@ import type { NewLink } from "../links/service.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
-/** A file a reply attaches: the agent's upload or a file of the ticket's own messages, read and checked already. */
 export type ReplyFile = { fileName: string; contentType: string; size: number; sha256: string; status: string }
 
-/** The built email of a reply: its MIME (built once), its Message-ID, subject, and where it sits in the thread. */
 export type BuiltReply = {
   mime: Buffer
   messageId: string
@@ -24,13 +15,11 @@ export type BuiltReply = {
   references: string[]
 }
 
-/** A reply or a note, ready to write. A note has no From, recipients, built email, or links. */
 export type ReadyMessage = {
   kind: "reply" | "note"
   from: string | null
   to: MailAddress[]
   cc: MailAddress[]
-  /** The body as the ticket view keeps it: the agent's text and, for a reply, the organization's signature. */
   html: string
   text: string
   files: ReplyFile[]
@@ -38,18 +27,11 @@ export type ReadyMessage = {
   links: NewLink[]
 }
 
-/**
- * Writes the message and, for a reply, what sends it, and queues the send through `queueSend` (in the same
- * transaction). Returns the message's ID, or null when the same submission was written already (nothing more is written
- * then).
- */
 export async function writeMessage(
   tx: Pick<Tx, "insert">,
   input: {
     ticketId: string
-    /** The agent; none for an automatic reminder (plan 4.3), which goes as the organization. */
     authorUserId: string | null
-    /** The composer's submission ID (a scheduled reply's or a reminder's own at its time). */
     submissionId: string
     at: Date
     ready: ReadyMessage
@@ -84,7 +66,6 @@ export async function writeMessage(
     })
     .onConflictDoNothing()
     .returning({ id: message.id })
-  // The same submission committed meanwhile: nothing more is written.
   if (!row) return null
   if (ready.files.length)
     await tx.insert(messagePart).values(

@@ -72,11 +72,8 @@ interface Harness {
   owner: string
   org: string
   vip: string
-  /** A new run row and its job, as the page's Start makes them. */
   run(hooks?: ImportHooks): Promise<{ id: string; outcome: Awaited<ReturnType<ZendeskImport["run"]>> }>
-  /** The job of an existing run again (a retry). */
   again(id: string, hooks?: ImportHooks): ReturnType<ZendeskImport["run"]>
-  /** A backup run again; files up to `maxFileBytes` (1 KiB by default). */
   backup(maxFileBytes?: number): Promise<void>
   close(): Promise<void>
 }
@@ -159,7 +156,6 @@ const reportOf = async (h: Harness, id: string) =>
       .where(eq(importReport.runId, id))
       .orderBy(asc(importReport.id))
   ).map((row) => `${row.zendeskId}:${row.reason}:${row.detail ?? ""}`)
-/** The import page's service, for a cancel; these tests queue no job. */
 const NO_QUEUE: JobQueue = {
   send: async () => "",
   sendIn: async () => "",
@@ -167,12 +163,10 @@ const NO_QUEUE: JobQueue = {
   pending: async () => null,
   stop: async () => {},
 }
-/** Cancels the open run, by its id as the page sends it. */
 const cancelOf = (h: Harness) => async () => {
   const [open] = await h.db.select({ id: importRun.id }).from(importRun).where(eq(importRun.state, "running"))
   await new Imports(h.db, NO_QUEUE, h.archive).cancel(open?.id ?? "", { actor: SYSTEM, ipAddress: null })
 }
-/** Waits until a session of this database waits for a lock (a cancel waiting for a ticket's transaction). */
 async function lockWaited(h: Harness): Promise<void> {
   for (let tries = 0; tries < 400; tries++) {
     const { rows } = await h.db.execute(
@@ -212,7 +206,6 @@ describe("the import from the Zendesk archive", () => {
     const first = await h.run()
     expect(first.outcome).toEqual({ state: "done", reason: null })
 
-    // Tickets keep their Zendesk numbers; deleted, gone, and unmapped ones are not imported.
     const imported = await h.db.select().from(ticket).orderBy(asc(ticket.number))
     expect(imported.map((row) => [row.number, row.zendeskId, row.status])).toEqual([
       [1, 1, "open"],
@@ -234,13 +227,10 @@ describe("the import from the Zendesk archive", () => {
       ],
       followers: [{ name: AGENT.name, address: AGENT.email }],
     })
-    // Requester and CCs are participants (they receive replies); the follower is not.
     expect(await participantsOf(h, 1)).toEqual(["user2@example.com", "user3@example.com"])
-    // The tag mapping gives the category; an unmapped tag gives none.
     const categories = await h.db.select().from(ticketCategory).where(eq(ticketCategory.ticketId, one.id))
     expect(categories.map((row) => row.categoryId)).toEqual([h.vip])
 
-    // Public end-user comments come in, agents' go out, private ones are notes, side conversations notes too.
     const messages = await messagesOf(h, 1)
     expect(messages.map((m) => [m.zendeskKey, m.direction, m.authorUserId])).toEqual([
       ["comment:11", "in", null],
@@ -270,28 +260,23 @@ describe("the import from the Zendesk archive", () => {
     expect(side?.subject).toBe("Asking the supplier")
     expect(side?.textBody).toBe("Please check the order.")
 
-    // A pending ticket gets an imported waiting period, which never sends a reminder.
     const two = await ticketOf(h, 2)
     const periods = await h.db
       .select()
       .from(waitingPeriod)
       .where(eq(waitingPeriod.ticketId, two?.id ?? ""))
     expect(periods.map((p) => [p.origin, p.endedAt])).toEqual([["import", null]])
-    // Blocked text is kept out, flagged, and audited once; the comment stays.
     const blocked = (await messagesOf(h, 2)).find((m) => m.zendeskKey === "comment:22")
     expect(blocked?.textBody).toBeNull()
     expect(blocked?.reviewFlags).toContain("blocked_content")
-    // A NUL character becomes U+FFFD and flags the message.
     const follow = (await messagesOf(h, 7))[0]
     expect(follow?.textBody).toBe(`Follow-up${String.fromCodePoint(0xfffd)} question`)
     expect(follow?.reviewFlags).toEqual(["invalid_characters"])
-    // An author without an address keeps the name (its NUL replaced, and flagged) and gets no address.
     const walkIn = (await messagesOf(h, 3))[0]
     expect(walkIn?.fromAddress).toBeNull()
     expect(walkIn?.fromName).toBe(`Walk-in${REPLACEMENT} Customer`)
     expect(walkIn?.reviewFlags).toContain("invalid_characters")
 
-    // Merged and follow-up tickets are links between the imported tickets.
     const links = await h.db.select().from(ticketLink)
     const numberOf = new Map(imported.map((row) => [row.id, row.number]))
     expect(
@@ -301,7 +286,6 @@ describe("the import from the Zendesk archive", () => {
       [7, 1, "follow_up"],
     ])
 
-    // The report: every reason, and the counts and the archive's coverage.
     expect(await reportOf(h, first.id)).toEqual([
       "2:blocked_content:comment:22",
       "2:file_failed:big.zip",
@@ -315,8 +299,6 @@ describe("the import from the Zendesk archive", () => {
     expect(run.coveredUntil).not.toBeNull()
     expect(run.counts).toMatchObject({ tickets: 4, notes: 1, sideConversations: 1, links: 2, skipped: 3 })
 
-    // No side effects: no intake record, no outbox, no timed action (reminder, snooze, scheduled reply); one audit row
-    // for the run, beside the block event.
     expect(await h.db.select().from(intakeRecord)).toHaveLength(0)
     expect(await h.db.select().from(outbox)).toHaveLength(0)
     expect(await h.db.select().from(timedAction)).toHaveLength(0)
@@ -325,10 +307,8 @@ describe("the import from the Zendesk archive", () => {
       "message.content_blocked",
       "import.run",
     ])
-    // The next Maane ticket continues right after the highest imported number.
     expect(await nextNumber(h)).toBe(8)
 
-    // Again: the same rows, updated in place.
     const ids = (await h.db.select({ id: message.id }).from(message)).map((row) => row.id).sort()
     const second = await h.run()
     expect(second.outcome).toEqual({ state: "done", reason: null })
@@ -336,7 +316,6 @@ describe("the import from the Zendesk archive", () => {
     expect(await h.db.select().from(ticket)).toHaveLength(4)
     expect(await h.db.select().from(ticketLink)).toHaveLength(2)
     expect(await h.db.select().from(waitingPeriod)).toHaveLength(1)
-    // The block event is written once, not again for the same field.
     const blocks = await h.db.select().from(auditLog).where(eq(auditLog.action, "message.content_blocked"))
     expect(blocks).toHaveLength(1)
   })
@@ -364,7 +343,6 @@ describe("the import from the Zendesk archive", () => {
     expect(after.find((m) => m.zendeskKey === "comment:11")?.htmlBody).not.toContain(HEBREW_BODY)
     expect(after.find((m) => m.zendeskKey === "comment:13")?.direction).toBe("note")
     expect(await participantsOf(h, 1)).toEqual(["user2@example.com"])
-    // A ticket deleted in Zendesk is reported; what was imported stays (no hiding or erasing logic).
     expect(await reportOf(h, second.id)).toContain("2:deleted_in_zendesk:")
     expect(await ticketOf(h, 2)).toBeDefined()
   })
@@ -381,14 +359,12 @@ describe("the import from the Zendesk archive", () => {
     await expect(h.again(id, crash)).rejects.toThrow("the worker stopped")
     expect(await runOf(h, id)).toMatchObject({ state: "running", position: 2, done: 2 })
     expect(await h.db.select().from(ticket)).toHaveLength(2)
-    // Finish import waits for the open run: refused.
     await expect(
       new Imports(h.db, NO_QUEUE, h.archive).finish({ actor: SYSTEM, ipAddress: null }),
     ).rejects.toMatchObject({ code: "import_running" })
     expect(await h.again(id)).toEqual({ state: "done", reason: null })
     expect(await runOf(h, id)).toMatchObject({ state: "done", position: 7, done: 7 })
     expect(await h.db.select().from(ticket)).toHaveLength(4)
-    // Each ticket's report rows were written once, with its transaction.
     expect((await reportOf(h, id)).filter((row) => row.startsWith("2:"))).toHaveLength(2)
   })
 
@@ -407,7 +383,6 @@ describe("the import from the Zendesk archive", () => {
     })
     const pending: { cancel?: Promise<Awaited<ReturnType<typeof snapshot>>> } = {}
     const outcome = await h.again(id, {
-      // Inside ticket 2's transaction: the cancel waits for it, then the handler goes on to ticket 3.
       inTicket: async (zendeskId) => {
         if (zendeskId !== 2) return
         pending.cancel = cancelOf(h)().then(snapshot)
@@ -419,9 +394,7 @@ describe("the import from the Zendesk archive", () => {
     expect(atCancel?.run).toMatchObject({ state: "stopped", reason: "cancelled", position: 2, done: 2 })
     expect(atCancel?.tickets).toBe(2)
     expect(await snapshot()).toEqual(atCancel)
-    // One audit row for the run: its cancel, never an end the worker wrote.
     expect(atCancel?.audit.filter((action) => action.startsWith("import."))).toEqual(["import.cancel"])
-    // The next start is a full pass.
     const next = await h.run()
     expect(next.outcome).toEqual({ state: "done", reason: null })
     expect(await runOf(h, next.id)).toMatchObject({ done: 7, position: 7 })
@@ -451,7 +424,6 @@ describe("the import from the Zendesk archive", () => {
     await expect(h.again(id, crash)).rejects.toThrow("the worker stopped")
     expect(await h.again(id, { afterCheck: cancel })).toEqual({ state: "stopped", reason: "cancelled" })
     expect(await runOf(h, id)).toMatchObject({ state: "stopped", reason: "cancelled", failure: null, position: 2 })
-    // A job left for it does nothing.
     expect(await h.again(id)).toEqual({ skipped: true })
     expect(await h.db.select().from(ticket)).toHaveLength(2)
   })
@@ -487,10 +459,8 @@ describe("the import from the Zendesk archive", () => {
     const stopped = await h.run(meanwhile)
     expect(stopped.outcome).toEqual({ state: "stopped", reason: "archive_changed" })
     expect(await runOf(h, stopped.id)).toMatchObject({ position: 1 })
-    // Ticket 1 was imported from the older state; the numbers already go on after it.
     expect((await messagesOf(h, 1))[0]?.textBody).toBe(HEBREW_BODY)
     expect(await nextNumber(h)).toBe(2)
-    // A stopped run is not continued: the next start is a new run over every ticket.
     expect(await h.again(stopped.id)).toEqual({ skipped: true })
     const full = await h.run()
     expect(full.outcome).toEqual({ state: "done", reason: null })
@@ -517,19 +487,16 @@ describe("the import from the Zendesk archive", () => {
     await imports.finish(acting)
     const [row] = await h.db.select().from(zendeskImport)
     expect(row?.finishedAt).not.toBeNull()
-    // Final: pressing it again changes nothing and writes no second audit row.
     await imports.finish(acting)
     expect((await h.db.select().from(zendeskImport))[0]?.finishedAt).toEqual(row?.finishedAt)
     const audits = await h.db.select().from(auditLog).where(eq(auditLog.action, "import.finish"))
     expect(audits).toHaveLength(1)
     expect(audits[0]).toMatchObject({ entityType: "zendesk_import", entityId: "1", actorLabel: SYSTEM.label })
     expect((await imports.view()).window).toEqual({ open: false, finishedAt: row?.finishedAt?.toISOString() })
-    // Imports are refused after it: a start opens no run and queues no job, and the mappings are refused.
     const runs = await h.db.select().from(importRun)
     await expect(imports.start(h.owner)).rejects.toMatchObject({ code: "import_closed" })
     expect(await h.db.select().from(importRun)).toEqual(runs)
     expect(queued).toEqual([])
-    // An old job of the run that ended before Finish does nothing.
     expect(await h.again(open?.id ?? "")).toEqual({ skipped: true })
     expect(await h.db.select().from(importRun)).toEqual(runs)
     await expect(imports.saveMapping({ brands: {}, tags: {}, agentUserId: h.owner }, acting)).rejects.toMatchObject({
@@ -560,7 +527,6 @@ describe("the import from the Zendesk archive", () => {
     expect((await h.run()).outcome).toEqual({ state: "refused", reason: "other_origin" })
     await h.db.update(zendeskImport).set({ origin: null, agentUserId: null })
     expect((await h.run()).outcome).toEqual({ state: "refused", reason: "no_agent" })
-    // Nothing was written by a refused run.
     expect(await h.db.select().from(ticket)).toHaveLength(0)
     expect(await h.db.select().from(message).where(isNotNull(message.zendeskKey))).toHaveLength(0)
   })
@@ -568,7 +534,6 @@ describe("the import from the Zendesk archive", () => {
   it("catches a backup that starts and fails during the check before the first write", async () => {
     const h = await start()
     const archive = new Archive(h.archive)
-    // A backup that starts (its run count moves on) and fails (its lock goes again) while the check reads.
     const backupStartsAndFails = async () => {
       const state = await archive.state()
       state.runs += 1
@@ -577,7 +542,6 @@ describe("the import from the Zendesk archive", () => {
     const always = await h.run({ afterCheck: backupStartsAndFails })
     expect(always.outcome).toEqual({ state: "refused", reason: "archive_changed" })
     expect(await h.db.select().from(ticket)).toHaveLength(0)
-    // Once: the run checks the new state again and imports it.
     let once = false
     const result = await h.run({
       afterCheck: async () => {
@@ -611,7 +575,6 @@ describe("the import from the Zendesk archive", () => {
     const seven = await ticketOf(h, 7)
     expect(seven?.subject).toBeNull()
     expect(seven?.zendesk).toMatchObject({ blocked: true, tags: [], fields: [] })
-    // Its participants keep their addresses, not their names.
     const people = await h.db
       .select()
       .from(ticketParticipant)
@@ -629,10 +592,8 @@ describe("the import from the Zendesk archive", () => {
     const id = made?.id ?? ""
     const failures = async () => (await reportOf(h, id)).filter((row) => row.includes(":ticket_failed:"))
     await expect(h.again(id)).rejects.toThrow()
-    // The run stays open where it stopped; the report names the ticket and the kind of error, never its text.
     expect(await runOf(h, id)).toMatchObject({ state: "running", reason: "failed", position: 2, done: 2 })
     expect(await failures()).toEqual(["3:ticket_failed:rule:test_refuses_three"])
-    // Tried again before the cause is fixed: the newest error only.
     await expect(h.again(id)).rejects.toThrow()
     expect(await failures()).toEqual(["3:ticket_failed:rule:test_refuses_three"])
     await h.db.execute(sql`alter table ticket drop constraint test_refuses_three`)
@@ -647,7 +608,6 @@ describe("the import from the Zendesk archive", () => {
     const [made] = await h.db.insert(importRun).values({ startedBy: h.owner }).returning({ id: importRun.id })
     const id = made?.id ?? ""
     const failures = async () => (await reportOf(h, id)).filter((row) => row.includes(":ticket_failed:"))
-    // A users' page that no longer parses after the check: an error of the archive while reading it.
     const page = join(h.archive, "raw/incremental/users/000001.json")
     const original = await readFile(page, "utf8")
     await expect(h.again(id, { afterCheck: () => writeFile(page, "{") })).rejects.toThrow(SyntaxError)
@@ -659,7 +619,6 @@ describe("the import from the Zendesk archive", () => {
     })
     expect(await failures()).toEqual([])
     await writeFile(page, original)
-    // The database refuses every link: an error of the links stage, with the rule it named.
     await h.db.execute(sql`alter table ticket_link add constraint test_refuses_links check (ticket_id is null)`)
     await expect(h.again(id)).rejects.toThrow()
     expect(await runOf(h, id)).toMatchObject({
@@ -692,8 +651,6 @@ describe("the import from the Zendesk archive", () => {
 
   it("links more imported tickets than one statement has parameters for", async () => {
     const h = await start()
-    // 33,000 imported tickets, each a follow-up of the one before: more than PostgreSQL's 65,535 parameters if each
-    // ticket's ID were a parameter twice, or each link three. The reference code is distinct per ticket, of the form.
     const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
     const digit = (power: number) => sql.raw(`substr('${alphabet}', (n / ${31 ** power}) % 31 + 1, 1)`)
     await h.db.execute(sql`
@@ -703,7 +660,6 @@ describe("the import from the Zendesk archive", () => {
       from generate_series(100001, 133000) as n`)
     const run = await h.run()
     expect(run.outcome).toEqual({ state: "done", reason: null })
-    // The archive's two links and 32,999 follow-ups (the first one's original is not imported).
     const [links] = (await h.db.execute(sql`select count(*)::int as n from ticket_link`)).rows as { n: number }[]
     expect(links?.n).toBe(2 + 32_999)
     expect((await runOf(h, run.id)).counts).toMatchObject({ links: 2 + 32_999 })
@@ -739,18 +695,12 @@ describe("the import from the Zendesk archive", () => {
 const DONE = { state: "done", reason: null }
 const fileOf = (id: number, name: string, content: Buffer): StandInFile => ({ id, name, content, serve: "redirect" })
 const partsOf = (h: Harness) => h.db.select().from(messagePart).orderBy(asc(messagePart.zendeskAttachmentId))
-/** How many of these contents the stand-in clamd was given to scan since `from`. */
 const scansOf = (contents: Buffer[], from: number) =>
   clamd.scanned.slice(from).filter((scanned) => contents.some((content) => content.equals(scanned))).length
-/** A new run row, as the page's Start makes it, without running its job. */
 const newRun = async (h: Harness) => {
   const [made] = await h.db.insert(importRun).values({ startedBy: h.owner }).returning({ id: importRun.id })
   return made?.id ?? ""
 }
-/**
- * Runs a job while the stand-in clamd refuses streams longer than `limit` (as clamd past its StreamMaxLength), after a
- * self-test it passed: a file that long gets no verdict and waits.
- */
 async function withShortStreams<T>(h: Harness, limit: number, work: () => Promise<T>): Promise<T> {
   expect(await h.files.trustedScanner()).toBe(clamd.address)
   clamd.options.streamMaxLength = limit
@@ -779,7 +729,6 @@ describe("the import's files", () => {
     const first = await h.run()
     expect(first.outcome).toEqual(DONE)
 
-    // Each file of the archive is a part of its own comment, with intake's statuses.
     const keyOf = new Map((await messagesOf(h, 1)).map((m) => [m.id, m.zendeskKey]))
     const parts = (await partsOf(h)).filter((p) => keyOf.has(p.messageId))
     expect(
@@ -804,16 +753,13 @@ describe("the import's files", () => {
     expect(part("141")?.signature).toBe("Eicar-Test-Signature")
     expect(part("142")?.blockedBy).toBe("exe")
     expect([part("143")?.size, part("143")?.sha256]).toEqual([MEGABYTE + 1, sha256Of(huge)])
-    // Stored content is the archive's file; refused content never reaches the store.
     for (const row of parts.filter((p) => p.storedSha256 !== null)) {
       const source = h.zendesk.allFiles().find((f) => String(f.id) === row.zendeskAttachmentId)
       expect(await readFile(h.files.storedPath(row.storedSha256 as string))).toEqual(source?.content)
     }
     const stored = (await h.db.select({ sha256: storedFile.sha256 }).from(storedFile)).map((row) => row.sha256)
     for (const refused of [infected, program, huge]) expect(stored).not.toContain(sha256Of(refused))
-    // A part over the limit flags its message, as intake's do.
     expect((await messagesOf(h, 1)).find((m) => m.zendeskKey === "comment:14")?.reviewFlags).toEqual(["part_too_large"])
-    // The report lists the infected and the blocked file by name; one block event each.
     expect((await reportOf(h, first.id)).filter((row) => row.startsWith("1:"))).toEqual([
       "1:file_infected:report.txt",
       "1:file_blocked:setup.exe",
@@ -828,9 +774,6 @@ describe("the import's files", () => {
       ["infected", "report.txt", part("141")?.id],
     ])
 
-    // Again: the same parts and stored rows, no stored file scanned or stored again, no second block event, the same
-    // report. A file whose content was not stored is decided again: the infected one goes to the scanner again (the
-    // blocked type is refused by its type, before the scanner), and the one still over the limit is not read.
     const storedBefore = await h.db.select().from(storedFile).orderBy(asc(storedFile.sha256))
     const kept = h.zendesk.allFiles().filter((f) => ![141, 142, 143].includes(Number(f.id)))
     const from = clamd.scanned.length
@@ -848,7 +791,6 @@ describe("the import's files", () => {
       "1:file_blocked:setup.exe",
     ])
 
-    // Once the admin raises the limit, the file refused as too large is scanned and stored by the next run.
     await h.settings.update({ "files.maxBytes": 2 * MEGABYTE }, SYSTEM)
     const third = await h.run()
     expect(third.outcome).toEqual(DONE)
@@ -861,10 +803,8 @@ describe("the import's files", () => {
 
   it("imports a side conversation file by its string ID, and reports a file with no ID it can use", async () => {
     const h = await start()
-    // Before: ticket 1's side conversation carries one file.
     const before = await h.run()
     const filesBefore = ((await runOf(h, before.id)).counts as { files: number }).files
-    // Zendesk's side conversation attachments have string IDs (its Side Conversation Attachments reference).
     const photo: StandInFile = {
       id: "01M1BJQJ58GFNNX614V04CHXTS",
       name: "photo.txt",
@@ -905,7 +845,6 @@ describe("the import's files", () => {
       .where(eq(messagePart.zendeskAttachmentId, String(photo.id)))
     expect([part?.messageId, part?.status, part?.fileName]).toEqual([note?.id, "clean", "photo.txt"])
     expect(await readFile(h.files.storedPath(part?.storedSha256 ?? ""))).toEqual(photo.content)
-    // The file with no ID is never dropped silently: the report names it, and the count holds it.
     expect((await reportOf(h, run.id)).filter((row) => row.startsWith("1:"))).toEqual([
       "1:file_unusable_id:unnamed.txt",
     ])
@@ -926,11 +865,9 @@ describe("the import's files", () => {
     const requests = h.zendesk.requests.length
     const id = await newRun(h)
     await withShortStreams(h, 600, () => expect(h.again(id)).rejects.toThrow(ScannerWaitingError))
-    // The run stopped at the ticket, open, and wrote nothing of it.
     expect(await runOf(h, id)).toMatchObject({ state: "running", reason: "scanner", done: 0 })
     expect(await h.db.select().from(message)).toHaveLength(0)
     expect(await h.db.select().from(messagePart)).toHaveLength(0)
-    // Its job again: the file is read from the archive, scanned once, and stored with its comment.
     const from = clamd.scanned.length
     expect(await h.again(id)).toEqual(DONE)
     expect(scansOf([slow], from)).toBe(1)
@@ -951,7 +888,6 @@ describe("the import's files", () => {
     ])
     expect(await h.db.select().from(messagePart).where(eq(messagePart.zendeskAttachmentId, "301"))).toHaveLength(0)
     expect(h.zendesk.requests.length).toBe(requests)
-    // The next backup downloads it.
     const lost = h.zendesk.tickets.get(3)?.comments[0]?.files[0]
     if (!lost) throw new Error("no lost file")
     lost.serve = "redirect"
@@ -992,7 +928,6 @@ describe("the import's files", () => {
       ["161", true, "comment:16", 0],
       ["401", true, "side:9001", 0],
     ])
-    // The question's two files swap places, and the comment with the third leaves Zendesk.
     h.zendesk.change(1, (t) => {
       t.comments[0]?.files.reverse()
       t.comments = t.comments.filter((c) => c.id !== 16)
@@ -1011,7 +946,6 @@ describe("the import's files", () => {
         from,
       ),
     ).toBe(0)
-    // A file that leaves its comment (Zendesk removed it) leaves the copy.
     h.zendesk.change(1, (t) => {
       const question = t.comments[0]
       if (question) question.files = question.files.filter((f) => f.id !== 101)
@@ -1074,7 +1008,6 @@ describe("the import's files", () => {
     const sha = sha256Of(invoice.content)
     const path = join(h.archive, "files", sha.slice(0, 2), sha)
     const id = await newRun(h)
-    // Replaced after the check by one far larger than a whole read could hold (sparse, so it takes no room).
     await expect(h.again(id, { afterCheck: () => truncate(path, 3 * 1024 ** 3) })).rejects.toThrow(ArchivedFileError)
     expect(await reportOf(h, id)).toEqual(["1:ticket_failed:archive"])
     expect(await h.db.select().from(messagePart)).toHaveLength(0)
@@ -1086,7 +1019,6 @@ describe("the import's files", () => {
     if (!invoice) throw new Error("no invoice")
     const sha = sha256Of(invoice.content)
     const path = join(h.archive, "files", sha.slice(0, 2), sha)
-    // The same content, so only its place can refuse it.
     const outside = join(h.archive, "..", `outside-${sha}`)
     await writeFile(outside, invoice.content)
     await rm(path)
@@ -1097,7 +1029,6 @@ describe("the import's files", () => {
     expect(await reportOf(h, id)).toEqual(["1:ticket_failed:archive"])
     expect(await h.db.select().from(messagePart)).toHaveLength(0)
     expect(await h.db.select().from(storedFile)).toHaveLength(0)
-    // The file back in the archive: the run goes on.
     await rm(path)
     await writeFile(path, invoice.content)
     expect(await h.again(id)).toEqual(DONE)
@@ -1130,16 +1061,11 @@ describe("the import's batches", () => {
       "archive",
     )
     expect(failureOf(new SyntaxError("Unexpected token"))).toBe("archive")
-    // A network error is not the archive's.
     expect(failureOf(Object.assign(new Error("reset"), { code: "ECONNRESET" }))).toBe("other")
     expect(failureOf(new Error("something else"))).toBe("other")
   })
 })
 
-/**
- * A message as intake's stage one stores it, for stage two to process in the import's database (phase 6: Maane is
- * live while the import still runs). The stand-in Graph is not needed: stage two reads only the stored row.
- */
 async function received(
   h: Harness,
   values: { from: string; subject: string; messageId?: string; text?: string },
@@ -1172,7 +1098,6 @@ async function received(
   return row.id
 }
 
-/** A promise a hook waits on until the test releases it. */
 function gate() {
   let open!: () => void
   const opened = new Promise<void>((resolve) => {
@@ -1191,7 +1116,6 @@ describe("live from day one (phase 6)", () => {
     expect((await h.run()).outcome).toEqual(DONE)
     const before = await ticketOf(h, 2)
     expect(before?.status).toBe("pending")
-    // The customer (ticket 2's requester) answers through Maane: intake joins the imported ticket.
     const reply = await received(h, { from: "user3@example.com", subject: "Re: [#2] Order details" })
     expect(await new IntakeProcessor({ db: h.db }).run()).toEqual({ processed: 1, failed: 0 })
     const [record] = await h.db.select().from(intakeRecord).where(eq(intakeRecord.messageId, reply))
@@ -1199,7 +1123,6 @@ describe("live from day one (phase 6)", () => {
     const joined = await ticketOf(h, 2)
     expect(joined?.status).toBe("open")
     expect(joined?.lastActivityAt.getTime()).toBeGreaterThan(before?.lastActivityAt.getTime() ?? 0)
-    // The import's waiting period ended with the customer's reply.
     expect(
       await h.db
         .select()
@@ -1207,7 +1130,6 @@ describe("live from day one (phase 6)", () => {
         .where(and(eq(waitingPeriod.ticketId, before?.id ?? ""), isNull(waitingPeriod.endedAt))),
     ).toEqual([])
 
-    // Zendesk changed the ticket meanwhile: a comment's text, its status, and its CCs.
     h.zendesk.change(2, (t) => {
       const first = t.comments[0]
       if (first) first.body = "Order details, corrected"
@@ -1218,11 +1140,9 @@ describe("live from day one (phase 6)", () => {
     const rerun = await h.run()
     expect(rerun.outcome).toEqual(DONE)
     expect(await reportOf(h, rerun.id)).toContain("2:kept_live_changes:")
-    // The imported comments are updated; the reply intake added stays.
     const texts = (await messagesOf(h, 2)).map((row) => (row.zendeskKey ? row.textBody : `live:${row.id}`))
     expect(texts).toContain("Order details, corrected")
     expect(texts).toContain(`live:${reply}`)
-    // The ticket's own fields stay as live mail left them: status, activity, participants, and no new import period.
     const after = await ticketOf(h, 2)
     expect(after?.status).toBe("open")
     expect(after?.lastActivityAt).toEqual(joined?.lastActivityAt)
@@ -1233,7 +1153,6 @@ describe("live from day one (phase 6)", () => {
         .from(waitingPeriod)
         .where(and(eq(waitingPeriod.ticketId, before?.id ?? ""), isNull(waitingPeriod.endedAt))),
     ).toEqual([])
-    // A ticket intake never touched is replaced as before, and not reported.
     expect((await reportOf(h, rerun.id)).filter((row) => row.endsWith(":kept_live_changes:"))).toEqual([
       "2:kept_live_changes:",
     ])
@@ -1243,11 +1162,9 @@ describe("live from day one (phase 6)", () => {
     const h = await start()
     expect((await h.run()).outcome).toEqual(DONE)
     const intake = new IntakeProcessor({ db: h.db })
-    // Another sender with the same Message-ID as an imported comment is not the same mail.
     await received(h, { from: "user3@example.com", subject: "Re: [#1]", messageId: "question-1@mail.example.com" })
     await intake.run()
     expect((await ticketOf(h, 1))?.reviewFlags).not.toContain("possible_duplicate")
-    // The import first: ticket 1's question came from user2 with this Message-ID; the same mail arrives live.
     const first = await received(h, {
       from: "user2@example.com",
       subject: "Re: [#1]",
@@ -1259,10 +1176,8 @@ describe("live from day one (phase 6)", () => {
     const onOne = await messagesOf(h, 1)
     expect(onOne.filter((row) => row.zendeskMessageId === "question-1@mail.example.com")).toHaveLength(1)
     expect(onOne.map((row) => row.id)).toContain(first)
-    // The Message-ID of an imported comment is never a threading key: it is not in message_id_header.
     expect(onOne.filter((row) => row.zendeskKey !== null && row.messageIdHeader !== null)).toEqual([])
 
-    // Intake first: user3's mail joins ticket 2, then Zendesk's copy of the same mail comes in with a rerun.
     const second = await received(h, {
       from: "user3@example.com",
       subject: "Re: [#2]",
@@ -1288,15 +1203,12 @@ describe("live from day one (phase 6)", () => {
     const onTwo = await messagesOf(h, 2)
     expect(onTwo.map((row) => row.id)).toContain(second)
     expect(onTwo.filter((row) => row.zendeskKey === "comment:23")).toHaveLength(1)
-    // A rerun never removes the flag.
     expect((await h.run()).outcome).toEqual(DONE)
     expect((await ticketOf(h, 1))?.reviewFlags.filter((flag) => flag === "possible_duplicate")).toHaveLength(1)
   })
 
   it("imports a comment whose Message-ID is too long in bytes, keeping it only in the comment's source", async () => {
     const h = await start()
-    // Pseudo-random CJK ideographs (U+4E00 to U+9FFF, three bytes each in UTF-8), built from code points: about 3,000
-    // bytes that PostgreSQL cannot compress.
     let seed = 0x2545f491
     const ideographs = Array.from({ length: 998 - "@mail.example.com".length }, () => {
       seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
@@ -1326,7 +1238,6 @@ describe("live from day one (phase 6)", () => {
     const h = await start()
     expect((await h.run()).outcome).toEqual(DONE)
     expect(await participantsOf(h, 1)).toEqual(["user2@example.com", "user3@example.com"])
-    // Zendesk drops user3 from ticket 1's CCs; the rerun holds ticket 1's transaction while user3's reply arrives.
     h.zendesk.change(1, (t) => {
       t.record = { ...t.record, email_cc_ids: [] }
     })
@@ -1347,7 +1258,6 @@ describe("live from day one (phase 6)", () => {
     expect((await rerun).outcome).toEqual(DONE)
     expect(await processing).toEqual({ processed: 1, failed: 0 })
     expect(await participantsOf(h, 1)).toEqual(["user2@example.com"])
-    // user3 is no longer a participant: the reply opens its own ticket, linked and flagged; ticket 1 is not joined.
     const [record] = await h.db.select().from(intakeRecord).where(eq(intakeRecord.messageId, reply))
     const one = await ticketOf(h, 1)
     expect(record).toMatchObject({
@@ -1360,7 +1270,6 @@ describe("live from day one (phase 6)", () => {
 
   it("reports number_taken for a ticket intake opened with a Zendesk number", async () => {
     const h = await start()
-    // Intake's next number is 3, a number the archive also holds.
     await h.db.execute(sql`select setval('ticket_number_seq', 2, true)`)
     const mail = await received(h, { from: "someone@example.com", subject: "A new question" })
     await new IntakeProcessor({ db: h.db }).run()
@@ -1375,12 +1284,10 @@ describe("live from day one (phase 6)", () => {
 
   it("never moves the sequence back, also when intake draws a number while a run reads the highest one", async () => {
     const h = await start()
-    // A sequence already past every imported number stays where it is.
     await h.db.execute(sql`select setval('ticket_number_seq', 500, true)`)
     expect((await h.run()).outcome).toEqual(DONE)
     expect(await nextNumber(h)).toBe(501)
 
-    // Intake holds the number lock and draws a number while a rerun's ticket waits for it.
     const hold = gate()
     const mail = await received(h, { from: "someone@example.com", subject: "Drawn meanwhile" })
     const processing = new IntakeProcessor({ db: h.db }).run({
@@ -1406,7 +1313,6 @@ describe("live from day one (phase 6)", () => {
 
   it("inserts an imported number while intake waits to draw the same one: no deadlock, no duplicate", async () => {
     const h = await start()
-    // Before the first import intake's next number is 1, and the archive's first ticket is 1.
     const hold = gate()
     const run = h.run({
       inTicket: async (zendeskId) => {
@@ -1423,7 +1329,6 @@ describe("live from day one (phase 6)", () => {
     const [done, processed] = await Promise.all([run, processing])
     expect(done.outcome).toEqual(DONE)
     expect(processed).toEqual({ processed: 1, failed: 0 })
-    // The import took 1 under the lock; intake drew the next free number after it, and the import reported that one.
     expect((await ticketOf(h, 1))?.zendeskId).toBe(1)
     const [record] = await h.db.select().from(intakeRecord).where(eq(intakeRecord.messageId, mail))
     const [drawn] = await h.db

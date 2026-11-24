@@ -9,10 +9,6 @@ import { createTestApp } from "../testing/app.ts"
 import { nextIp, TestBrowser, testPassword } from "../testing/browser.ts"
 import { createTestDatabase } from "../testing/db.ts"
 
-// Graph on the Settings page (plan 2.3): the four settings, the secret stored encrypted and never returned, the intake
-// source that a tenant or mailbox change makes current, and the connection test the server only queues. A pg-boss
-// client plays the worker through pg-boss's documented fetch and complete.
-
 let database: Awaited<ReturnType<typeof createTestDatabase>>
 let queue: JobQueue
 let app: ReturnType<typeof createTestApp>
@@ -41,7 +37,6 @@ async function firstAdmin() {
   return b
 }
 
-/** A client secret in the form Entra issues, new for each run. */
 const clientSecret = () => `${randomBytes(3).toString("hex")}8Q~${randomBytes(18).toString("hex")}`
 
 describe("Graph in Settings", () => {
@@ -76,7 +71,6 @@ describe("Graph in Settings", () => {
     const sources = async () =>
       (await database.db.select().from(intakeSource)).map((source) => [source.tenantId, source.mailbox, source.current])
     expect(await sources()).toEqual([[tenant, "intake@example.com", true]])
-    // Another mailbox: a new current source; the old one stays, not current. Back again: the old one is current.
     expect((await admin.call("PUT", "/api/v1/settings", { "graph.mailbox": "Other@Example.com" })).status).toBe(200)
     expect((await sources()).sort()).toEqual([
       [tenant, "intake@example.com", false],
@@ -87,7 +81,6 @@ describe("Graph in Settings", () => {
       [tenant, "intake@example.com", true],
       [tenant, "other@example.com", false],
     ])
-    // Another setting leaves the source alone.
     expect((await admin.call("PUT", "/api/v1/settings", { "security.sessionDays": 20 })).status).toBe(200)
     expect((await sources()).filter((source) => source[2])).toHaveLength(1)
     for (const [key, value] of [
@@ -127,7 +120,6 @@ describe("Graph in Settings", () => {
       state: "done",
       result: output,
     })
-    // An output that is not a test result reads as failed; an unknown job is not found.
     const other = (await admin.call("POST", "/api/v1/settings/graph/test")).json.id as string
     await worker.fetch(GRAPH_TEST)
     await worker.complete(GRAPH_TEST, other, { unexpected: true })

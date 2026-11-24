@@ -46,28 +46,18 @@ import { workflowRoutes } from "./workflow.ts"
 
 export interface AppContext {
   db: Db
-  /** The running Better Auth instance; rebuilt when a setting it reads changes. */
   auth: () => Auth
   settings: Settings
   setup: SetupWindow
   publicUrl: URL
   webDir: string
-  /** The content-addressed file store the worker writes (MAANE_FILES_DIR); the server only reads it. */
   filesDir: string
   version: string
-  /** Called after settings change, so the auth instance can pick up a new session length. */
   onSettingsChanged?: () => Promise<void>
-  /** The job queue: the server only queues jobs the worker runs, and reads their state. */
   jobs: JobQueue
-  /**
-   * MAANE_TRUSTED_PROXIES: only a request from one of these may name its client in X-Forwarded-For (the link routes).
-   */
   trustedProxies: string[]
-  /** The read-only directory of the GeoLite2 City and ASN files, or null for no location. */
   geoipDir: string | null
-  /** MAANE_VAPID_PUBLIC_KEY: the key a browser subscribes to notifications with (plan 4.5). */
   vapidPublicKey: string
-  /** MAANE_ZENDESK_ARCHIVE_DIR: the Zendesk archive's read-only mount, which the import page reads (plan 5.1). */
   archiveDir: string
 }
 
@@ -99,7 +89,6 @@ const smtpTestOutput = z.object({
   checkedAt: z.string(),
 })
 
-/** Control characters and the characters that reorder text: a display name shows in the From line of every reply. */
 const hiddenPoint = (code: number) =>
   code < 0x20 ||
   (code >= 0x7f && code <= 0x9f) ||
@@ -110,7 +99,6 @@ const hiddenPoint = (code: number) =>
   (code >= 0x2066 && code <= 0x2069)
 const HIDDEN = { test: (text: string) => [...text].some((char) => hiddenPoint(char.codePointAt(0) ?? 0)) }
 
-/** An agent's display name (plan 3.1): trimmed, 1 to AGENT_NAME_MAX characters, nothing hidden. */
 const AgentName = z.object({
   name: z
     .string()
@@ -121,7 +109,6 @@ const AgentName = z.object({
     }),
 })
 
-/** pg-boss's job states, as the Settings page shows a connection test. */
 const TEST_STATES: Record<string, ScannerTestView["state"]> = {
   created: "queued",
   retry: "queued",
@@ -133,10 +120,8 @@ const TEST_STATES: Record<string, ScannerTestView["state"]> = {
 
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-/** The header every state-changing browser request to /api/v1 carries; a cross-site form cannot set it. */
 export const REQUEST_HEADER = "x-maane-request"
 
-/** The browser's own headers minus Authorization: Maane's routes read the session from the cookie alone. */
 function cookieOnly(headers: Headers): Headers {
   const result = new Headers()
   const cookie = headers.get("cookie")
@@ -151,7 +136,6 @@ const CSP = [
   "img-src 'self' data:",
   "font-src 'self'",
   "connect-src 'self'",
-  // The ticket view frames each message body from /api/v1/messages/:id/body, which sends its own policy.
   "frame-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'none'",
@@ -162,17 +146,12 @@ const CSP = [
 export function createApp(ctx: AppContext) {
   const app = new Hono<Env>()
 
-  // The client address, read once for every request (client.ts): the audit rows, the link routes, and Better Auth's
-  // hooks all ask `clientIp` for it.
   const trust = trustOf(ctx.trustedProxies)
   app.use("*", async (c, next) => {
     rememberClient(c.req.raw, (c.env as Partial<HttpBindings> | undefined)?.incoming, trust)
     await next()
   })
 
-  // On every answer, so no page of the UI is ever served without its Content Security Policy, however it is reached. A
-  // route may declare its own policy for its successful answer (a message body, a file: SecurityHeaders in
-  // tickets.ts); every other answer, a refusal or an error of that route included, gets the UI's.
   app.use("*", async (c, next) => {
     await next()
     const own = c.get("security")
@@ -180,8 +159,6 @@ export function createApp(ctx: AppContext) {
     c.header("X-Content-Type-Options", "nosniff")
     c.header("Referrer-Policy", "no-referrer")
     if (!own || own.frameDeny) c.header("X-Frame-Options", "DENY")
-    // Everything under /api/v1 is private to the signed-in user and checked on every request (scope, role): no browser
-    // or proxy may keep a copy, success or refusal, so nothing is ever served again without that check.
     if (c.req.path === "/api/v1" || c.req.path.startsWith("/api/v1/")) c.header("Cache-Control", "private, no-store")
     else if (c.res.headers.get("content-type")?.startsWith("text/html")) c.header("Cache-Control", "no-store")
   })
@@ -189,7 +166,6 @@ export function createApp(ctx: AppContext) {
   app.get("/healthz/live", (c) => c.json({ ok: true, version: ctx.version }))
   app.get("/healthz/ready", async (c) => {
     try {
-      // Reads a table the migrations create: the database answers and is migrated.
       await ctx.db.select({ n: sql<number>`1` }).from(authUser).limit(1)
       return c.json({ ok: true, database: "ok", version: ctx.version })
     } catch (error) {
@@ -198,7 +174,6 @@ export function createApp(ctx: AppContext) {
     }
   })
 
-  // Tracked links and download links (plan 3.4): public, before the UI's fallback.
   const links = new Links(ctx.db, ctx.settings, new Geo(ctx.geoipDir))
   app.route("/", linkRoutes(links, ctx.settings, ctx.filesDir))
 
@@ -208,7 +183,6 @@ export function createApp(ctx: AppContext) {
     const [row] = await ctx.db.select({ id: authUser.id }).from(authUser).limit(1)
     const hasUser = row !== undefined
     const open = !hasUser && ctx.setup.isOpen()
-    // The language the UI starts in before anyone signs in, unless the browser chose one itself.
     const defaultLocale = await ctx.settings.get("general.defaultLocale")
     return c.json({
       hasUser,
@@ -239,7 +213,6 @@ export function createApp(ctx: AppContext) {
     await next()
   })
 
-  // Every route under /admin, here or in a router, is for admins: after the checks above, before any route.
   api.use("/admin/*", adminOnly)
 
   api.get("/me", (c) => c.json(c.get("user")))
@@ -248,7 +221,6 @@ export function createApp(ctx: AppContext) {
 
   api.put("/settings", adminOnly, async (c) => {
     const body = await c.req.json().catch(() => null)
-    // Any keys: the settings service refuses an unknown one with setting_unknown before writing anything.
     const parsed = z.record(z.string(), z.unknown()).safeParse(body)
     if (!parsed.success) return c.json({ error: "setting_invalid" }, 400)
     try {
@@ -260,7 +232,6 @@ export function createApp(ctx: AppContext) {
       throw error
     }
     await ctx.onSettingsChanged?.()
-    // A new scanner address is trusted only after it passed the self-test: the worker runs it now.
     if ("scanner.address" in parsed.data) {
       await ctx.jobs
         .send(SCANNER_SELF_TEST)
@@ -269,7 +240,6 @@ export function createApp(ctx: AppContext) {
     return c.json({ settings: await ctx.settings.view() })
   })
 
-  // The scanner's latest self-test, and a connection test the worker runs (the server never calls the scanner).
   api.get("/settings/scanner", adminOnly, async (c) => {
     const [row] = await ctx.db.select().from(scannerCheck).where(eq(scannerCheck.id, 1))
     const status: ScannerStatusView | null = row
@@ -302,8 +272,6 @@ export function createApp(ctx: AppContext) {
     return c.json(view)
   })
 
-  // The Graph connection test (plan 2.3): the worker reads the intake mailbox's Inbox folder metadata with the saved
-  // settings and reports success or Graph's error code. It reads no message and writes nothing.
   api.post("/settings/graph/test", adminOnly, async (c) => {
     const id = await ctx.jobs.send(GRAPH_TEST)
     return c.json({ id }, 202)
@@ -322,8 +290,6 @@ export function createApp(ctx: AppContext) {
     return c.json(view)
   })
 
-  // The SMTP connection tests (plan 3.1): the worker connects and logs in to one provider with the saved settings
-  // (nodemailer's transporter.verify()) and reports success or what failed. It sends nothing.
   api.post("/settings/smtp/:provider/test", adminOnly, async (c) => {
     const provider = c.req.param("provider")
     if (!(PROVIDERS as readonly string[]).includes(provider)) return c.json({ error: "not_found" }, 404)
@@ -344,8 +310,6 @@ export function createApp(ctx: AppContext) {
     return c.json(view)
   })
 
-  // SMTP2GO's delivery webhook (plan 3.3): a new secret path and Authorization token from the CSPRNG, stored encrypted
-  // and shown this once, for the admin to copy into SMTP2GO. Making new ones replaces the old ones at once.
   api.post("/settings/smtp2go/webhook", adminOnly, async (c) => {
     const values = await ctx.settings.generate(
       ["smtp2go.webhookPath", "smtp2go.webhookToken"],
@@ -359,8 +323,6 @@ export function createApp(ctx: AppContext) {
     return c.json(view)
   })
 
-  // An agent's display name, which every reply's From line carries (plan 3.1). Better Auth's documented server API
-  // updates it, with the admin's own session and the name only; its HTTP route /admin/update-user stays closed.
   api.put("/admin/users/:id/name", async (c) => {
     const userId = c.req.param("id")
     const parsed = AgentName.safeParse(await c.req.json().catch(() => null))
@@ -412,7 +374,6 @@ export function createApp(ctx: AppContext) {
   app.route("/hooks", hookRoutes(ctx.db, ctx.settings))
   app.all("/api/*", (c) => c.json({ error: "not_found" }, 404))
 
-  // The built UI: files as they are, every other path gets index.html (client-side routes).
   app.get("*", serveStatic({ root: ctx.webDir }))
   app.get("*", async (c) => {
     const html = await readFile(join(ctx.webDir, "index.html"), "utf8").catch(() => null)
@@ -421,7 +382,6 @@ export function createApp(ctx: AppContext) {
   })
 
   app.onError((error, c) => {
-    // An error answer never keeps a policy its route declared for success.
     c.set("security", undefined)
     if (error instanceof Refusal) return c.json({ error: error.code, ...error.details }, error.status)
     log.error("request failed", { path: loggedPath(new URL(c.req.url).pathname), ...errorFacts(error) })

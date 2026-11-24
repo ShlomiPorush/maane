@@ -1,6 +1,3 @@
-// The rules the admin pages apply before they ask the server: which user actions show, how a setting's text becomes
-// its value, and which facts an audit entry names.
-
 import { describe, expect, it } from "vitest"
 import { translate } from "../i18n/i18n.tsx"
 import { describe as describeEntry } from "./AuditPage.tsx"

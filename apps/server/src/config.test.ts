@@ -4,10 +4,6 @@ import { ConfigError, isGeneratedHex, isPlaceholder, loadConfig } from "./config
 
 const key = () => randomBytes(32).toString("hex")
 const password = () => randomBytes(16).toString("hex")
-/**
- * A VAPID pair in the form web-push's generateVAPIDKeys makes, new for each call: a P-256 key pair as base64url, the
- * private key padded to 32 bytes as web-push pads it (Node drops its leading zero bytes about once in 256 keys).
- */
 const vapid = () => {
   const curve = createECDH("prime256v1")
   curve.generateKeys()
@@ -42,8 +38,6 @@ const problems = (e: NodeJS.ProcessEnv) => {
   }
 }
 
-// Instructions an example or a template could hold, in the forms reviews found: numbers next to words, long words,
-// camelCase, and punctuation. Each is longer than 32 bytes.
 const INSTRUCTIONS = [
   "<generate-32-random-bytes-and-paste-them-here>",
   "replace-me-with-32-random-bytes-before-starting",
@@ -121,7 +115,6 @@ describe("loadConfig", () => {
 
   it("refuses a database password that is not random bytes as hex", () => {
     for (const value of [...INSTRUCTIONS, "changeme", "yourSecretHere", "0".repeat(64), password().slice(0, 30)]) {
-      // Assembled, so the guards' URL-credential check does not read the source line as a real password.
       const url = ["postgres://maane:", encodeURIComponent(value), "@postgres/maane"].join("")
       expect(problems(env({ DATABASE_URL: url })), value).toContain("DATABASE_URL's password must be random bytes")
     }
@@ -139,8 +132,6 @@ describe("loadConfig", () => {
   })
 
   it("reads the Graph variables, and refuses a client secret that reads as an example and invalid IDs", () => {
-    // A secret in the form Entra issues, assembled at run time and new for each run (hex, so no word in it reads as an
-    // example).
     const secret = `${randomBytes(3).toString("hex")}8Q~${randomBytes(18).toString("hex")}`
     const loaded = loadConfig(
       env({
@@ -159,7 +150,6 @@ describe("loadConfig", () => {
     expect(problems(env({ MAANE_GRAPH_TENANT_ID: "not a tenant" }))).toContain("MAANE_GRAPH_TENANT_ID is not valid")
     expect(problems(env({ MAANE_GRAPH_CLIENT_ID: "app" }))).toContain("MAANE_GRAPH_CLIENT_ID is not valid")
     expect(problems(env({ MAANE_GRAPH_MAILBOX: "intake" }))).toContain("MAANE_GRAPH_MAILBOX is not valid")
-    // A domain name is a tenant too.
     expect(loadConfig(env({ MAANE_GRAPH_TENANT_ID: "example.onmicrosoft.com" })).overrides["graph.tenantId"]).toBe(
       "example.onmicrosoft.com",
     )
@@ -209,7 +199,6 @@ describe("isPlaceholder (outside services' credentials set through the environme
   })
 
   it("leaves credentials in the forms services issue", () => {
-    // Assembled at run time: the guards and push protection scan literal text for credential formats.
     for (const value of [
       key(),
       ["api", randomBytes(16).toString("hex").toUpperCase()].join("-"),

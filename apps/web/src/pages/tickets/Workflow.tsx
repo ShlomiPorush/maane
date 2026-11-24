@@ -1,9 +1,3 @@
-// What an agent changes on a ticket from its page (plan 4.1): the status (a select that saves at once; `closed` is set
-// and left only by an admin, so an agent sees it locked with the reason), the categories (a dialog of checkboxes), and
-// the organization (a dialog that moves the ticket to another organization the user may move it to); and (plan 4.2)
-// its snooze: until a date and time in Israel time, changed or ended by hand. The server decides every change again;
-// these only offer what it allows.
-
 import { mayChangeStatus, TICKET_STATUSES, type TicketStatus, type TicketView } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlarmClock, ArrowRightLeft, Pencil } from "lucide-react"
@@ -30,7 +24,6 @@ function useRefresh(number: number) {
     ])
 }
 
-/** The status: saved as soon as it is chosen. */
 export function StatusControl({ view }: { view: TicketView }) {
   const { t } = useI18n()
   const role = useMe().data?.role ?? "agent"
@@ -179,7 +172,6 @@ function CategoriesDialog({ view, onClose }: { view: TicketView; onClose: () => 
   )
 }
 
-/** The snooze: until when (Israel time), and Snooze, Change, End snooze. */
 export function SnoozeControl({ view }: { view: TicketView }) {
   const { t } = useI18n()
   const refresh = useRefresh(view.ticket.number)
@@ -219,7 +211,6 @@ export function SnoozeControl({ view }: { view: TicketView }) {
         <AlarmClock aria-hidden="true" />
         {until ? t("ticket.snooze.change") : t("ticket.snooze.open")}
       </button>
-      {/* Also for a snooze whose time passed and whose end is late: the agent need not wait for it. */}
       {until || view.ticket.snoozeOverdue ? (
         <button type="button" className="ui-btn ui-btn-sm" disabled={busy} onClick={() => void wake()}>
           {t("ticket.snooze.end")}
@@ -246,7 +237,6 @@ export function SnoozeControl({ view }: { view: TicketView }) {
   )
 }
 
-/** The organization, and the dialog that moves the ticket when the user may. */
 export function OrganizationControl({ view }: { view: TicketView }) {
   const { t } = useI18n()
   const [moving, setMoving] = useState(false)

@@ -1,6 +1,3 @@
-// The authenticator app names the account after the username; the secret and every other part of Better Auth's
-// link stay as they were. A new base32 secret per run: no working value in the repository.
-
 import { userEmail } from "@maane/shared"
 import { describe, expect, it } from "vitest"
 import { authenticatorUri, totpSecret } from "./authenticator.ts"

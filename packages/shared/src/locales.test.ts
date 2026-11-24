@@ -19,7 +19,6 @@ describe("locales", () => {
   })
 
   it("holds Hebrew text in the Hebrew locale only", () => {
-    // The Hebrew block, U+0590 to U+05FF, built from code points: Hebrew stays out of source files.
     const hebrew = new RegExp(`[${String.fromCodePoint(0x590)}-${String.fromCodePoint(0x5ff)}]`)
     expect(MESSAGES.he.app.name).toMatch(hebrew)
     expect(MESSAGES.en.app.name).not.toMatch(hebrew)

@@ -1,8 +1,3 @@
-// Two-factor setup for a signed-in user whose two-factor is off, /enroll: a new user after their first sign-in, or
-// anyone who turned it off to set up a new authenticator app. Maane's API answers such a session only with
-// totp_required, so the gate sends it here. With no session, sign-in; with two-factor already on, on to `next`.
-// Sign out is always offered: the session can do nothing else.
-
 import { useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { Navigate, useNavigate, useSearchParams } from "react-router"
@@ -39,9 +34,7 @@ export function EnrollPage() {
         />
       </AuthFrame>
     )
-  // Decided only on a read made after this page opened: a cached full session may be gone (two-factor turned off).
   if (me.isPending || me.isFetching) return <Loading label={t("app.loading")} />
-  // A failed read keeps the old answer beside its error: the error decides.
   const error = me.error
   if (error instanceof ApiError && error.status === 401) return <Navigate to={withNext("/login", next)} replace />
   if (!error && me.data) return <Navigate to={next} replace />

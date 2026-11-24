@@ -10,7 +10,6 @@ import { ASN_FILE, CITY_FILE, Geo, NO_LOCATION } from "./geo.ts"
 import { scannerReasons } from "./scanner.ts"
 import { CODE, linkBase, ReplyLinks } from "./service.ts"
 
-// The GeoLite2 test databases hold only documentation networks (testing/geoip/write-test-databases.go).
 const GEOIP = fileURLToPath(new URL("../testing/geoip/", import.meta.url))
 
 const CHROME_WINDOWS =
@@ -106,7 +105,6 @@ describe("the location of a click", () => {
       asn: 64496,
     })
     expect(await geo.locate("2001:db8::1")).toMatchObject({ country: "de", city: "Berlin", asn: 64499 })
-    // An address the files do not hold, and something that is not an address.
     expect(await geo.locate("203.0.113.200")).toEqual(NO_LOCATION)
     expect(await geo.locate("not-an-address")).toEqual(NO_LOCATION)
     expect(await geo.locate(null)).toEqual(NO_LOCATION)
@@ -125,15 +123,12 @@ describe("the location of a click", () => {
     const geo = new Geo(dir, () => now)
     expect(await geo.locate("192.0.2.10")).toEqual(NO_LOCATION)
     await copyFile(join(GEOIP, ASN_FILE), join(dir, ASN_FILE))
-    // Looked for again only after a minute.
     expect(await geo.locate("192.0.2.10")).toEqual(NO_LOCATION)
     now += 60_000
     expect(await geo.locate("192.0.2.10")).toEqual({ ...NO_LOCATION, isp: "Example Net", asn: 64496 })
-    // A damaged City file fails alone: the ASN part stays.
     await copyFile(join(GEOIP, "write-test-databases.go"), join(dir, CITY_FILE))
     now += 60_000
     expect(await geo.locate("192.0.2.10")).toEqual({ ...NO_LOCATION, isp: "Example Net", asn: 64496 })
-    // Replaced by a good file: read again by its new modification time.
     await copyFile(join(GEOIP, CITY_FILE), join(dir, CITY_FILE))
     await utimes(join(dir, CITY_FILE), new Date(), new Date(Date.now() + 5_000))
     now += 60_000

@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Run a pull request as its own stack, next to the development stack and without touching it.
-# Usage: scripts/try-pr.sh <number> | status | restore
 set -euo pipefail
 
 # shellcheck source=scripts/lib/common.sh
@@ -9,17 +7,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 PR_PROJECT="maane-pr"
 STATE_DIR="$CACHE_DIR/try-pr"
 STATE_FILE="$STATE_DIR/state.env"
-# The first admin's username, password, TOTP secret, and backup codes, written by the seed (0600). Never in a file
-# a container reads.
 ADMIN_FILE="$STATE_DIR/admin.env"
 COMPOSE_FILE="$STATE_DIR/compose.yml"
 DATA_DIR="$STATE_DIR/data"
 WORKTREE="$STATE_DIR/worktree"
-# Locked while a start or a restore runs, so a second one refuses. flock, not mkdir: the kernel releases the lock when
-# the process ends, however it ends, and mkdir is not atomic in every coreutils (uutils 0.8 lets two racers win).
 LOCK_FILE="$CACHE_DIR/try-pr.lock"
 DEFAULT_PORT=8096
-# Filled from STATE_FILE by load_state.
 PR="" COMMIT="" REF="" PORT="" IMAGE=""
 
 usage() {
@@ -42,8 +35,6 @@ pr_compose() {
   docker compose -p "$PR_PROJECT" --project-directory "$STATE_DIR" -f "$COMPOSE_FILE" "$@"
 }
 
-# Takes the lock on file descriptor 9 for the rest of this process, or refuses. The file itself stays: removing it
-# while another process waits on it would let a third lock a new file of the same name.
 take_lock() {
   command -v flock >/dev/null 2>&1 || die "flock (util-linux) is missing; install util-linux"
   mkdir -p "$CACHE_DIR"
@@ -67,8 +58,6 @@ save_state() {
   } >"$STATE_FILE"
 }
 
-# The development template of the pull request itself, with this stack's image, port, and data directory, and the
-# configuration files it mounts from the pull request's worktree: the stack runs as the pull request defines it.
 write_compose() {
   sed -e "s|maane:\${MAANE_IMAGE_TAG}|$IMAGE|g" \
     -e "s|\./docker/|$WORKTREE/docker/|g" \
@@ -77,7 +66,7 @@ write_compose() {
     -e "s|\${MAANE_PORT}|$PORT|g" \
     "$WORKTREE/docker/docker-compose-dev.example.yml" >"$COMPOSE_FILE"
   if grep -qF "\${MAANE_" "$COMPOSE_FILE"; then
-    # restore runs Compose on this file when it exists, and a variable left in it can stop restore too.
+    # A kept file with a ${VAR:?} form makes restore's Compose call fail, so restore never finishes.
     rm -f "$COMPOSE_FILE"
     die "the pull request's docker/docker-compose-dev.example.yml uses variables this script does not set (a pull request from before the plain \${VAR} form). Clean up with: scripts/try-pr.sh restore"
   fi
@@ -85,7 +74,6 @@ write_compose() {
 
 seed() {
   info "Creating the first admin through the setup screen's sign-up, with two-factor on"
-  # The seed writes the admin's sign-in to /state/admin.env (0600) and prints none of it.
   TOOLCHAIN_EXTRA_ARGS=(--network "${PR_PROJECT}_default" -v "$STATE_DIR:/state"
     -e MAANE_URL=http://server:8080 -e "MAANE_ORIGIN=http://127.0.0.1:$PORT" -e MAANE_ADMIN_FILE=/state/admin.env)
   in_toolchain "node scripts/lib/try-pr-seed.mjs"
@@ -117,11 +105,10 @@ try_pr() {
   PR="$pr" COMMIT="" REF="refs/maane/try-pr/$pr" IMAGE="maane:pr-$pr"
   mkdir -p "$STATE_DIR"
   chmod 700 "$STATE_DIR"
-  # Recorded before anything is created, so restore can always clean up.
   save_state
 
   info "Fetching pull request #$pr"
-  # 9>&-: a background maintenance task git may start after a fetch must not keep the lock.
+  # Without 9>&-, git maintenance left in the background keeps the lock, and restore is refused.
   git -C "$REPO_ROOT" fetch --quiet origin "+pull/$pr/head:$REF" 9>&- ||
     die "cannot fetch pull request #$pr from origin. Clean up with: scripts/try-pr.sh restore"
   COMMIT="$(git -C "$REPO_ROOT" rev-parse "$REF")"
@@ -131,15 +118,12 @@ try_pr() {
   info "Building $IMAGE from #$pr (${COMMIT:0:12})"
   docker build -f "$WORKTREE/docker/maane.Dockerfile" --build-arg "VERSION=pr$pr-${COMMIT:0:12}" -t "$IMAGE" "$WORKTREE" ||
     die "building $IMAGE failed. Clean up with: scripts/try-pr.sh restore"
-  # The seed runs in the toolchain within the 5-minute setup window, so its image is ready before the server starts.
   build_toolchain
 
   ensure_stack_env "$DATA_DIR"
   ensure_vapid_keys "$DATA_DIR" "$IMAGE"
   ensure_stack_dirs "$DATA_DIR"
   write_compose
-  # The setup screen closes 5 minutes after the server starts, and ClamAV's first signature download can take longer:
-  # the server and PostgreSQL come up first and the admin is seeded at once, then the rest of the stack.
   info "Starting the server of $PR_PROJECT on http://127.0.0.1:$PORT"
   pr_compose up -d --wait --wait-timeout 240 server || {
     pr_compose ps -a || true
@@ -148,7 +132,6 @@ try_pr() {
   }
   seed || die "seeding failed; the stack still runs. Inspect it, then: scripts/try-pr.sh restore"
   info "Starting the rest of $PR_PROJECT"
-  # ClamAV loads its signatures before it turns healthy, and downloads them first when the cache is empty.
   pr_compose up -d --wait --wait-timeout 600 || {
     pr_compose ps -a || true
     pr_compose logs --tail 50 || true
@@ -190,13 +173,10 @@ status() {
   check_stack
 }
 
-# The services of the pull request's own template: an older pull request has no clamav, a later one may add more.
 pr_services() {
   pr_compose config --services
 }
 
-# Every process of every service runs as a user other than root, and every service but PostgreSQL (whose official
-# entrypoint starts as root and drops to its own user) has no capability, no new privileges, and a read-only root.
 check_stack() {
   local services hardened
   services="$(pr_services)" || die "cannot read the services of $COMPOSE_FILE"
@@ -216,7 +196,6 @@ restore() {
     info "No pull request is recorded; removing any leftovers"
   fi
   require_linux_dir "$STATE_DIR"
-  # Only this project's containers and network; the development stack is a different project.
   if [ -f "$COMPOSE_FILE" ]; then
     pr_compose down --remove-orphans
   elif [ -n "$(docker ps -aq --filter "label=com.docker.compose.project=$PR_PROJECT")" ]; then

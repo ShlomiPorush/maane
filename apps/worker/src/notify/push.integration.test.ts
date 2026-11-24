@@ -1,7 +1,3 @@
-// Browser notifications (plan 4.5) against a stand-in push service: what a push holds, who gets it, the user's own
-// check before each send, revoked subscriptions, redirects, the allow list, and the job intake queues. Nothing
-// reaches a real push service.
-
 import { randomUUID } from "node:crypto"
 import { organizationMember, pushSubscription, ticket as ticketTable } from "@maane/server/db/schema"
 import { PUSH_NOTIFY, type PushJob } from "@maane/server/jobs/queue"
@@ -79,7 +75,6 @@ async function newAgent(admin: TestBrowser, name: string, organizationId: string
   return id
 }
 
-/** A device of a user: a subscription row on the stand-in, with the browser's keys kept to read what it receives. */
 async function device(userId: string, locale: Locale = "he", endpoint = push.endpoint()) {
   const browserSide = browserKeys()
   await h.database.db.insert(pushSubscription).values({ userId, endpoint, ...browserSide.keys, locale })
@@ -90,7 +85,6 @@ type Device = Awaited<ReturnType<typeof device>>
 
 const hits = (d: Device) => push.received.filter((request) => `${push.origin}${request.path}` === d.endpoint)
 
-/** What the device's browser reads from a push: web-push's aes128gcm encryption, decrypted with its own keys. */
 const opened = (request: PushRequest, d: Device) =>
   JSON.parse(decrypt(request.body, { version: "aes128gcm", privateKey: d.curve, authSecret: d.auth }).toString("utf8"))
 
@@ -108,7 +102,6 @@ function notifier(options: { publicUrl?: string; standIn?: boolean } = {}) {
   })
 }
 
-/** A customer's new ticket through intake, to the given support address. */
 async function customerTicket(to = SUPPORT, from = "Dana Customer <dana@example.com>") {
   const messageId = `${randomUUID()}@mail.example.com`
   const graphId = h.graph.add(mime({ messageId, subject: SUBJECT, from, to, text: { content: BODY } }))
@@ -145,7 +138,6 @@ describe("the push-notify job", () => {
       body: "Dana Customer",
       number,
     })
-    // Signed with the VAPID key, encrypted for the device, and kept a day at most.
     expect(String(toAdmin.headers.authorization)).toMatch(/^vapid t=.+, k=.+$/)
     expect(toAdmin.headers["content-encoding"]).toBe("aes128gcm")
     expect(toAdmin.headers.ttl).toBe(String(24 * 60 * 60))
@@ -196,7 +188,6 @@ describe("the push-notify job", () => {
     expect(await notifier().notify(job)).toEqual({ sent: 1, removed: 0, failed: 0 })
     expect(hits(removedDevice)).toHaveLength(0)
     expect(hits(stayingDevice)).toHaveLength(1)
-    // Still subscribed: the user may be added again, or see other organizations.
     expect(await subscriptions(removed)).toHaveLength(1)
   })
 
@@ -206,7 +197,6 @@ describe("the push-notify job", () => {
     const first = await device(agent)
     const second = await device(agent)
     const { job } = await customerTicket()
-    // The agent's first push waits at the push service until the agent is no longer allowed on the organization.
     push.during(async () => {
       await h.database.db
         .delete(organizationMember)
@@ -277,8 +267,6 @@ describe("the push-notify job", () => {
 
   it("sends nothing to an endpoint off the push services' allow list, also when it is stored", async () => {
     const admin = await firstAdmin()
-    // The stand-in itself (a loopback address), an internal name, and an address: the production allow list takes
-    // none of them.
     const standIn = await device(admin.id)
     await device(admin.id, "he", "https://localhost/push/one")
     await device(admin.id, "he", "https://192.0.2.10/push/two")
@@ -320,7 +308,6 @@ describe("intake's notifications", () => {
     await boss.stop({ graceful: false })
   })
 
-  /** Stage one, then stage two with a processor that queues notifications in its own transactions. */
   async function round() {
     await h.sync.run()
     const processor = new IntakeProcessor({
@@ -360,7 +347,6 @@ describe("intake's notifications", () => {
     expect(replyRow.ticketId).toBe(ticket?.id)
     expect(await queued()).toEqual([{ kind: "customer_reply", ticketId: ticket?.id, messageId: replyRow.id }])
 
-    // A reply to a closed ticket opens a follow-up (plan 4.1): a new ticket, which notifies as one.
     if (!ticket) throw new Error("no ticket")
     await h.database.db.update(ticketTable).set({ status: "closed" }).where(eq(ticketTable.id, ticket.id))
     const late = h.graph.add(
@@ -379,7 +365,6 @@ describe("intake's notifications", () => {
     expect(followUp?.id).not.toBe(ticket.id)
     expect(await queued()).toEqual([{ kind: "new_ticket", ticketId: followUp?.id, messageId: lateRow.id }])
 
-    // Automated mail opens and joins nothing, and notifies nobody.
     h.graph.add(
       mime({
         subject: "Out of office",

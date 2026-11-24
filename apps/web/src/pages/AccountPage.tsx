@@ -1,12 +1,3 @@
-// The Account page, /account, opened from the account menu: the user's own account on Better Auth's routes, each
-// action at once and outside any save bar. Signed in as; the signed-in sessions with End per session and End all
-// other sessions (/list-sessions, /revoke-session, /revoke-other-sessions); the password, changed in a dialog
-// (/change-password, which ends the other sessions); new backup codes (/two-factor/generate-backup-codes); and
-// two-factor turned off (/two-factor/disable) to set up a new authenticator app at once (/enroll). Every dialog with
-// typed input asks before dropping it (DS-9), and new backup codes not marked saved are never closed without a
-// warning. Browser notifications on this device (DeviceNotifications, plan 4.5). Signing out of this browser is in the
-// account menu.
-
 import { PASSWORD_MAX, PASSWORD_MIN } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { UserRound } from "lucide-react"
@@ -33,7 +24,6 @@ import { describeAgent } from "./agent.ts"
 import { BackupCodes, FormError, PasswordField } from "./auth/parts.tsx"
 import { Group, Row } from "./parts.tsx"
 
-/** A signed-in session as Better Auth lists it. */
 type BrowserSession = {
   id: string
   token: string
@@ -149,7 +139,6 @@ function AccountSections() {
           <div key={session.id} className="ui-item">
             <div className="ui-item-main">
               <span className="ui-item-title">
-                {/* The page's direction, not auto: the label is a sentence of this language around isolated names. */}
                 <span>{sessionName(session)}</span>{" "}
                 {session.id === current ? <Tag tone="info">{t("account.thisSession")}</Tag> : null}
               </span>
@@ -200,9 +189,7 @@ function AccountSections() {
           onClose={() => setDialog(null)}
           onDisabled={(password) => {
             setDialog(null)
-            // The setup starts at once with the password just typed, held in memory only.
             rememberForEnrollment(password)
-            // The cached full session is gone: the setup page must not take it for one.
             queryClient.removeQueries({ queryKey: qk.me })
             navigate(withNext("/enroll", ACCOUNT_PATH), { replace: true })
           }}
@@ -214,11 +201,6 @@ function AccountSections() {
 
 type PasswordFieldName = "current" | "next" | "repeat"
 
-/**
- * Change password, in a dialog: the current one, the new one twice. The page checks what it can before it sends,
- * naming and focusing the field; Better Auth ends the other sessions and this one stays. A refusal keeps the dialog
- * open (only the current password is emptied when it was wrong); a change closes it.
- */
 function PasswordDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
@@ -314,10 +296,6 @@ function PasswordDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-/**
- * New backup codes: the password, then the new codes shown once; the old ones stop working. Until "I saved them" is
- * ticked, every way of closing (X, Escape, Back, a pull down) first warns that the codes would be lost.
- */
 function NewCodesDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n()
   const formId = useId()
@@ -396,10 +374,6 @@ function NewCodesDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-/**
- * Two-factor off, to set up a new authenticator app: Better Auth's disable with the password, then the two-factor
- * setup at once. Until it is done, Maane answers this account only with the setup.
- */
 function TwoFactorOffDialog({ onClose, onDisabled }: { onClose: () => void; onDisabled: (password: string) => void }) {
   const { t } = useI18n()
   const formId = useId()
@@ -407,8 +381,6 @@ function TwoFactorOffDialog({ onClose, onDisabled }: { onClose: () => void; onDi
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const guardedClose = useDiscardGuard(Boolean(password), onClose)
-  // False once the dialog is gone (closed, or the pages remounted for another identity): a late answer must not start
-  // the setup, which would carry this password to whoever is signed in by then.
   const open = useRef(true)
   useEffect(() => {
     open.current = true

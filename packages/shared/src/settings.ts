@@ -3,49 +3,27 @@ import { isClientId, isMailbox, isTenantId } from "./intake.ts"
 import { isLinkDomain, LINK_TRACKING, type LinkTracking } from "./links.ts"
 import { LOCALES } from "./locales.ts"
 
-/**
- * Every setting the owner manages: its type, default, whether it is secret, and the environment variable that may
- * override it. An environment value wins over the stored one and locks the field in the UI. A setting without a
- * variable is stored only. Later phases add their settings here.
- */
 export interface SettingDefinition<T> {
-  /** Validates a value from the UI or the environment. */
   schema: z.ZodType<T>
   defaultValue: T
-  /** Stored encrypted and never returned by the API. */
   secret: boolean
-  /** The variable that overrides and locks this field, and how its text is parsed. Absent when no variable may set it. */
   env?: { name: string; parse: (text: string) => unknown }
-  /**
-   * Made by Maane from a cryptographically secure generator when the admin asks (plan 3.3), never typed in: the
-   * settings update refuses it, and no variable sets it.
-   */
   generated?: boolean
 }
 
-/**
- * What happens to a file while the scanner is unavailable (requirements 3.3): `block` keeps incoming files waiting
- * and scans them when the scanner is back; `allow` stores them marked "not scanned".
- */
 export const SCANNER_POLICIES = ["block", "allow"] as const
 export type ScannerPolicy = (typeof SCANNER_POLICIES)[number]
 
 export const MEGABYTE = 1024 * 1024
-/**
- * The bounds of files.maxBytes. ClamAV refuses a stream longer than its StreamMaxLength instead of scanning it, so
- * docker/clamav/clamd.conf sets that limit to this maximum, and an outside clamd must allow at least as much.
- */
 export const FILES_MAX_BYTES_MIN = 1 * MEGABYTE
 export const FILES_MAX_BYTES_MAX = 100 * MEGABYTE
 
-/** The bounds of scanner.scanTimeoutSeconds. */
 export const SCAN_TIMEOUT_MIN_SECONDS = 10
 export const SCAN_TIMEOUT_MAX_SECONDS = 600
 
 const HOST_LABEL = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
 const SCANNER_ADDRESS = new RegExp(`^(\\[[0-9A-Fa-f:.]{2,45}\\]|${HOST_LABEL}(?:\\.${HOST_LABEL})*):(\\d{1,5})$`)
 
-/** A clamd address as `host:port` (a name, an IPv4 address, or an IPv6 address in brackets), or null. */
 export function parseScannerAddress(text: string): { host: string; port: number } | null {
   const match = SCANNER_ADDRESS.exec(text)
   if (!match?.[1] || !match[2] || match[1].length > 253) return null
@@ -54,14 +32,9 @@ export function parseScannerAddress(text: string): { host: string; port: number 
   return { host: match[1].replace(/^\[(.*)\]$/, "$1"), port }
 }
 
-/**
- * An entry of files.blockedTypes: a file name extension without its dot (`exe`), or a detected type (`application/
- * x-msdownload`, as file-type names it). Both in lower case.
- */
 export const BLOCKED_TYPE = /^(?:[a-z0-9][a-z0-9_+-]{0,15}|[a-z]+\/[a-z0-9][a-z0-9.+-]{0,126})$/
 export const BLOCKED_TYPES_MAX = 200
 
-/** Lower case, without a leading dot, each entry once: how the UI and the environment write a list of blocked types. */
 export function normalizeBlockedTypes(text: string): string[] {
   const entries = text
     .split(/[\s,]+/)
@@ -70,11 +43,6 @@ export function normalizeBlockedTypes(text: string): string[] {
   return [...new Set(entries)]
 }
 
-/**
- * Executables and scripts, blocked like an infected file (requirements 3.3): by the file name's extension, and by
- * the type file-type detects from the content, so a renamed program is blocked too. Applies to the file itself, not to
- * the files inside an archive.
- */
 export const DEFAULT_BLOCKED_TYPES: readonly string[] = [
   "ade",
   "adp",
@@ -133,19 +101,14 @@ export const DEFAULT_BLOCKED_TYPES: readonly string[] = [
 
 const define = <T>(definition: SettingDefinition<T>) => definition
 
-/** A Graph setting's text: empty while it is not set, else what `valid` accepts. */
 const graphText = (valid: (text: string) => boolean) => z.string().refine((text) => text === "" || valid(text))
 
-/** The longest application secret Maane stores; Entra's are about 40 characters. */
 export const GRAPH_SECRET_MAX = 1024
 
-/** How the failover server is reached: STARTTLS, required, or TLS from the first byte. Never plain. */
 export const SMTP_SECURITIES = ["starttls", "tls"] as const
 export type SmtpSecurity = (typeof SMTP_SECURITIES)[number]
-/** SMTP2GO's ports that speak TLS from the first byte; every other port gets STARTTLS, required. */
 export const SMTP_TLS_PORTS: readonly number[] = [465, 8465, 443]
 
-/** A host name or an IP address, as an SMTP server's address. */
 export function isHostName(text: string): boolean {
   return (
     text.length <= 253 &&
@@ -153,21 +116,18 @@ export function isHostName(text: string): boolean {
   )
 }
 
-/** An SMTP setting's text: empty while it is not set, else what `valid` accepts. */
 const smtpText = (valid: (text: string) => boolean) => z.string().refine((text) => text === "" || valid(text))
 const smtpPort = z.number().int().min(1).max(65535)
 const smtpUser = z
   .string()
   .max(255)
   .regex(/^[^\r\n]*$/)
-/** A password or key of an outside service: one line, without white space at either end. */
 const secretText = z
   .string()
   .min(1)
   .max(GRAPH_SECRET_MAX)
   .regex(/^\S(?:[^\r\n]*\S)?$/)
 
-/** A generated webhook secret: 32 bytes as base64url, 43 characters. */
 export const WEBHOOK_SECRET = /^[A-Za-z0-9_-]{43}$/
 
 export const SETTINGS = {
@@ -183,8 +143,6 @@ export const SETTINGS = {
     secret: false,
     env: { name: "MAANE_SESSION_DAYS", parse: (text) => Number(text) },
   }),
-  // The clamd the worker scans with: the bundled clamav service, or the owner's own (docs/deployment.md lists what an
-  // outside clamd must be configured with).
   "scanner.address": define({
     schema: z.string().refine((text) => parseScannerAddress(text) !== null),
     defaultValue: "clamav:3310",
@@ -197,17 +155,12 @@ export const SETTINGS = {
     secret: false,
     env: { name: "MAANE_SCANNER_UNAVAILABLE_POLICY", parse: (text) => text },
   }),
-  /**
-   * How long one file scan may take, from connecting to clamd to its answer, before Maane gives up on it and the
-   * unavailable policy decides. Above clamd's MaxScanTime (120 s), so clamd's own limit answers first.
-   */
   "scanner.scanTimeoutSeconds": define({
     schema: z.number().int().min(SCAN_TIMEOUT_MIN_SECONDS).max(SCAN_TIMEOUT_MAX_SECONDS),
     defaultValue: 150,
     secret: false,
     env: { name: "MAANE_SCANNER_SCAN_TIMEOUT_SECONDS", parse: (text) => Number(text) },
   }),
-  /** The largest file Maane scans and stores, in bytes. */
   "files.maxBytes": define({
     schema: z.number().int().min(FILES_MAX_BYTES_MIN).max(FILES_MAX_BYTES_MAX),
     defaultValue: 50 * MEGABYTE,
@@ -220,8 +173,6 @@ export const SETTINGS = {
     secret: false,
     env: { name: "MAANE_FILES_BLOCKED_TYPES", parse: normalizeBlockedTypes },
   }),
-  // Microsoft Graph (plan 2.3): the Entra application that reads the intake mailbox, and the mailbox. Each may come from
-  // a variable that locks its field. A tenant or mailbox change makes a new current intake source.
   "graph.tenantId": define({
     schema: graphText(isTenantId),
     defaultValue: "",
@@ -234,27 +185,22 @@ export const SETTINGS = {
     secret: false,
     env: { name: "MAANE_GRAPH_CLIENT_ID", parse: (text) => text.trim() },
   }),
-  /** The application's client secret: stored encrypted, never returned. A variable that reads as an example is refused. */
   "graph.clientSecret": define({
     schema: z
       .string()
       .min(1)
       .max(GRAPH_SECRET_MAX)
-      // One line, without white space at either end.
       .regex(/^\S(?:[^\r\n]*\S)?$/),
     defaultValue: "",
     secret: true,
     env: { name: "MAANE_GRAPH_CLIENT_SECRET", parse: (text) => text.trim() },
   }),
-  /** The shared intake mailbox Maane reads (read only). */
   "graph.mailbox": define({
     schema: graphText(isMailbox),
     defaultValue: "",
     secret: false,
     env: { name: "MAANE_GRAPH_MAILBOX", parse: (text) => text.trim() },
   }),
-  // Sending (plan 3.1): SMTP to SMTP2GO first, then the failover server, both with TLS required. SMTP2GO uses TLS from
-  // the first byte on its TLS ports (SMTP_TLS_PORTS) and STARTTLS, required, on every other; the failover names its own.
   "smtp2go.host": define({
     schema: smtpText(isHostName),
     defaultValue: "mail.smtp2go.com",
@@ -273,22 +219,18 @@ export const SETTINGS = {
     secret: false,
     env: { name: "MAANE_SMTP2GO_USER", parse: (text) => text.trim() },
   }),
-  /** The SMTP user's password: stored encrypted, never returned. A variable that reads as an example is refused. */
   "smtp2go.password": define({
     schema: secretText,
     defaultValue: "",
     secret: true,
     env: { name: "MAANE_SMTP2GO_PASSWORD", parse: (text) => text.trim() },
   }),
-  /** SMTP2GO's API key, for delivery status only (phase 3.3): stored encrypted, never returned. */
   "smtp2go.apiKey": define({
     schema: secretText,
     defaultValue: "",
     secret: true,
     env: { name: "MAANE_SMTP2GO_API_KEY", parse: (text) => text.trim() },
   }),
-  // SMTP2GO's delivery webhook (plan 3.3): the secret part of its path and the token of its Authorization header. Both
-  // are app-owned secrets Maane generates (32 random bytes each, base64url), stored encrypted, shown once.
   "smtp2go.webhookPath": define({
     schema: z.string().regex(WEBHOOK_SECRET),
     defaultValue: "",
@@ -313,7 +255,6 @@ export const SETTINGS = {
     secret: false,
     env: { name: "MAANE_FAILOVER_PORT", parse: (text) => Number(text) },
   }),
-  /** STARTTLS, required, or TLS from the first byte. Never plain. */
   "failover.security": define({
     schema: z.enum(SMTP_SECURITIES),
     defaultValue: "starttls" as SmtpSecurity,
@@ -332,23 +273,18 @@ export const SETTINGS = {
     secret: true,
     env: { name: "MAANE_FAILOVER_PASSWORD", parse: (text) => text.trim() },
   }),
-  /** The envelope sender of mail sent through the failover: an address in the owner's domain that reaches intake. */
   "mail.bounceAddress": define({
     schema: smtpText(isMailbox),
     defaultValue: "",
     secret: false,
     env: { name: "MAANE_BOUNCE_ADDRESS", parse: (text) => text.trim() },
   }),
-  // Link tracking (plan 3.4): on, the links an agent writes become https://<link domain>/l/<code>, and clicks and
-  // downloads are recorded; off, links stay as written and nothing is recorded. Download links of history files exist
-  // either way.
   "links.tracking": define({
     schema: z.enum(LINK_TRACKING),
     defaultValue: "on" as LinkTracking,
     secret: false,
     env: { name: "MAANE_LINK_TRACKING", parse: (text) => text.trim().toLowerCase() },
   }),
-  /** The host name of tracked links and download links; empty means the public URL's own. */
   "links.domain": define({
     schema: z.string().refine((text) => text === "" || isLinkDomain(text)),
     defaultValue: "",
@@ -361,14 +297,11 @@ export type SettingKey = keyof typeof SETTINGS
 export type SettingValue<K extends SettingKey> = z.infer<(typeof SETTINGS)[K]["schema"]>
 export const SETTING_KEYS = Object.keys(SETTINGS) as SettingKey[]
 
-/** A setting as the API shows it. A secret's value is never returned: only whether it is set. */
 export interface SettingView {
   key: SettingKey
   value: unknown
   secret: boolean
-  /** For a secret: whether a value is stored or set by the environment. */
   set: boolean
   locked: boolean
-  /** The variable that sets it, when locked. */
   variable: string | null
 }

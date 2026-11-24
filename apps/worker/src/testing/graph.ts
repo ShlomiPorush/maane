@@ -7,15 +7,6 @@ import type { GraphFolder } from "@maane/shared"
 import { generate } from "selfsigned"
 import type { GraphConfig, GraphEndpoints } from "../intake/graph.ts"
 
-// A stand-in for Microsoft Entra's token endpoint and the part of Microsoft Graph intake reads, for integration tests
-// and the stack check. It speaks HTTPS with a certificate made for this run, because @azure/identity accepts only an
-// https authority host; tests trust it through Node's documented tls.setDefaultCACertificates. It accepts only the
-// client secret it generated for this run. Tests never reach Microsoft.
-//
-// Graph: delta queries of a folder's messages with paging (nextLink, deltaLink), `@removed` entries, `$value`, a 404
-// for a vanished message, an expired delta token (410 SyncStateNotFound), throttling (429 with Retry-After), refusal
-// (the connection is cut), a $value held until the test releases it, and mailboxes the application may not read (403).
-
 interface Stored {
   id: string
   mailbox: string
@@ -24,7 +15,6 @@ interface Stored {
   receivedAt: Date
   addedSeq: number
   removedSeq: number | null
-  /** $value answers 404 while the message still shows in the delta query. */
   vanished: boolean
   failing: boolean
 }
@@ -39,45 +29,29 @@ interface Snapshot {
 export interface StandInGraph {
   tenantId: string
   clientId: string
-  /** Generated for this run: the only secret the token endpoint accepts. */
   clientSecret: string
-  /** The mailbox the application may read; allow() adds others. */
   mailbox: string
-  /** For the gateway: the stand-in's authority host and Graph base URL. */
   endpoints: GraphEndpoints
-  /** The settings values that reach this stand-in's mailbox. */
   config(mailbox?: string): GraphConfig
-  /** Every request, as "METHOD path?query". */
   requests: string[]
-  /** Graph requests that did not ask for immutable IDs. */
   withoutImmutableIds: string[]
   pageSize: number
-  /** Adds a message to a folder; returns its immutable ID. */
   add(raw: Buffer, options?: { mailbox?: string; folder?: GraphFolder; receivedAt?: Date }): string
-  /** The message is deleted: an `@removed` entry in the next delta round, and 404 on $value. */
   remove(id: string): void
-  /** $value answers 404, while the delta query still lists the message. */
   vanish(id: string): void
-  /** $value answers 500 until further notice (a failure that is not final). */
   fail(id: string): void
-  /** Every delta and skip token issued so far answers 410 SyncStateNotFound. */
   expireTokens(): void
-  /** The next `count` Graph requests answer 429 with Retry-After: 1. */
   throttle(count: number): void
-  /** While on, every request is cut off without an answer, as an unreachable Graph. */
   refuse(on: boolean): void
   allow(mailbox: string): void
   deny(mailbox: string): void
-  /** Holds the next $value request of this message until release() is called. */
   hold(id: string): { reached: Promise<void>; release: () => void }
   close(): Promise<void>
 }
 
-/** The CA certificates this process trusted before any stand-in, and the stand-ins' certificates trusted since. */
 let systemCertificates: string[] | null = null
 const trusted: string[] = []
 
-/** Trusts a stand-in's certificate for this process's TLS clients (Node's tls.setDefaultCACertificates). */
 export function trustCertificate(cert: string): void {
   systemCertificates ??= tls.getCACertificates("default")
   trusted.push(cert)
@@ -92,7 +66,6 @@ const json = (res: ServerResponse, status: number, body: unknown, headers: Recor
 const graphError = (res: ServerResponse, status: number, code: string, message: string) =>
   json(res, status, { error: { code, message } })
 
-/** The first value of a header in raw MIME, unfolded. */
 function headerOf(raw: Buffer, name: string): string | null {
   const head = raw.toString("latin1").split(/\r?\n\r?\n/)[0] ?? ""
   const match = new RegExp(`^${name}:[ \\t]*((?:.*)(?:\\r?\\n[ \\t].*)*)`, "im").exec(head)
@@ -100,8 +73,6 @@ function headerOf(raw: Buffer, name: string): string | null {
 }
 
 export async function startStandInGraph(options: { trust?: boolean } = {}): Promise<StandInGraph> {
-  // A subject of its own: OpenSSL finds a self-signed certificate among the trusted ones by its subject, so two
-  // stand-ins with one subject would be mistaken for each other.
   const pems = await generate([{ name: "commonName", value: `maane-stand-in-${randomBytes(8).toString("hex")}` }], {
     keyType: "ec",
     algorithm: "sha256",
@@ -199,7 +170,6 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
     const url = new URL(req.url ?? "/", "https://127.0.0.1")
     const path = decodeURIComponent(url.pathname)
 
-    // Entra: the OpenID configuration of a tenant, and its token endpoint (client credentials only).
     const openid = /^\/([^/]+)\/v2\.0\/\.well-known\/openid-configuration$/.exec(path)
     if (openid?.[1]) {
       const tenant = `${base}${openid[1]}`

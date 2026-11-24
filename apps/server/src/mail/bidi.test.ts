@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { textDirection } from "./bidi.ts"
 
-// Every right-to-left letter and every control character from code points: the repository holds no literal Hebrew
-// outside he.json and no literal bidirectional control.
 const cp = (...points: number[]) => String.fromCodePoint(...points)
 const SHALOM = cp(0x5e9, 0x5dc, 0x5d5, 0x5dd)
 const SALAM = cp(0x633, 0x644, 0x627, 0x645)
@@ -33,7 +31,6 @@ describe("textDirection (UAX #9 P2, P3)", () => {
 
   it("skips what an isolate holds", () => {
     expect(textDirection(`${RLI}${SHALOM}${PDI} hello`)).toBe("ltr")
-    // An isolate left open ends with its paragraph.
     expect(textDirection(`${RLI}${SHALOM}\nhello`)).toBe("ltr")
   })
 

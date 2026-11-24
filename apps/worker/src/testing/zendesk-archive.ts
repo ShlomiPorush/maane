@@ -2,13 +2,7 @@ import { Archive, runBackup, ZendeskClient } from "@maane/zendesk"
 import { StandInZendesk } from "@maane/zendesk/testing/stand-in"
 import { MARKERS } from "./clamd.ts"
 
-// An invented Zendesk account for the import's tests (plan 5.1): the stand-in Zendesk API of phase 0 with brands,
-// users with roles, ticket fields, and tickets whose records and comments carry what the import maps, backed up into
-// an archive by the real backup run. Every person and address is invented (example.com); Hebrew is built from code
-// points.
-
 const words = (...points: number[]) => String.fromCodePoint(...points)
-/** "Order did not arrive" and "Hello, the package was not received". */
 export const HEBREW_SUBJECT = words(
   0x5d4,
   0x5d6,
@@ -54,10 +48,6 @@ export const AGENT = { id: 10, name: "Dana Agent", email: "dana.agent@example.co
 
 const at = (minute: number) => new Date(Date.UTC(2025, 4, 1, 9, minute)).toISOString()
 
-/**
- * The stand-in, set up before its first backup. Its own tickets 1 to 5 (open, pending, solved, deleted, gone) get
- * records; ticket 6 has a brand nobody mapped; ticket 7 is a follow-up of ticket 1 and holds a NUL character.
- */
 export function standInAccount(): StandInZendesk {
   const zendesk = new StandInZendesk()
   for (const user of zendesk.users) user.role = "end-user"
@@ -109,7 +99,6 @@ export function standInAccount(): StandInZendesk {
       }
     if (note) note.extra = { author_id: AGENT.id, created_at: at(2) }
     if (answer) answer.extra = { author_id: AGENT.id, created_at: at(3), html_body: "<p>Answer</p>" }
-    // Ticket 3 was merged into ticket 1.
     ticket1.audits = [
       { id: 7001, ticket_id: 1, via: { channel: "web", source: { rel: "merge", from: { ticket_id: 3 } } }, events: [] },
     ]
@@ -125,7 +114,6 @@ export function standInAccount(): StandInZendesk {
   })
   if (ticket2?.comments[0]) ticket2.comments[0].extra = { author_id: 3, created_at: at(11) }
   record(3, { brand_id: BRANDS.mapped, requester_id: 2, tags: ["billing"], created_at: at(20) })
-  // A walk-in customer without an address, whose name holds a NUL character, and a file name with one.
   zendesk.users.push({ id: 4, name: `Walk-in${String.fromCharCode(0)} Customer`, email: null, role: "end-user" })
   const ticket3 = zendesk.tickets.get(3)
   const lost = ticket3?.comments[0]
@@ -164,7 +152,6 @@ export function standInAccount(): StandInZendesk {
   return zendesk
 }
 
-/** One backup run of the stand-in into the archive folder, as the command line runs it (files up to 1 KiB). */
 export async function backupInto(zendesk: StandInZendesk, dir: string, maxFileBytes = 1024): Promise<void> {
   const client = new ZendeskClient({
     apiOrigin: zendesk.apiOrigin,

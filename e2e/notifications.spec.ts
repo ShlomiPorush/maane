@@ -1,12 +1,7 @@
 import { expect, test } from "@playwright/test"
 import { he, signIn } from "./helpers.ts"
 
-// Chromium itself: Playwright's default headless shell reports notifications as denied even once they are allowed.
 test.use({ channel: "chromium" })
-
-// The PWA and browser notifications (plan 4.5) in the stack: the manifest and the service worker are served as files
-// (not the UI's fallback page), the service worker registers, and the Account page offers notifications for this
-// device. Nothing here subscribes: a real subscription would reach a browser vendor's push service.
 
 test("serves the manifest and the service worker, and offers notifications on the Account page", async ({
   page,
@@ -22,7 +17,6 @@ test("serves the manifest and the service worker, and offers notifications on th
   expect(worker.headers()["content-type"]).toContain("javascript")
   expect(await worker.text()).toContain("notificationclick")
 
-  // Allow notifications, as a user does when the browser asks.
   await page.context().grantPermissions(["notifications"])
   await signIn(page)
   await page.goto("/account")

@@ -1,6 +1,3 @@
-// Light, dark or follow the system. A preference of this browser (localStorage), applied before the
-// first paint by public/boot.js and here when it changes.
-
 import { useCallback, useEffect, useState } from "react"
 
 export type Theme = "light" | "dark" | "system"
@@ -36,7 +33,6 @@ export function useTheme(): [Theme, (theme: Theme) => void, boolean] {
     media.addEventListener("change", follow)
     return () => media.removeEventListener("change", follow)
   }, [theme])
-  // Other tabs and the theme buttons stay in step.
   useEffect(() => {
     const sync = (event: StorageEvent | Event) => {
       if (event instanceof StorageEvent && event.key !== KEY) return
@@ -52,9 +48,7 @@ export function useTheme(): [Theme, (theme: Theme) => void, boolean] {
   const setTheme = useCallback((next: Theme) => {
     try {
       localStorage.setItem(KEY, next)
-    } catch {
-      // Storage blocked: the theme still applies to this page.
-    }
+    } catch {}
     setThemeState(next)
     window.dispatchEvent(new Event("maane-theme"))
   }, [])

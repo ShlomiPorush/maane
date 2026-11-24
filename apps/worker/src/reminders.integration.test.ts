@@ -31,13 +31,6 @@ import { type IntakeHarness, startIntake } from "./testing/intake.ts"
 import { fromCodePoints, mime } from "./testing/mime.ts"
 import { type StandInSmtp, startStandInSmtp } from "./testing/smtp.ts"
 
-// Plan 4.3 from the API through the timed-action job, intake, the delivery events, and the sender: a waiting period
-// starts when a reply that sets the ticket to pending goes to sending, and its reminder goes once, X days later, through
-// one rule for every timed action (a second kind of timed action, at most one outbox row per action and version, the
-// checks at its time and again at the send point). Every ending stops it, also between its outbox row and the send
-// point; a crash and a rerun make no second reminder; timed-recover makes up for a lost job. The clock is the job's:
-// the tests run the job as the queue would at its time. Nothing leaves this process: the providers are stand-ins.
-
 const QUICK: SmtpTimeouts = { connection: 2000, greeting: 1500, socket: 3000, setup: 4000, send: 5000 }
 const SUPPORT = "support@example.com"
 const OTHER = "billing@example.com"
@@ -45,10 +38,8 @@ const BOUNCE = "bounce@example.com"
 const DANA = "Dana Customer <dana@example.com>"
 const HOUR = 3_600_000
 const DAY = 24 * HOUR
-// A reminder's days are Israel's calendar days: one across a daylight-saving change is an hour shorter or longer.
 const DST_SLACK = HOUR + 60_000
 const TODA = fromCodePoints(0x5ea, 0x5d5, 0x5d3, 0x5d4)
-// "Shalom, we are still waiting for your answer" in Hebrew, then an English line: the email is right to left.
 const SHALOM = fromCodePoints(0x5e9, 0x5dc, 0x5d5, 0x5dd)
 const WAITING = fromCodePoints(0x5e2, 0x5d3, 0x5d9, 0x5d9, 0x5df, 0x20, 0x5de, 0x5de, 0x5ea, 0x5d9, 0x5e0, 0x5d9, 0x5dd)
 const TEMPLATE = `${SHALOM},\n${WAITING}.\n\nOrder 1234 is on hold.`
@@ -122,10 +113,8 @@ function sender(
   })
 }
 
-/** A send point no provider takes anything from: SMTP2GO cannot be logged in to, and no failover is set up. */
 const refusing = () => sender({ values: { "smtp2go.password": `${smtp2go.password}x`, "failover.host": "" } })
 
-/** The worker's timed-action job, queueing its send-reply job through pg-boss in the job's own transaction. */
 const actions = () =>
   new TimedActions({ db: db(), settings: settings(), queue: (tx, name, data) => boss.send(name, data, { db: tx }) })
 
@@ -154,7 +143,6 @@ async function newAgent(admin: TestBrowser, name: string, organizations: string[
   return { b, id }
 }
 
-/** The organization's reminder, set by an admin on its page. */
 async function setReminder(admin: TestBrowser, template: string, days: number, organizationId = org) {
   const answer = await admin.call("PUT", `/api/v1/admin/organizations/${organizationId}/reminder`, { template, days })
   expect(answer.status, JSON.stringify(answer.json)).toBe(200)
@@ -169,7 +157,6 @@ async function customerTicket(subject = "A question") {
   return { number: found.number, id: found.id, messageId }
 }
 
-/** The customer answers the ticket's first message, through intake. */
 async function customerAnswers(t: { messageId: string }) {
   h.graph.add(
     mime({ from: DANA, to: SUPPORT, subject: "Re: A question", inReplyTo: t.messageId, text: { content: TODA } }),
@@ -189,7 +176,6 @@ const reply = (values: Record<string, unknown> = {}) => ({
   ...values,
 })
 
-/** An agent's reply sent now, and its message's ID. */
 async function answer(b: TestBrowser, number: number, values: Record<string, unknown> = {}) {
   const sent = await b.call("POST", `/api/v1/tickets/${number}/messages`, reply(values))
   expect(sent.status, JSON.stringify(sent.json)).toBe(201)
@@ -202,7 +188,6 @@ async function view(b: TestBrowser, number: number): Promise<TicketView> {
   return shown.json
 }
 
-/** The ticket's reminders, newest first. */
 async function remindersOf(ticketId: string) {
   return db()
     .select({ action: timedAction, periodId: reminder.periodId })
@@ -216,7 +201,6 @@ async function periodsOf(ticketId: string) {
   return db().select().from(waitingPeriod).where(eq(waitingPeriod.ticketId, ticketId)).orderBy(waitingPeriod.startedAt)
 }
 
-/** The ticket's one reminder, made by a reply that set it to pending. */
 async function onlyReminder(ticketId: string) {
   const rows = await remindersOf(ticketId)
   expect(rows).toHaveLength(1)
@@ -248,7 +232,6 @@ async function statusOf(id: string) {
   return (await db().select({ status: ticket.status }).from(ticket).where(eq(ticket.id, id)))[0]?.status
 }
 
-/** A ticket with a waiting period started by an agent's "Send and set pending", its reply accepted. */
 async function waiting(template = TEMPLATE) {
   const admin = await firstAdmin()
   await setReminder(admin, template, 2)
@@ -264,7 +247,6 @@ describe("an organization's reminder", () => {
     const admin = await firstAdmin()
     const { b: agent } = await newAgent(admin, "an.agent", [org])
     const shown = await admin.call("GET", `/api/v1/admin/organizations/${org}`)
-    // No template by default (no reminders), and a sensible number of days the admin can change.
     expect(shown.json.organization).toMatchObject({ reminderTemplate: "", reminderDays: 3 })
     const put = (body: unknown) => admin.call("PUT", `/api/v1/admin/organizations/${org}/reminder`, body)
     expect((await put({ template: "x", days: 0 })).json).toEqual({ error: "reminder_days_invalid", min: 1, max: 60 })
@@ -282,7 +264,6 @@ describe("an organization's reminder", () => {
       .from(auditLog)
       .where(and(eq(auditLog.action, "organization.reminder"), eq(auditLog.entityId, org)))
     expect(audit?.details).toEqual({ days: 5, template: "set" })
-    // Admins only.
     expect(
       (await agent.call("PUT", `/api/v1/admin/organizations/${org}/reminder`, { template: "", days: 2 })).status,
     ).toBe(403)
@@ -290,10 +271,8 @@ describe("an organization's reminder", () => {
 })
 
 describe("a reminder's time", () => {
-  // Israel's clocks change on Friday 2026-03-27 (to UTC+3) and on Sunday 2026-10-25 (back to UTC+2).
   const dueOf = async (from: string, days: number) =>
     db().transaction(async (tx) => {
-      // A connection in another time zone: the days are still Israel's.
       await tx.execute(sql`set local time zone 'UTC'`)
       const rows = await tx.execute<{ epoch: string; local: string }>(
         sql`select extract(epoch from due)::bigint::text as epoch,
@@ -305,7 +284,6 @@ describe("a reminder's time", () => {
     })
 
   it("is X days later at the same local time, across the change to summer time", async () => {
-    // Thursday noon in Israel (UTC+2), three days on: Sunday noon (UTC+3), 71 hours later.
     const from = "2026-03-26T10:00:00Z"
     const due = await dueOf(from, 3)
     expect(due.local).toBe("2026-03-29 12:00")
@@ -313,7 +291,6 @@ describe("a reminder's time", () => {
   })
 
   it("is X days later at the same local time, across the change back to winter time", async () => {
-    // Friday noon in Israel (UTC+3), three days on: Monday noon (UTC+2), 73 hours later.
     const from = "2026-10-23T09:00:00Z"
     const due = await dueOf(from, 3)
     expect(due.local).toBe("2026-10-26 12:00")
@@ -324,7 +301,6 @@ describe("a reminder's time", () => {
 describe("a reminder", () => {
   it("is sent once, X days after a reply set the ticket to pending, as the organization, through the send point", async () => {
     const { agent, t, started } = await waiting()
-    // The period started with the reply, and its reminder waits two days, its job queued for that same time.
     const [period] = await periodsOf(t.id)
     expect(period).toMatchObject({ origin: "maane", messageId: started, endedAt: null })
     const due = await onlyReminder(t.id)
@@ -337,13 +313,11 @@ describe("a reminder", () => {
       state: "scheduled",
     })
 
-    // Its time: the job writes the reminder, and the send point sends it.
     expect(await actions().run(due.id, 1)).toBe("handed")
     const [made] = await outboxOfAction(due.id)
     expect(made).toMatchObject({ state: "pending", actionVersion: 1 })
     expect(await sender().send(made?.messageId ?? "")).toBe("accepted")
     expect(await statusOf(t.id)).toBe("pending")
-    // An automated message: it neither changes the status nor starts a new period.
     expect(await periodsOf(t.id)).toHaveLength(1)
     expect(await remindersOf(t.id)).toHaveLength(1)
     const shown = await view(agent, t.number)
@@ -357,7 +331,6 @@ describe("a reminder", () => {
       .where(and(eq(auditLog.action, "message.reminder"), eq(auditLog.entityId, made?.messageId ?? "")))
     expect(audit?.details).toMatchObject({ ticket: t.number, from: SUPPORT, recipients: ["dana@example.com"] })
 
-    // Once: its job again (a queue retry) does nothing.
     expect(await actions().run(due.id, 1)).toBe("stale")
     expect(await repliesOf(t.id)).toBe(2)
   })
@@ -376,9 +349,7 @@ describe("a reminder", () => {
     const theirs = raws.find((raw) => raw.includes(agentReply?.messageIdHeader ?? "-"))
     const parsed = await simpleParser(own ?? Buffer.alloc(0))
     expect(parsed.headers.get("auto-submitted")).toBe("auto-generated")
-    // An agent's reply never carries it (requirements 2.3).
     expect((await simpleParser(theirs ?? Buffer.alloc(0))).headers.get("auto-submitted")).toBeUndefined()
-    // From the ticket's address, with the organization's name alone; to the ticket's customer.
     expect(parsed.from?.value).toEqual([{ address: SUPPORT, name: "Example Support" }])
     expect(parsed.to && !Array.isArray(parsed.to) ? parsed.to.value : []).toEqual([
       { address: "dana@example.com", name: "Dana Customer" },
@@ -386,7 +357,6 @@ describe("a reminder", () => {
     expect(parsed.subject).toBe(`Re: A question [#${t.number}]`)
     expect(parsed.inReplyTo).toBe(`<${agentReply?.messageIdHeader}>`)
     expect(parsed.references).toContain(`<${agentReply?.messageIdHeader}>`)
-    // The template is the message, with the reference code, in the 3.2 layout: right to left for a Hebrew text.
     const html = typeof parsed.html === "string" ? parsed.html : ""
     expect(html).toMatch(/<html[^>]*dir="rtl"/)
     expect(html).toContain(row?.code ?? "-")
@@ -394,7 +364,6 @@ describe("a reminder", () => {
     expect(html).toMatch(/<div dir="ltr"[^>]*>Order 1234 is on hold.<\/div>/)
     expect(parsed.text).toContain(WAITING)
     expect(parsed.text).toContain(row?.code ?? "-")
-    // The conversation keeps the template as its text, under the organization's name.
     const [stored] = await db()
       .select()
       .from(message)
@@ -418,7 +387,6 @@ describe("a reminder", () => {
     expect(await periodsOf(t.id)).toEqual([])
     const [made] = await outboxOfAction(id)
     expect(await sender().send(made?.messageId ?? "")).toBe("accepted")
-    // In the claim that handed it to sending, with "Send and set pending": the period and its reminder's job.
     const [period] = await periodsOf(t.id)
     expect(period).toMatchObject({ origin: "maane", messageId: made?.messageId, endedAt: null })
     const due = await onlyReminder(t.id)
@@ -463,19 +431,16 @@ describe("the end of a waiting period stops its reminder", () => {
     const c = await waiting()
     const due = await onlyReminder(c.t.id)
     await end(c)
-    // In the ending's own transaction: the period ends, and its reminder is cancelled with the same reason.
     const [period] = await periodsOf(c.t.id)
     expect(period).toMatchObject({ endReason: reason })
     expect(period?.endedAt).not.toBeNull()
     const [after] = await db().select().from(timedAction).where(eq(timedAction.id, due.id))
     expect(after).toMatchObject({ state: "cancelled", reason })
     expect((await view(c.agent, c.t.number)).reminder).toBeNull()
-    // Its job at its time does nothing.
     const before = smtp2go.received.length
     expect(await actions().run(due.id, 1)).toBe("stale")
     expect(await outboxOfAction(due.id)).toEqual([])
     expect(smtp2go.received.length).toBe(before)
-    // None of these starts a new period by itself.
     expect((await periodsOf(c.t.id)).filter((row) => row.endedAt === null)).toEqual([])
   })
 
@@ -512,7 +477,6 @@ describe("the end of a waiting period stops its reminder", () => {
     expect((await onlyReminder(t.id)).state).toBe("scheduled")
     const [made] = await outboxOfAction(id)
     expect(await sender().send(made?.messageId ?? "")).toBe("accepted")
-    // In the claim that handed it to sending: the period ends, and no new one starts (a plain Send).
     expect((await db().select().from(timedAction).where(eq(timedAction.id, due.id)))[0]).toMatchObject({
       state: "cancelled",
       reason: "agent_reply",
@@ -543,7 +507,6 @@ describe("a move to another organization during a waiting period", () => {
     expect(moved.status, JSON.stringify(moved.json)).toBe(200)
   }
 
-  /** The old reminder, cancelled by the move, and its job at its time does nothing. */
   async function oldEnded(actionId: string) {
     const [after] = await db().select().from(timedAction).where(eq(timedAction.id, actionId))
     expect(after).toMatchObject({ state: "cancelled", reason: "move" })
@@ -559,7 +522,6 @@ describe("a move to another organization during a waiting period", () => {
     const old = await onlyReminder(t.id)
     await move(agent, t.number)
 
-    // In the move's transaction: the old period ends, and a new one goes on at once for the same reply.
     const periods = await periodsOf(t.id)
     expect(periods).toMatchObject([
       { endReason: "move", messageId: started },
@@ -569,11 +531,9 @@ describe("a move to another organization during a waiting period", () => {
     const fresh = newest?.action
     expect(newest?.periodId).toBe(periods[1]?.id)
     expect(fresh).toMatchObject({ kind: "reminder", state: "scheduled", version: 1 })
-    // The new organization's days, counted from the move, with its job queued for that same time.
     expect(Math.abs((fresh?.dueAt.getTime() ?? 0) - (Date.now() + 5 * DAY))).toBeLessThan(DST_SLACK)
     expect(await timedJobs(fresh?.id ?? "")).toEqual([{ version: 1, startAfter: fresh?.dueAt }])
     expect((await view(agent, t.number)).reminder?.id).toBe(fresh?.id)
-    // The audit counts the scheduled replies the move cancelled, never the reminder.
     const [audit] = await db()
       .select({ details: auditLog.details })
       .from(auditLog)
@@ -581,7 +541,6 @@ describe("a move to another organization during a waiting period", () => {
     expect(audit?.details).not.toHaveProperty("scheduledCancelled")
     await oldEnded(old.id)
 
-    // At its time it goes as the new organization: its template, read then, from its address, under its name.
     await setReminder(admin, `${OTHER_TEMPLATE} Thank you.`, 5, other)
     expect(await actions().run(fresh?.id ?? "", 1)).toBe("handed")
     const [made] = await outboxOfAction(fresh?.id ?? "")
@@ -597,7 +556,6 @@ describe("a move to another organization during a waiting period", () => {
     const { agent, t, started } = await waiting()
     const old = await onlyReminder(t.id)
     await move(agent, t.number)
-    // The waiting goes on under the new organization, with no reminder.
     expect(await periodsOf(t.id)).toMatchObject([
       { endReason: "move" },
       { origin: "maane", messageId: started, endedAt: null },
@@ -635,8 +593,6 @@ describe("a sent reminder in a later reply", () => {
     const [row] = await db().select().from(message).where(eq(message.id, later))
     const raw = smtp2go.received.map((entry) => entry.raw).find((r) => r.includes(row?.messageIdHeader ?? "-"))
     const parsed = await simpleParser(raw ?? Buffer.alloc(0))
-    // The newest quoted message is the reminder: its attribution line ("On {date}, {name} wrote:" in the default
-    // language) and its quoted block name the organization; the agent's earlier reply names its agent with it.
     expect(parsed.text).toMatch(/,\s+Example Support\s/)
     expect(parsed.text).toMatch(/^> Example Support \|/m)
     expect(parsed.text).toMatch(/^> agent\.both \(Example Support\) \|/m)
@@ -666,7 +622,6 @@ describe("the period ending between the reminder's outbox row and the send point
     const due = await onlyReminder(t.id)
     expect(await actions().run(due.id, 1)).toBe("handed")
     const [made] = await outboxOfAction(due.id)
-    // As if no ending had cancelled it: the claim reads the ticket, the delivery, and intake's records itself.
     await db().update(ticket).set({ status: "open" }).where(eq(ticket.id, t.id))
     expect(await sender().send(made?.messageId ?? "")).toBe("failed")
     expect((await db().select().from(timedAction).where(eq(timedAction.id, due.id)))[0]).toMatchObject({
@@ -674,7 +629,6 @@ describe("the period ending between the reminder's outbox row and the send point
       reason: "status_change",
     })
 
-    // Each case: what happened first, then the reminder as if nothing had ended it (pending, its period open, handed).
     const check = async (prepare: () => Promise<void>, reason: string) => {
       await prepare()
       await db().update(ticket).set({ status: "pending" }).where(eq(ticket.id, t.id))
@@ -708,7 +662,6 @@ describe("a crash and a rerun", () => {
     const due = await onlyReminder(t.id)
     expect(await actions().run(due.id, 1)).toBe("handed")
     expect(await repliesOf(t.id)).toBe(2)
-    // The send point stops after its claim (a crash): its rerun turns the recipients unknown and sends nothing.
     const [made] = await outboxOfAction(due.id)
     const messageId = made?.messageId ?? ""
     const crash = sender({
@@ -720,8 +673,6 @@ describe("a crash and a rerun", () => {
     expect(await sender().send(messageId)).toBe("unknown")
     expect(smtp2go.received.filter((entry) => entry.raw.includes(made?.messageIdHeader ?? "-"))).toHaveLength(0)
     expect(await repliesOf(t.id)).toBe(2)
-    // A reminder whose fate is unknown may have reached the customer: the view offers no Send again (its period is still
-    // open), and the server refuses it.
     const shown = (await view(agent, t.number)).messages.find((m) => m.id === messageId)
     expect(shown?.delivery).toMatchObject({ state: "unknown", reminder: true, reminderResend: false })
     expect((await periodsOf(t.id)).at(-1)?.endedAt).toBeNull()
@@ -732,7 +683,6 @@ describe("a crash and a rerun", () => {
 })
 
 describe("Send again of a reminder that no provider took", () => {
-  /** A reminder that passed its checks at the send point, and then failed for certain: nothing reached the customer. */
   async function failedReminder() {
     const c = await waiting()
     const due = await onlyReminder(c.t.id)
@@ -759,7 +709,6 @@ describe("Send again of a reminder that no provider took", () => {
     expect((await resend(agent, id)).status).toBe(200)
     expect(await sender().send(id)).toBe("accepted")
     expect(delivered(header)).toHaveLength(1)
-    // Accepted now: never again, and still one reminder and one period.
     expect((await resend(agent, id)).json).toEqual({ error: "reply_not_retryable" })
     expect(await remindersOf(t.id)).toHaveLength(1)
     expect(await periodsOf(t.id)).toHaveLength(1)
@@ -783,14 +732,12 @@ describe("Send again of a reminder that no provider took", () => {
     expect(await sender().send(id)).toBe("failed")
     expect((await outboxOfAction(due.id))[0]?.problem).toBe("reminder_ended")
     expect(delivered(header)).toHaveLength(0)
-    // The action went to the send point once; only its row failed.
     expect((await db().select().from(timedAction).where(eq(timedAction.id, due.id)))[0]?.state).toBe("done")
     expect(await deliveryShown(agent, t.number, id)).toMatchObject({ problem: "reminder_ended", reminderResend: false })
   })
 
   describe("and the end of its waiting period at the same time (review round 2, M2)", () => {
     type Tx = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0]
-    /** Backends of this database waiting for a lock. */
     const lockWaiters = async () => {
       const rows = await db().execute<{ n: number }>(
         sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
@@ -799,7 +746,6 @@ describe("Send again of a reminder that no provider took", () => {
     }
     const waitForLockWaiters = (n: number) =>
       vi.waitFor(async () => expect(await lockWaiters()).toBe(n), { timeout: 15_000, interval: 50 })
-    /** A transaction that runs `hold` and then stays open, holding its locks, until it is released. */
     async function holding(hold: (tx: Tx) => Promise<unknown>) {
       let release = () => {}
       const released = new Promise<void>((resolve) => {
@@ -818,7 +764,6 @@ describe("Send again of a reminder that no provider took", () => {
       await Promise.race([holds, done])
       return { release, done }
     }
-    /** A bounce on the reply that started the period, which ends it. */
     const bounce = (tx: Tx, started: string) =>
       applyDeliveryEvent(
         tx,
@@ -830,7 +775,6 @@ describe("Send again of a reminder that no provider took", () => {
       const { agent, t, due, started, header, id } = await failedReminder()
       expect((await resend(agent, id)).status).toBe(200)
       expect(await lockWaiters()).toBe(0)
-      // The reminder's recipients held here: the claim passes its checks, holding the action, and waits at them.
       const recipients = await holding((tx) =>
         tx.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id)).for("update"),
       )
@@ -840,7 +784,6 @@ describe("Send again of a reminder that no provider took", () => {
         claim = sender().send(id)
         await waitForLockWaiters(1)
         ending = db().transaction((tx) => bounce(tx, started))
-        // The ending waits on the reminder's action, which the claim holds: the period is still open.
         await waitForLockWaiters(2)
         expect((await periodsOf(t.id))[0]?.endedAt).toBeNull()
       } finally {
@@ -862,7 +805,6 @@ describe("Send again of a reminder that no provider took", () => {
       let claim: Promise<unknown> = Promise.resolve()
       try {
         claim = sender().send(id)
-        // The claim waits on the reminder's action, which the ending holds.
         await waitForLockWaiters(1)
       } finally {
         ending.release()
@@ -890,7 +832,6 @@ describe("timed-recover", () => {
     expect(await requeueOverdue(db(), send)).toEqual({ actions: 1, snoozes: 0 })
     expect((await timedJobs(due.id)).map((job) => job.version)).toEqual([1])
     expect(await actions().run(due.id, 1)).toBe("handed")
-    // The lost job turning up after all, and the recovery running again: no second reminder.
     expect(await actions().run(due.id, 1)).toBe("stale")
     expect(await requeueOverdue(db(), send)).toEqual({ actions: 0, snoozes: 0 })
     const [made] = await outboxOfAction(due.id)

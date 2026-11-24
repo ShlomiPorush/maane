@@ -1,8 +1,3 @@
-// The import page (plan 5.1, admins only): the archive at its read-only mount, the brand and tag mappings, the Maane
-// user Zendesk agents' comments are attributed to, starting a run, the newest run with its paged report, and Finish
-// import (phase 6), which closes the import window for good. The server only reads the archive to show it and queues
-// the run; the worker imports (apps/worker/src/import/run.ts).
-
 import {
   emptyImportCounts,
   IMPORT_FAILURES,
@@ -40,24 +35,20 @@ import { Refusal } from "../organizations/refusal.ts"
 import type { Acting } from "../organizations/service.ts"
 import { finishImport, importWindow } from "./window.ts"
 
-/** A brand ID or a tag as the archive holds them, bounded. */
 const BRAND_ID = /^\d{1,20}$/
 const TAG_MAX = 200
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 type RunRow = typeof importRun.$inferSelect
 
-/** A run's job beats, so a worker that died is noticed in minutes, not when the job expires (jobs/queue.ts). */
 const HEARTBEAT = { heartbeatSeconds: ZENDESK_IMPORT_HEARTBEAT_SECONDS }
 
 interface ArchiveSummary {
-  /** Without `otherOrigin`, which depends on the earlier imports' origin, not on the archive. */
   archive: Omit<ImportArchiveView, "otherOrigin">
   brands: Map<string, { name: string; tickets: number }>
   tags: Map<string, number>
 }
 
-/** A run's stored `stage:kind[:constraint]`, read back only as the known words and a constraint's plain name. */
 function failureView(value: string | null): ImportRunView["failure"] {
   const [stage = "", kind = "", constraint = ""] = (value ?? "").split(":")
   if (!(IMPORT_STAGES as readonly string[]).includes(stage)) return null
@@ -69,7 +60,6 @@ function failureView(value: string | null): ImportRunView["failure"] {
 }
 
 export class Imports {
-  /** The newest summary of a readable archive, by its origin and state: read again only when the state changes. */
   #cached: { key: string; summary: ArchiveSummary } | null = null
 
   constructor(
@@ -78,11 +68,6 @@ export class Imports {
     private readonly archiveDir: string,
   ) {}
 
-  /**
-   * What the archive at the mount holds: its state, and the brands and tags of its tickets with their counts. Reading
-   * every ticket of a large archive is slow, so a readable archive's summary is kept until its state (`state.json`'s
-   * run count and coverage, and the backup's lock) or its origin changes; the page reads again every half minute.
-   */
   async #summary(): Promise<ArchiveSummary> {
     const empty: ArchiveSummary = {
       archive: { present: false, origin: null, runs: 0, coveredUntil: null, backupRunning: false, tickets: 0 },
@@ -133,7 +118,6 @@ export class Imports {
       this.#cached = { key, summary }
       return summary
     } catch (error) {
-      // An archive that cannot be read shows as absent; the run's own check says what is wrong.
       log.warn("the Zendesk archive could not be read", { error: (error as Error).name })
       return empty
     }
@@ -158,7 +142,6 @@ export class Imports {
         ...summary.archive,
         otherOrigin: summary.archive.present && origin !== null && origin !== summary.archive.origin,
       },
-      // Every brand the archive or a saved mapping names, so a mapping is never hidden.
       brands: [...new Set([...summary.brands.keys(), ...brandMap.keys()])]
         .map((id) => ({
           id,
@@ -184,7 +167,6 @@ export class Imports {
     }
   }
 
-  /** The newest run, for the page's progress. */
   async latest(): Promise<ImportRunView | null> {
     const [run] = await this.db.select().from(importRun).orderBy(desc(importRun.createdAt)).limit(1)
     return run ? this.#runView(run) : null
@@ -207,14 +189,11 @@ export class Imports {
       done: run.done,
       counts: { ...emptyImportCounts(), ...((run.counts ?? {}) as Partial<ImportCounts>) },
       reportRows: rows?.n ?? 0,
-      // An open run without a job (its job used up its retries) waits for Continue; with only a failed job that pg-boss
-      // tries again later, it waits for that retry.
       jobActive: job !== null,
       retrying: job === "retry",
     }
   }
 
-  /** Replaces the mappings and the chosen user, while no run is open and the window is open. */
   async saveMapping(input: ImportMappingInput, acting: Acting): Promise<void> {
     const brands = Object.entries(input.brands)
     const tags = Object.entries(input.tags)
@@ -267,10 +246,6 @@ export class Imports {
     })
   }
 
-  /**
-   * Starts a run, or goes on with the open one (its job queued again; the worker's lock runs one job at a time). Under
-   * the import's row, so Finish import waits for it and then sees the run.
-   */
   async start(userId: string): Promise<ImportRunView> {
     const runId = await transactionWithJobs(this.db, async (tx, jobs) => {
       const window = await importWindow(tx, "update")
@@ -279,8 +254,6 @@ export class Imports {
       if (!config?.agentUserId) throw new Refusal("import_no_agent", 409)
       const [open] = await tx.select({ id: importRun.id }).from(importRun).where(eq(importRun.state, "running"))
       if (open) {
-        // Its job may be queued or active already: while the worker's lock is held, pg-boss tries a second one again
-        // later, and it then goes on from the last ticket or finds the run ended and does nothing.
         await this.jobs.sendIn(jobs, ZENDESK_IMPORT, { runId: open.id }, HEARTBEAT)
         return open.id
       }
@@ -294,13 +267,6 @@ export class Imports {
     return this.#runView(run)
   }
 
-  /**
-   * Cancels the run the admin confirmed, if it is still open: it ends as stopped (`cancelled`), what it imported stays,
-   * and the next start is a full pass. Audited. `cancelled` is false when that run had already ended (a newer run is
-   * left alone). The update waits for a transaction of the run that holds its row (each one locks it first and goes on
-   * only while it is running), so once this returns no job of the run writes again; a job still queued for it finds
-   * it ended and does nothing.
-   */
   async cancel(runId: string, acting: Acting): Promise<{ run: ImportRunView | null; cancelled: boolean }> {
     if (!UUID.test(runId)) throw new Refusal("request_invalid", 400)
     const cancelled = await this.db.transaction(async (tx) => {
@@ -322,10 +288,6 @@ export class Imports {
     return { run: await this.latest(), cancelled }
   }
 
-  /**
-   * Finish import (phase 6): final, audited, refused while a run is open. From then on imports are refused and
-   * imported tickets are ordinary tickets. Pressing it again once finished changes nothing.
-   */
   async finish(acting: Acting): Promise<void> {
     await this.db.transaction(async (tx) => {
       if (!(await finishImport(tx))) return
@@ -339,7 +301,6 @@ export class Imports {
     })
   }
 
-  /** A run's report, by a cursor after the last row shown. */
   async report(runId: string, after: string | undefined): Promise<ImportReportPage> {
     if (!UUID.test(runId)) throw new Refusal("not_found", 404)
     const cursor = after === undefined ? 0 : Number(after)

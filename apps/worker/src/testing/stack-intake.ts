@@ -16,21 +16,9 @@ import { GraphGateway } from "../intake/graph.ts"
 import { reconcileIntakeSource } from "../intake/jobs.ts"
 import { IntakeProcessor } from "../intake/process.ts"
 import { IntakeSync } from "../intake/sync.ts"
-// Printed by Chromium with IBM Plex Mono (SIL Open Font License) embedded as a TrueType subset: a PDF whose font pdf.js
-// loads itself.
 import embeddedFontPdf from "./embedded-font.pdf"
 import { startStandInGraph } from "./graph.ts"
 import { encodedWord, INVOICE, mime, SHALOM_OLAM } from "./mime.ts"
-
-// Intake end to end in the container stack (scripts/verify.sh, before the end-to-end tests): run in a container of the
-// worker service, with its configuration, network, read-only root, and /data, against the stack's PostgreSQL and the
-// real ClamAV, and a stand-in Graph inside this process (its certificate trusted only here). The Graph settings are
-// given to this process alone, as variables would: the stack's own worker has none, so its schedule stays a quiet no-op
-// and never reaches Microsoft. Messages become tickets (Maane is live from the first moment, phase 6), and those
-// tickets are the ones the end-to-end tests read (e2e/tickets.spec.ts names them by their subjects and organizations;
-// keep both in step). At the end the stand-in's source stops being current, and the default address this check set is
-// unset (directly: the product never removes a default). Bundled by verify.sh into apps/worker/dist/stack-check; never part of
-// the image.
 
 let failed = false
 const check = (ok: boolean, what: string) => {
@@ -38,7 +26,6 @@ const check = (ok: boolean, what: string) => {
   if (!ok) failed = true
 }
 
-/** What the end-to-end tests find: two organizations, their addresses, and the subjects of their tickets. */
 export const FIXTURES = {
   alpha: { name: "Example Alpha", address: "alpha@example.com" },
   beta: { name: "Example Beta", address: "beta@example.com" },
@@ -103,14 +90,12 @@ try {
     await db.insert(supportAddress).values({ organizationId: made?.id ?? "", kind: "exact", value: address })
   }
   const alphaId = organizations[alpha.address] ?? ""
-  // Stage two needs a default address. None exists before the end-to-end tests: Alpha's address is it for this run.
   const [fallback] = await db.select().from(supportAddress).where(eq(supportAddress.isDefault, true))
   if (!fallback) {
     await db.update(supportAddress).set({ isDefault: true }).where(eq(supportAddress.value, alpha.address))
     setDefault = true
   }
 
-  // A Hebrew message written without dir, with an inline image, a remote image, a Hebrew-named PDF, and a photo.
   const hebrewId = graph.add(
     mime({
       to: alpha.address,
@@ -122,7 +107,6 @@ try {
           '<p><img src="https://images.example.com/banner.png" alt="banner" width="320" height="80"></p>' +
           '<p align="center">Example Alpha</p>' +
           "<p>Order 2026-117 is attached in English too.</p>" +
-          // A link the end-to-end tests open from the frame: the stack's own public address (verify.sh).
           '<p><a href="http://127.0.0.1:8095/healthz/live">Service status</a> <a href="tel:+15555550100">Call us</a></p>',
       },
       attachments: [
@@ -138,7 +122,6 @@ try {
       ],
     }),
   )
-  // An English text-only message with a text file.
   const englishMessageId = `english-${run}@mail.example.com`
   const clean = Buffer.from(`Maane stack intake ${run}\nLine two of the notes.\n`, "utf8")
   const englishId = graph.add(
@@ -150,7 +133,6 @@ try {
       attachments: [{ fileName: "notes.txt", contentType: "text/plain", content: clean }],
     }),
   )
-  // An infected attachment beside a drawing (markup: download only).
   const infectedId = graph.add(
     mime({
       to: alpha.address,
@@ -166,7 +148,6 @@ try {
       ],
     }),
   )
-  // A text body the scanner blocks, beside an HTML version it does not.
   const blockedTextId = graph.add(
     mime({
       to: alpha.address,
@@ -190,7 +171,6 @@ try {
       text: { content: "I am away this week." },
     }),
   )
-  // Scans and faxes (JBIG2, CCITT), and a PDF with an embedded font.
   const scannedId = graph.add(
     mime({
       to: alpha.address,
@@ -246,8 +226,6 @@ try {
     `an SVG drawing: ${drawing?.part.status ?? "missing"}, read as ${drawing?.detectedType ?? "nothing"} (download only)`,
   )
 
-  // Text fields are scanned like files (review G1): EICAR as a whole text body is blocked by the real ClamAV. Inside
-  // the header block it follows other values; what the real scanner does with that is reported, not required.
   const scanOf = (row: Awaited<ReturnType<typeof stored>>, field: string) =>
     (row?.fieldScans as Record<string, { status: string; signature: string | null }> | undefined)?.[field]
   const textRow = await stored(blockedTextId)
@@ -280,8 +258,6 @@ try {
 } catch (error) {
   check(false, `the intake check threw: ${error instanceof Error ? error.message : String(error)}`)
 } finally {
-  // The stack's own settings again: no current source (it has no Graph settings), and no default address of this
-  // check's, so the end-to-end tests set their own.
   await reconcileIntakeSource(db, stackSettings).catch(() => undefined)
   if (setDefault)
     await db

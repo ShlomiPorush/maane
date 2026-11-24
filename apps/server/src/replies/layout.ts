@@ -1,17 +1,3 @@
-// The layout of a customer's email (requirements 4.1, plan 3.2), by the owner's `html-email` rules: the header line
-// (reply to this email to update the conversation) and the reference code line first, the code isolated left to right;
-// the new message as a conversation block (an initials avatar made of a table cell, the name, the date and time in
-// Israel time, the content); then an ordinary attribution line and the public history in `<blockquote type="cite">`,
-// newest first, each message the same block. The text part has the same order.
-//
-// Direction: `dir` on the html, the body, and every table of the layout (Outlook on the web drops the first two), and
-// on each paragraph of each message by the server's direction pass (mail/direction.ts), never dir="auto". Colours are
-// neutral greys only, light inline, a dark-mode block, and descendant rules under Outlook's `data-ogsb` mark; links a
-// mail client adds take the text's look, the links in a message keep their underline. Long strings break.
-//
-// Size (mail.ts decides): the oldest history messages can be shown in short form (their first words) or left out,
-// and history images can show only their names.
-
 import { convert } from "html-to-text"
 import { textDirection } from "../mail/bidi.ts"
 import { type Direction, directBlocks, messageDirection } from "../mail/direction.ts"
@@ -19,62 +5,42 @@ import { renderEmailHtml } from "../mail/html.ts"
 import { COLUMN_WIDTH, type PreparedImage, shownSize } from "./sizes.ts"
 import { wordCopies } from "./word.ts"
 
-/** The words of the email, in the default language (he.json and en.json, `mail`). */
 export interface MailWords {
   header: string
   reference: string
-  /** With {date} and {name}. */
   attribution: string
-  /** With {names}. */
   files: string
-  /** With {count}. */
   olderOmitted: string
 }
 
-/** An image a message embeds: prepared, with the content ID the email gives it and its file name. */
 export type EntryImage = PreparedImage & { cid: string; fileName: string }
 
-/** One message of the conversation. */
 export interface Entry {
-  /** The name shown in its block. */
   name: string
-  /** The name its initials come from (an agent's own name, without the organization). */
   initialsOf: string
   at: Date
-  /** Stored, sanitized HTML (a reply's with its signature), or null. */
   html: string | null
   text: string | null
-  /** The images it embeds, by the content ID its stored HTML refers to. */
   images: Map<string, EntryImage>
-  /** The images it shows by their file names only (over the size budget, or unreadable), by content ID. */
   imageNames?: Map<string, string>
-  /** Its files: their names, and their download links (history, plan 3.4; null without one). */
   files: readonly EntryFile[]
-  /**
-   * The address the email carries for an http or https link the message holds (a tracked link, plan 3.4); without it
-   * links stay as they are. Only the new message has one: links in the quoted history are never tracked.
-   */
   link?: (href: string) => string
 }
 
-/** A file a message names. */
 export interface EntryFile {
   name: string
   href: string | null
 }
 
 export interface Conversation {
-  /** The email's direction: the default language's, or the new message's own. */
   dir: Direction
   lang: string
   words: MailWords
   referenceCode: string
   current: Entry
-  /** Newest first. */
   history: readonly Entry[]
 }
 
-/** How history is shown: `level` 0 is all of it; 1 to n shorten the oldest n; n+1 to 2n then leave the oldest out. */
 export interface Trim {
   level: number
   imageNames: boolean
@@ -82,7 +48,6 @@ export interface Trim {
 
 export type Form = "full" | "short" | "omitted"
 
-/** The form of history message `index` (0 the newest) of `count` at a trim level. */
 export function formOf(index: number, count: number, level: number): Form {
   const fromOldest = count - 1 - index
   if (fromOldest < level - count) return "omitted"
@@ -90,29 +55,22 @@ export function formOf(index: number, count: number, level: number): Form {
   return "full"
 }
 
-/** LEFT-TO-RIGHT ISOLATE and POP DIRECTIONAL ISOLATE (written as code points: no literal controls in the code). */
 export const LRI = String.fromCodePoint(0x2066)
 export const PDI = String.fromCodePoint(0x2069)
 
-/** The characters a message in short form keeps. */
 export const SHORT_CHARACTERS = 280
 
-// Neutral greys only (html-email): light inline, dark in the block below.
 const TEXT = "#222222"
 const MUTED = "#666666"
 const LINE = "#E0E0E0"
 const AVATAR = "#EEEEEE"
 const AVATAR_TEXT = "#333333"
 const FONT = "Arial,Helvetica,sans-serif"
-/** The history's indent: its start padding and its line. */
 const QUOTE_INDENT = 14
 
 const STYLE = [
   ":root{color-scheme:light dark;supported-color-schemes:light dark}",
-  // Links a mail client adds itself (dates, times, phone numbers) take the text's look; a message's own links keep
-  // their underline inline with !important.
   ".email-bg a{color:inherit !important;text-decoration:none !important}",
-  // A message's own tables and images (a customer's layout table 700 pixels wide) stay inside the column on a phone.
   ".email-content table{width:auto !important;max-width:100% !important}",
   ".email-content img{max-width:100% !important;height:auto !important}",
   "@media (prefers-color-scheme:dark){",
@@ -121,11 +79,8 @@ const STYLE = [
   ".email-muted{color:#AAAAAA !important}",
   ".email-line{border-color:#333333 !important}",
   ".email-avatar{background-color:#333333 !important;color:#EEEEEE !important}",
-  // A message's own colours (black text, white cells from Outlook) would read as a white slab or black on dark: in
-  // dark mode its content takes the email's colours.
   ".email-content *{color:inherit !important;background-color:transparent !important;border-color:#333333 !important}",
   "}",
-  // Outlook for Android marks what it recolours; descendant rules under the mark keep the surfaces neutral.
   "[data-ogsb] .email-bg{background-color:#FFFFFF !important}",
   "[data-ogsb] .email-avatar{background-color:#333333 !important}",
   "[data-ogsb] .email-line{border-color:#333333 !important}",
@@ -134,7 +89,6 @@ const STYLE = [
 const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }
 export const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (char) => ESCAPES[char] ?? char)
 
-/** A template's {names} filled in. */
 export const fill = (template: string, values: Record<string, string>) =>
   template.replace(/\{(\w+)\}/g, (whole, key: string) => values[key] ?? whole)
 
@@ -148,14 +102,12 @@ const ISRAEL = new Intl.DateTimeFormat("en-GB", {
   hourCycle: "h23",
 })
 
-/** "13/11/2026 14:05": the date and time in Israel time, as numbers only, as the UI writes them. */
 export function israelTime(date: Date): string {
   const parts = ISRAEL.formatToParts(date)
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? ""
   return `${get("day")}/${get("month")}/${get("year")} ${get("hour")}:${get("minute")}`
 }
 
-/** One or two initials: the first letter of the first and of the last word. */
 export function initials(name: string): string {
   const letters = name
     .split(/[\s@._-]+/)
@@ -165,7 +117,6 @@ export function initials(name: string): string {
   return chosen.join("").toLocaleUpperCase("en") || "?"
 }
 
-/** The text of HTML, for the text part and the short form (html-to-text, as intake and 3.1 use it). */
 export function htmlToText(html: string): string {
   return convert(html, {
     wordwrap: false,
@@ -178,7 +129,6 @@ export function htmlToText(html: string): string {
 
 const textOf = (entry: Entry) => entry.text ?? (entry.html ? htmlToText(entry.html) : "")
 
-/** The first words of a message, on one line, cut between characters. */
 export function shortText(entry: Entry): string {
   const flat = textOf(entry).replace(/\s+/g, " ").trim()
   const chars = [...flat]
@@ -187,11 +137,9 @@ export function shortText(entry: Entry): string {
 
 const side = (dir: Direction) => (dir === "rtl" ? "right" : "left")
 const otherSide = (dir: Direction) => (dir === "rtl" ? "left" : "right")
-/** A piece of text in its own direction, isolated from the text around it. */
 const isolated = (text: string, around: Direction) =>
   `<span dir="${textDirection(text) ?? around}">${escapeHtml(text)}</span>`
 
-/** Text without HTML, line by line, each line with its own direction. */
 function linesHtml(text: string, dir: Direction): string {
   return text
     .replace(/\r\n?/g, "\n")
@@ -200,10 +148,8 @@ function linesHtml(text: string, dir: Direction): string {
     .join("")
 }
 
-/** A message's content as the email shows it, and the images it used. */
 type Content = { html: string; dir: Direction; images: EntryImage[] }
 
-/** Each message's content by its form, so trying several trims renders each message once. */
 const rendered = new WeakMap<Entry, Map<string, Content>>()
 
 function contentHtml(
@@ -233,11 +179,9 @@ function renderContent(
   around: Direction,
 ): Content {
   const images: EntryImage[] = []
-  // A message without a letter of its own (an image alone) takes the email's direction.
   const dir = messageDirection(entry.text, entry.html, around)
   if (form === "short") {
     const text = shortText(entry)
-    // Word's own copy of a long run here too (html-email).
     const html = wordCopies(`<div dir="${textDirection(text) ?? dir}">${escapeHtml(text)}</div>`)
     return { html, dir, images }
   }
@@ -262,14 +206,9 @@ function renderContent(
     html +=
       `<div dir="${dir}" class="email-muted" style="margin-top:8px;font-size:12px;line-height:18px;color:${MUTED}">` +
       `${fileLine(filesWord, entry.files, dir)}</div>`
-  // Word's own copy of a text with a run longer than the column (html-email).
   return { html: wordCopies(html), dir, images }
 }
 
-/**
- * The files line: the names, each isolated in its own direction, a name with a download link as that link (its
- * underline inline with !important, as html-email asks of the links an app makes).
- */
 const fileLine = (filesWord: string, files: readonly EntryFile[], dir: Direction) => {
   const [before = "", after = ""] = filesWord.split("{names}")
   const names = files.map((file) =>
@@ -280,7 +219,6 @@ const fileLine = (filesWord: string, files: readonly EntryFile[], dir: Direction
   return `${escapeHtml(before)}${names.join(", ")}${escapeHtml(after)}`
 }
 
-/** One conversation block: the avatar cell, the name and the time, then the content. */
 function blockHtml(
   entry: Entry,
   form: Form,
@@ -318,7 +256,6 @@ export interface Built {
   images: EntryImage[]
 }
 
-/** The email's HTML and text parts for one trim. */
 export function layout(conversation: Conversation, trim: Trim): Built {
   const { dir, words, history } = conversation
   const used = new Map<string, EntryImage>()
@@ -373,10 +310,8 @@ export function layout(conversation: Conversation, trim: Trim): Built {
   return { html, text: textPart(conversation, forms, omitted), images: [...used.values()] }
 }
 
-/** The text part: the same order, the history quoted with "> ". */
 function textPart(conversation: Conversation, forms: readonly Form[], omitted: number): string {
   const { words, history } = conversation
-  // The code isolated left to right, as in the HTML.
   const lines = [words.header, `${words.reference}: ${LRI}${conversation.referenceCode}${PDI}`, ""]
   const block = (entry: Entry, form: Form) => {
     const body = form === "short" ? shortText(entry) : textOf(entry)

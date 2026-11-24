@@ -1,4 +1,3 @@
-/** The streams a hidden prompt needs: a terminal to read from and somewhere to write the question. */
 export interface PromptInput extends NodeJS.EventEmitter {
   isTTY?: boolean
   setRawMode?: (mode: boolean) => unknown
@@ -12,10 +11,6 @@ const CTRL_C = String.fromCharCode(3)
 const CTRL_D = String.fromCharCode(4)
 const BACKSPACE = [String.fromCharCode(8), String.fromCharCode(127)]
 
-/**
- * Reads a secret from the terminal without echoing it. Refuses anything but a terminal, so the token is never
- * piped in from a file, a here-string or another program's output. The value stays in memory only.
- */
 export function readHidden(
   question: string,
   input: PromptInput,

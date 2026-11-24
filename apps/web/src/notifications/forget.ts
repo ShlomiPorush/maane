@@ -1,15 +1,9 @@
-// Signing out of this browser first removes this device's notifications (plan 4.5): Maane's API deletes the user's
-// subscription, then the browser ends it at its push service. Called before Better Auth's documented signOut. And once
-// a user is signed in, a subscription this browser still holds for someone else is ended (dropForeignSubscription).
-
 import { api } from "../api/endpoints.ts"
 import { pushDevice } from "./device.ts"
 
-/** Turn-ons running in this tab, and how many have started: a check never ends a subscription being registered. */
 let registering = 0
 let started = 0
 
-/** Runs a turn-on (subscribe, then save on the server) so dropForeignSubscription leaves its subscription alone. */
 export async function whileRegistering<T>(work: () => Promise<T>): Promise<T> {
   registering += 1
   started += 1
@@ -20,7 +14,6 @@ export async function whileRegistering<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-/** The browser could not read or end its subscription: notifications would still reach this device. */
 export class DeviceNotForgotten extends Error {
   constructor(cause: unknown) {
     super("the browser could not end its push subscription", { cause })
@@ -28,11 +21,6 @@ export class DeviceNotForgotten extends Error {
   }
 }
 
-/**
- * Throws when this device's notifications could not be turned off; the sign-out then stops and says so. Ending the
- * subscription in the browser is what stops them: the push service then refuses the next send, and that refusal
- * deletes the row on the server too. So the browser ends it whatever the server's delete answered.
- */
 export async function forgetDevice(): Promise<void> {
   const device = pushDevice()
   if (!device.supported()) return
@@ -40,20 +28,12 @@ export async function forgetDevice(): Promise<void> {
     throw new DeviceNotForgotten(error)
   })
   if (!subscription) return
-  await api.unsubscribeDevice(subscription.endpoint).catch(() => {
-    // The row goes on the next send instead, once the browser below has ended the subscription.
-  })
+  await api.unsubscribeDevice(subscription.endpoint).catch(() => {})
   await subscription.unsubscribe().catch((error: unknown) => {
     throw new DeviceNotForgotten(error)
   })
 }
 
-/**
- * Ends a subscription this browser holds that the server does not count as the signed-in user's: one a previous user
- * left when their session ended without signing out, so their notifications would reach the next user of the browser.
- * Only the server's clear "not this user's" ends it. Resolves once the server answered (true when it ended one); throws
- * when there is no answer yet (the check or the browser failed), and the caller asks again.
- */
 export async function dropForeignSubscription(): Promise<boolean> {
   const device = pushDevice()
   if (!device.supported()) return false
@@ -63,9 +43,7 @@ export async function dropForeignSubscription(): Promise<boolean> {
   const { on } = await api.notificationState(subscription.endpoint)
   if (on === true) return false
   if (on !== false) throw new Error("the notification state has no answer")
-  // A turn-on that ran during the check may be saving this very subscription: no answer yet, so ask again later.
   if (registering > 0 || started !== before) throw new Error("a subscription is being registered")
-  // The device may have subscribed again meanwhile (turned on in the Account page): only the endpoint asked about ends.
   const now = await device.current()
   if (now?.endpoint !== subscription.endpoint) return false
   await now.unsubscribe()

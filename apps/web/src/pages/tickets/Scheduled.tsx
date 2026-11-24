@@ -1,12 +1,3 @@
-// A ticket's scheduled replies (plan 4.2), above the composer: each with its time (Israel time), its author, its
-// recipients, and its state. Until it starts sending, its author can change it (in the composer: a new version) and
-// anyone who sees the ticket can cancel it (asked first). Once it went to the send point it shows where the reply is
-// (3.1's states; the reply itself is in the conversation, marked as scheduled), and a cancelled or ended one says why:
-// the agent cancelled it, the customer wrote first (the agent can write again), the ticket moved to another
-// organization, or a check at its time failed. A reply still scheduled more than LATE_MS after its time shows as late:
-// its job runs at its time and the worker runs it again every few minutes while it is overdue, so this much delay means
-// something keeps it from going; the view says it has not gone out and the agent can cancel it and write again.
-
 import type { ActionReason, ScheduledReplyView, TicketView } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { CalendarClock, Paperclip, Pencil, X } from "lucide-react"
@@ -27,7 +18,6 @@ export function ScheduledReplies({
   onEdit,
 }: {
   view: TicketView
-  /** The scheduled reply the composer is changing now, if any. */
   editing: string | null
   onEdit: (scheduled: ScheduledReplyView) => void
 }) {
@@ -51,10 +41,8 @@ export function ScheduledReplies({
   )
 }
 
-/** How long after its time a reply still scheduled shows as late. */
 const LATE_MS = 30 * 60 * 1000
 
-/** Whether a reply is still scheduled more than LATE_MS after its time, judged when the view renders. */
 function isLate(entry: Pick<ScheduledReplyView, "state" | "sendAt">, now = Date.now()): boolean {
   return entry.state === "scheduled" && now - Date.parse(entry.sendAt) > LATE_MS
 }
@@ -82,7 +70,6 @@ function ScheduledCard({
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
-  // Until it starts sending: also once its reply was written and waits for the send point, which stops it there.
   const open = entry.state === "scheduled" || entry.state === "handed"
   const late = isLate(entry)
   const state = stateOf(entry)
@@ -170,7 +157,6 @@ function ScheduledCard({
           </dl>
           <div className="ui-scheduled-text">
             {entry.text.split(/\r?\n/).map((line, index) => (
-              // Each line takes the direction of its first letter, as the email's paragraphs do.
               // biome-ignore lint/suspicious/noArrayIndexKey: the lines of one fixed text, in order
               <p key={index} dir="auto">
                 {line || " "}

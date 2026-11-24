@@ -11,7 +11,6 @@ import type { createTestDatabase } from "./db.ts"
 
 type TestDatabase = Awaited<ReturnType<typeof createTestDatabase>>
 
-/** A clock the tests move by hand: the setup window reads it. */
 export class TestClock {
   ms = 0
   now = () => this.ms
@@ -20,7 +19,6 @@ export class TestClock {
   }
 }
 
-/** A queue for tests that never queue a job: any attempt fails the test. */
 const NO_JOBS: JobQueue = {
   send: async () => {
     throw new Error("this test has no job queue")
@@ -33,21 +31,13 @@ const NO_JOBS: JobQueue = {
   stop: async () => {},
 }
 
-/**
- * The app as the server builds it, on a test database, with keys new for this run and a movable clock. Requests go
- * straight to `app.fetch`, so no port is opened.
- */
 export function createTestApp(
   database: TestDatabase,
   overrides: Record<string, string> = {},
   jobs: JobQueue = NO_JOBS,
-  /** The file store the ticket routes read; tests that serve files give a temporary directory. */
   filesDir = "/nonexistent",
-  /** The link routes: the proxies they trust and the GeoLite2 directory. */
   links: { trustedProxies?: string[]; geoipDir?: string | null } = {},
-  /** The VAPID public key the notification routes hand out. */
   vapidPublicKey = randomBytes(65).toString("base64url"),
-  /** The Zendesk archive the import page reads (plan 5.1). */
   archiveDir = "/nonexistent",
 ) {
   const audit = openDatabase(database.url, 2)
@@ -98,7 +88,6 @@ export function createTestApp(
       return app.fetch(request)
     },
     auth: () => auth,
-    /** The app itself, for a test that serves it on a port (the link routes read the TCP peer). */
     app,
     close: () => audit.close(),
   }

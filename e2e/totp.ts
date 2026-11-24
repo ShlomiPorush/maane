@@ -1,8 +1,6 @@
 import { createHmac } from "node:crypto"
 import { loadState, saveState } from "./state.ts"
 
-// RFC 6238 TOTP (SHA-1, 6 digits, 30-second steps), written here, independent of Better Auth.
-
 function base32Decode(input: string): Buffer {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
   let bits = ""
@@ -25,10 +23,6 @@ export function totp(secret: string, time = Date.now()): string {
   return code.toString().padStart(6, "0")
 }
 
-/**
- * A code of a 30-second step no earlier test used: Better Auth refuses a code it already accepted. Waits for the next
- * step when this one is used.
- */
 export async function freshTotp(secret: string): Promise<string> {
   for (;;) {
     const step = Math.floor(Date.now() / 30_000)

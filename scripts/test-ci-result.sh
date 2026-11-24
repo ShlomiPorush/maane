@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Tests for scripts/ci-result.sh, with gh replaced by a stand-in that serves canned GitHub API answers
-# (one after the other when a test gives several), fails, is slow or hangs on request, and date and
-# sleep by a fake clock that only sleep and slow calls move. Covers which CI run decides, waiting for
-# it, and the final check before a release. Run with the guards (scripts/lib/guards.sh).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,8 +21,6 @@ check() {
     [ -f "$WORK/case/out" ] && sed 's/^/      | /' "$WORK/case/out" "$WORK/case/err"
   fi
 }
-
-# --- stand-ins -------------------------------------------------------------------------------
 
 mkdir -p "$WORK/bin"
 cat >"$WORK/bin/gh" <<'EOF'
@@ -67,9 +61,6 @@ EOF
 chmod +x "$WORK/bin/gh" "$WORK/bin/sleep" "$WORK/bin/date"
 export WORKFLOW_ID SHA
 
-# --- canned answers --------------------------------------------------------------------------
-
-# A fresh case: the CI workflow, no runs yet, the clock at a fixed time.
 sandbox() {
   rm -rf "$WORK/case"
   mkdir -p "$WORK/case/api"
@@ -80,21 +71,16 @@ sandbox() {
   runs
 }
 
-# A run as the list shows it: run ID ATTEMPT CREATED [EVENT] [BRANCH] [SHA]. Its status and conclusion
-# here are those the list had when it was read; the run's record decides.
 run() {
   printf '{"id":%s,"workflow_id":%s,"path":".github/workflows/ci.yml","head_sha":"%s","head_branch":"%s","event":"%s","run_attempt":%s,"status":"completed","conclusion":"success","created_at":"%s"}' \
     "$1" "$WORKFLOW_ID" "${6:-$SHA}" "${5:-main}" "${4:-push}" "$2" "$3"
 }
 
-# The runs list (the n-th answer with RUNS_CALL=n): runs RUN_JSON...
 runs() {
   local IFS=,
   printf '{"total_count":%s,"workflow_runs":[%s]}' "$#" "$*" >"$STATE/api/runs${RUNS_CALL:+.$RUNS_CALL}"
 }
 
-# A run's current record (the n-th answer with CALL=n): record ID ATTEMPT STATUS [CONCLUSION], where
-# CONCLUSION is the inside of a JSON string; REC_ID, REC_EVENT, REC_BRANCH and REC_SHA change a field.
 record() {
   local conclusion="null"
   [ -n "${4:-}" ] && conclusion="\"$4\""
@@ -107,7 +93,6 @@ T1="2026-11-01T10:00:00Z"
 T2="2026-11-01T11:00:00Z"
 T3="2026-11-01T12:00:00Z"
 
-# Runs the script: ci_result MODE_ARGS...; sets RC. WAIT, POLL and CALL_TIMEOUT set its limits.
 ci_result() {
   (PATH="$WORK/bin:$PATH" GH_REPO=owner/repo CI_RESULT_WAIT_SECONDS="${WAIT:-3}" CI_RESULT_POLL_SECONDS="${POLL:-1}" \
     CI_RESULT_CALL_TIMEOUT="${CALL_TIMEOUT:-5}" bash "$REPO/scripts/ci-result.sh" --sha "$SHA" "$@") \
@@ -125,8 +110,6 @@ waited() {
   [ "$n" -eq "$1" ]
 }
 slept() { [ -f "$STATE/sleeps" ] && [ "$(tr '\n' ' ' <"$STATE/sleeps")" = "$1" ]; }
-
-# --- selection -------------------------------------------------------------------------------
 
 sandbox
 ci_result --wait
@@ -278,8 +261,6 @@ printf '{"id":%s,"name":"CI","path":".github/workflows/other.yml"}' "$WORKFLOW_I
 ci_result --wait
 check "the workflow file is not ci.yml: no reuse" declines
 
-# --- unexpected answers ----------------------------------------------------------------------
-
 sandbox
 runs "$(run 100 1 "$T1")"
 record 100 1 completed success
@@ -359,8 +340,6 @@ for field in REC_ID=999 REC_SHA=$OTHER_SHA REC_BRANCH=feature REC_EVENT=pull_req
   check "a record that does not match the run (${field%%=*}): no reuse" declines
 done
 
-# --- final check -----------------------------------------------------------------------------
-
 sandbox
 runs "$(run 100 1 "$T1")"
 record 100 1 completed success
@@ -416,8 +395,6 @@ runs "$(run 100 1 "$T1")"
 record 100 1 completed success
 MOCK_GH_HANG=runs CALL_TIMEOUT=1 ci_result --expect-run 100
 check "final check, an API call that times out: stop" [ $RC -eq 1 ]
-
-# --- usage -----------------------------------------------------------------------------------
 
 sandbox
 ci_result

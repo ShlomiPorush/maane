@@ -39,12 +39,6 @@ import { MARKERS, type StandInClamd, startStandInClamd } from "../testing/clamd.
 import { BRANDS, backupInto, HEBREW_BODY, standInAccount } from "../testing/zendesk-archive.ts"
 import { ZendeskImport } from "./run.ts"
 
-// Imported tickets through the API (plan 5.1): the import page (mapping, start, progress, report), imported tickets
-// read-only for every agent action until Finish import (deleting a category one carries too), their "From Zendesk" block,
-// their files and inline images (plan 5.2),
-// the organization scope of the list and search, and the quoted history of a later reply. The server app and the
-// import share one migrated database; the archive is an invented one, made by the phase 0 backup from its stand-in.
-
 const SUPPORT = "store@example.com"
 const password = testPassword()
 
@@ -135,7 +129,6 @@ async function newAgent(admin: TestBrowser, name: string, organizations: string[
   return b
 }
 
-/** The admin maps the store brand and the vip tag and chooses themself. */
 async function mapped(admin: { b: TestBrowser; id: string }) {
   const saved = await admin.b.call("PUT", "/api/v1/admin/import/mapping", {
     brands: { [String(BRANDS.mapped)]: org, [String(BRANDS.other)]: null },
@@ -145,7 +138,6 @@ async function mapped(admin: { b: TestBrowser; id: string }) {
   expect(saved.status, JSON.stringify(saved.json)).toBe(200)
 }
 
-/** The admin maps, starts a run, and the worker runs it. */
 async function imported(admin: { b: TestBrowser; id: string }) {
   await mapped(admin)
   const started = await admin.b.call("POST", "/api/v1/admin/import/start")
@@ -183,7 +175,6 @@ describe("imported tickets", () => {
       ["vip", 1],
     ])
     expect(view.users.map((user) => user.id)).toEqual([admin.id])
-    // Starting needs the chosen user.
     expect((await admin.b.call("POST", "/api/v1/admin/import/start")).json.error).toBe("import_no_agent")
 
     const agent = await newAgent(admin.b, "agent.one", [org])
@@ -206,7 +197,6 @@ describe("imported tickets", () => {
     const after = await admin.b.call("GET", `/api/v1/admin/import/runs/${run}/report?after=${report.json.rows[3].id}`)
     expect(after.json.rows).toHaveLength(2)
 
-    // A mapping while a run is open is refused; so is a second run beside it (Start goes on with the open one).
     const [open] = await database.db.select().from(ticket).limit(1)
     expect(open).toBeDefined()
     const again = await admin.b.call("POST", "/api/v1/admin/import/start")
@@ -218,7 +208,6 @@ describe("imported tickets", () => {
       agentUserId: admin.id,
     })
     expect(refused.json.error).toBe("import_running")
-    // Finish import waits for the open run: refused; an agent may not press it.
     expect((await admin.b.call("POST", "/api/v1/admin/import/finish")).json.error).toBe("import_running")
     expect((await agent.call("POST", "/api/v1/admin/import/finish")).status).toBe(403)
     expect(await importer.run(second)).toEqual({ state: "done", reason: null })
@@ -244,12 +233,10 @@ describe("imported tickets", () => {
     ).toEqual(read)
     expect(await refusedWith("POST", "/api/v1/tickets/1/messages", reply())).toEqual(read)
     expect(await refusedWith("POST", "/api/v1/tickets/1/messages", reply({ sendAt: until }))).toEqual(read)
-    // Deleting a category an imported ticket carries would change it: refused; another category may go.
     expect(await refusedWith("DELETE", `/api/v1/admin/categories/${vip}`)).toEqual([409, "category_imported"])
     const [spare] = await database.db.insert(category).values({ name: "Spare" }).returning()
     expect((await b.call("DELETE", `/api/v1/admin/categories/${spare?.id}`)).status).toBe(200)
 
-    // The ticket view says so, and shows the "From Zendesk" block and each comment's Zendesk author.
     const view = (await b.call("GET", "/api/v1/tickets/1")).json as TicketView
     expect(view.ticket.imported).toMatchObject({
       zendeskId: 1,
@@ -273,7 +260,6 @@ describe("imported tickets", () => {
       [7, "follow_up"],
     ])
 
-    // Finish import opens it for good: an ordinary ticket, and the page shows the import finished.
     const finished = await b.call("POST", "/api/v1/admin/import/finish")
     expect(finished.status).toBe(200)
     expect((finished.json as ImportView).window).toMatchObject({ open: false })
@@ -282,8 +268,6 @@ describe("imported tickets", () => {
     expect((await b.call("POST", "/api/v1/admin/import/start")).json.error).toBe("import_closed")
     const sent = await b.call("POST", "/api/v1/tickets/1/messages", reply())
     expect(sent.status, JSON.stringify(sent.json)).toBe(201)
-    // The email quotes the imported history: the customer's comment and the agent's public reply, without any outbox
-    // or delivery state of their own, and never the internal note.
     const [row] = await database.db.select().from(outbox).where(eq(outbox.messageId, sent.json.id))
     const mail = await simpleParser(row?.mime ?? Buffer.alloc(0))
     expect(mail.html).toContain(HEBREW_BODY)
@@ -295,8 +279,6 @@ describe("imported tickets", () => {
   })
 
   it("shows imported files as intake's (status, preview, download, the inline image from its own part), read-only too", async () => {
-    // A new inline image of the question, a real PNG its HTML names by Zendesk's address, beside a remote image and an
-    // infected file.
     const shot = png(8, 8)
     zendesk.change(1, (t) => {
       const question = t.comments[0]
@@ -327,7 +309,6 @@ describe("imported tickets", () => {
       ["virus.txt", "attachment", "infected", null, false],
     ])
     expect(question?.attachments[3]?.signature).toBe("Eicar-Test-Signature")
-    // A download is the archive's file; a preview only of a clean image; an infected file neither.
     const [invoice, , image, virus] = question?.attachments ?? []
     const download = await b.get(`/api/v1/files/${invoice?.id}`)
     expect(download.status).toBe(200)
@@ -336,7 +317,6 @@ describe("imported tickets", () => {
     expect([preview.status, preview.headers.get("content-type")]).toEqual([200, "image/png"])
     expect(Buffer.from(await preview.arrayBuffer())).toEqual(shot)
     expect((await b.get(`/api/v1/files/${virus?.id}`)).status).toBe(404)
-    // The body shows the inline image from its own part, never Zendesk's address; the remote image only on request.
     expect(question?.remoteImages).toBe(1)
     const body = await (await b.get(`/api/v1/messages/${question?.id}/body`)).text()
     expect(body).toContain(`data:image/png;base64,${shot.toString("base64")}`)
@@ -344,14 +324,12 @@ describe("imported tickets", () => {
     expect(body).not.toContain("images.example.com")
     const shown = await (await b.get(`/api/v1/messages/${question?.id}/body?images=1`)).text()
     expect(shown).toContain("https://images.example.com/logo.png")
-    // The report names the infected file.
     const report = (await b.call("GET", `/api/v1/admin/import/runs/${runId}/report`)).json as ImportReportPage
     expect(report.rows.map((row) => [row.zendeskId, row.reason, row.detail])).toContainEqual([
       1,
       "file_infected",
       "virus.txt",
     ])
-    // Read-only until Finish import: a reply with an imported file is refused like any other change.
     const answer = await b.call("POST", "/api/v1/tickets/1/messages", reply({ parts: [image?.id] }))
     expect([answer.status, answer.json.error]).toEqual([409, "ticket_imported"])
   })
@@ -366,18 +344,15 @@ describe("imported tickets", () => {
     const id = started.json.run.id as string
     expect(started.json.run).toMatchObject({ state: "running", jobActive: true })
     await expect(importer.run(id)).rejects.toThrow()
-    // Its job still waits in the queue (no worker here): the page does not offer Continue yet.
     expect((await admin.b.call("GET", "/api/v1/admin/import/run")).json.run).toMatchObject({
       state: "running",
       reason: "failed",
       jobActive: true,
     })
-    // The job used up its retries: pg-boss's documented cancel leaves the run with no job, waiting for Continue.
     const boss = new PgBoss({ connectionString: database.url, supervise: false, schedule: false })
     await boss.start()
     const jobs = await boss.findJobs(ZENDESK_IMPORT, { data: { runId: id } })
     expect(jobs).toHaveLength(1)
-    // A worker took the job and it failed: pg-boss tries it again later by itself, and the page says so.
     const taken = await boss.fetch(ZENDESK_IMPORT)
     expect(taken.map((job) => job.id)).toEqual([jobs[0]?.id])
     expect((await admin.b.call("GET", "/api/v1/admin/import/run")).json.run).toMatchObject({
@@ -407,9 +382,7 @@ describe("imported tickets", () => {
     expect(report.json.rows.filter((row: { reason: string }) => row.reason === "ticket_failed")).toMatchObject([
       { zendeskId: 3, detail: "rule:test_refuses_three" },
     ])
-    // Finish import stays refused while the run is open.
     expect((await admin.b.call("POST", "/api/v1/admin/import/finish")).json.error).toBe("import_running")
-    // The cause fixed, Continue (the same Start) queues a job for the same run, which goes on from ticket 3.
     await database.db.execute(sql`alter table ticket drop constraint test_refuses_three`)
     const resumed = await admin.b.call("POST", "/api/v1/admin/import/start")
     expect(resumed.json.run).toMatchObject({ id, state: "running", jobActive: true })
@@ -428,8 +401,6 @@ describe("imported tickets", () => {
     await mapped(admin)
     const started = await admin.b.call("POST", "/api/v1/admin/import/start")
     const id = started.json.run.id as string
-    // Its job waits (no worker here). Cancel ends the run, audited; the job then does nothing.
-    // Cancel names the run it means; without one, it is refused.
     expect((await admin.b.call("POST", "/api/v1/admin/import/cancel")).json.error).toBe("request_invalid")
     expect((await admin.b.call("POST", "/api/v1/admin/import/cancel", { runId: "x" })).json.error).toBe(
       "request_invalid",
@@ -442,16 +413,13 @@ describe("imported tickets", () => {
     expect(await database.db.select().from(ticket)).toEqual([])
     const audit = await database.db.select().from(auditLog).where(eq(auditLog.action, "import.cancel"))
     expect(audit).toMatchObject([{ entityId: id, actorUserId: admin.id }])
-    // The mapping can be saved again.
     await mapped(admin)
 
-    // A run stopped on an error, waiting for the admin, is cancelled the same way.
     await database.db.execute(
       sql`alter table ticket add constraint test_refuses_three check (zendesk_id is distinct from 3)`,
     )
     const second = (await admin.b.call("POST", "/api/v1/admin/import/start")).json.run.id as string
     await expect(importer.run(second)).rejects.toThrow()
-    // A stale dialog for the first run, answered now, leaves the open second run alone.
     expect((await admin.b.call("POST", "/api/v1/admin/import/cancel", { runId: id })).json).toMatchObject({
       cancelled: false,
       run: { id: second, state: "running" },
@@ -461,14 +429,12 @@ describe("imported tickets", () => {
       run: { id: second, state: "stopped", reason: "cancelled", done: 2 },
     })
     await database.db.execute(sql`alter table ticket drop constraint test_refuses_three`)
-    // With nothing open, cancel changes nothing, and the next start is a new run over the whole archive.
     expect((await admin.b.call("POST", "/api/v1/admin/import/cancel", { runId: second })).json).toMatchObject({
       cancelled: false,
       run: { id: second },
     })
     const third = (await admin.b.call("POST", "/api/v1/admin/import/start")).json.run.id as string
     expect(third).not.toBe(second)
-    // A stale dialog for the second run does not cancel the third.
     expect((await admin.b.call("POST", "/api/v1/admin/import/cancel", { runId: second })).json).toMatchObject({
       cancelled: false,
       run: { id: third, state: "running" },
@@ -476,7 +442,6 @@ describe("imported tickets", () => {
     expect(await importer.run(third)).toEqual({ state: "done", reason: null })
     expect((await admin.b.call("GET", "/api/v1/admin/import/run")).json.run).toMatchObject({ id: third, done: 7 })
     expect(await database.db.select().from(auditLog).where(eq(auditLog.action, "import.cancel"))).toHaveLength(2)
-    // Agents cannot cancel.
     const agent = await newAgent(admin.b, "agent.one", [org])
     expect((await agent.call("POST", "/api/v1/admin/import/cancel")).status).toBe(403)
   })
@@ -485,7 +450,6 @@ describe("imported tickets", () => {
     const admin = await firstAdmin()
     await mapped(admin)
     const id = (await admin.b.call("POST", "/api/v1/admin/import/start")).json.run.id as string
-    // Continue queues its job the same way.
     expect((await admin.b.call("POST", "/api/v1/admin/import/start")).json.run.id).toBe(id)
     const boss = new PgBoss({
       connectionString: database.url,
@@ -504,8 +468,6 @@ describe("imported tickets", () => {
         ZENDESK_IMPORT,
         queued.map((job) => job.id),
       )
-      // pg-boss's documented heartbeat as the import's job uses it, at its shortest interval: a job whose worker is
-      // gone goes back to wait for a retry at the next supervision, while a handler that still works keeps its job.
       const lost = await boss.send(ZENDESK_IMPORT, { runId: "lost" }, { heartbeatSeconds: 10 })
       expect((await boss.fetch(ZENDESK_IMPORT)).map((job) => job.id)).toEqual([lost])
       const working = await boss.send(ZENDESK_IMPORT, { runId: "working" }, { heartbeatSeconds: 10 })
@@ -539,7 +501,6 @@ describe("imported tickets", () => {
       expect((await admin.b.call("GET", "/api/v1/admin/import")).json.archive).toMatchObject({ runs: 1, tickets: 6 })
       await admin.b.call("GET", "/api/v1/admin/import")
       expect(read).toHaveBeenCalledTimes(1)
-      // A backup that ran meanwhile changed its state: read again, with what it brought.
       zendesk.setStatus(6, "deleted")
       await backupInto(zendesk, join(root, "archive"))
       expect((await admin.b.call("GET", "/api/v1/admin/import")).json.archive).toMatchObject({ runs: 2, tickets: 5 })
@@ -550,7 +511,6 @@ describe("imported tickets", () => {
   })
 
   it("makes the requester the composer's recipient even when a CC's address sorts first", async () => {
-    // user3 asks, user2 is in CC: by address alone user2 would come first.
     zendesk.change(1, (t) => {
       t.record = { ...t.record, requester_id: 3, email_cc_ids: [2] }
     })
@@ -571,7 +531,6 @@ describe("imported tickets", () => {
       ((await b.call("GET", `/api/v1/tickets?${query}`)).json as TicketList).tickets.map((t) => t.number).sort()
     expect(await numbers(member, "status=all")).toEqual([1, 2, 3, 7])
     expect(await numbers(stranger, "status=all")).toEqual([])
-    // Search covers imported history: the customer's address, and a word of an imported comment.
     expect(await numbers(member, `q=${encodeURIComponent("user3@example.com")}`)).toEqual([1, 2])
     expect(await numbers(member, `q=${encodeURIComponent(HEBREW_BODY.slice(0, 6))}`)).toEqual([1])
     expect(await numbers(stranger, `q=${encodeURIComponent("user3@example.com")}`)).toEqual([])

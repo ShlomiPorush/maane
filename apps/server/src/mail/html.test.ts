@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest"
 import { htmlDocument, textDocument } from "./body.ts"
 import { renderMailHtml, sanitizeMailHtml } from "./html.ts"
 
-// Hebrew from code points: the repository holds no literal Hebrew outside he.json.
 const SHALOM = String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)
 const DATA_PNG = "data:image/png;base64,iVBORw0KGgo="
 
@@ -19,7 +18,6 @@ describe("sanitizeMailHtml", () => {
             ? "data:image/png;base64,AAAA"
             : null,
     )
-    // The rewritten address still passes the allow list: a data: URL never does.
     expect(stored).toBe('<img src="cid:zendesk-1" /><img src="https://images.example.com/b.png" /><img />')
   })
 })
@@ -55,7 +53,6 @@ describe("renderMailHtml", () => {
     expect(blocked.html).toBe("<p>x</p>")
     expect(blocked.html).not.toContain("example.com")
     const shown = renderMailHtml(stored, { remoteImages: true, inline: none })
-    // Only https: the frame's policy allows no plain http image.
     expect(shown.html).toBe('<p>x<img src="https://img.example.com/a.png" /></p>')
   })
 
@@ -111,7 +108,6 @@ describe("body documents", () => {
     expect(document).toContain('<body dir="rtl">')
     expect(document).toContain(`<div dir="rtl">${SHALOM}</div>`)
     expect(document).toContain('<div dir="ltr">hello &lt;b&gt;&amp;&lt;/b&gt;</div>')
-    // A line without a letter takes the document's direction.
     expect(document).toContain('<div dir="rtl"></div><div dir="rtl">2026-11-12</div>')
     expect(document).not.toContain("<b>")
   })

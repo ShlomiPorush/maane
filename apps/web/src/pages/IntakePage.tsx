@@ -1,8 +1,3 @@
-// The intake log, /intake, admins only (plan 2.4): every message intake processed, newest first (GET /api/v1/intake),
-// with what Maane did: the outcome, the reason, the support address and its organization, and the ticket it opened or
-// joined. The review filter keeps the entries whose message or ticket carries a review flag; it lives in the address
-// (?review=1). "Show older entries" follows the cursor (TB-6); the page reads itself again every 30 seconds (SV-10).
-
 import { INTAKE_REASONS, type IntakeEntry, type IntakeLog } from "@maane/shared"
 import { useId } from "react"
 import { Link, useSearchParams } from "react-router"
@@ -120,7 +115,6 @@ function Intake() {
   )
 }
 
-/** One entry: it holds links to tickets, so the row itself opens nothing (AX-5). */
 function IntakeRow({ entry }: { entry: IntakeEntry }) {
   const { t } = useI18n()
   return (
@@ -190,7 +184,6 @@ function IntakeRow({ entry }: { entry: IntakeEntry }) {
 
 const KNOWN_REASONS = new Set<string>(INTAKE_REASONS)
 
-/** Each reason in words; a code the UI does not know yet shows as it is, in mono, left to right. */
 function ReasonWords({ codes }: { codes: string[] }) {
   const { t } = useI18n()
   return (

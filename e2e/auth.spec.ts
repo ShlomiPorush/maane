@@ -3,8 +3,6 @@ import { ADMIN, fillSecret, freshAddress, he, password, signIn, waitShown } from
 import { loadState, saveState } from "./state.ts"
 import { freshTotp } from "./totp.ts"
 
-// The first admin on a fresh stack, then sign-in with the password and a code. The desktop project creates the admin;
-// the phone project, which runs after it, signs in. Tests in this file share the stack's state, so they run in order.
 test.describe.configure({ mode: "serial" })
 
 test("serves the UI in Hebrew, right to left, with its security headers", async ({ page, request }) => {
@@ -28,14 +26,11 @@ test("creates the first admin with two-factor and backup codes", async ({ page, 
   await fillSecret(page.getByLabel(he("auth.repeatPassword"), { exact: true }), password())
   await page.getByRole("button", { name: he("setup.create"), exact: true }).click()
 
-  // Two-factor: the secret the page shows, then a code made from it.
   const secret = ((await page.getByTestId("totp-secret").textContent()) ?? "").replace(/[^A-Z2-7]/g, "")
   expect(secret.length).toBeGreaterThanOrEqual(16)
   saveState({ secret })
-  // The sixth digit sends the code.
   await fillSecret(page.getByLabel(he("auth.code"), { exact: true }), await freshTotp(secret))
 
-  // The backup codes, shown once.
   const list = page.getByTestId("backup-codes").locator("li")
   await waitShown(page, '[data-testid="backup-codes"] li')
   expect(await list.count()).toBeGreaterThan(0)

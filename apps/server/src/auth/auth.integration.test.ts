@@ -23,7 +23,6 @@ afterEach(async () => {
 
 const browser = () => new TestBrowser(app.fetch, nextIp())
 
-/** The first admin, enrolled: a signed-in browser and the TOTP secret. */
 async function firstAdmin(name = "first.admin") {
   const b = browser()
   const created = await b.setup(name, password)
@@ -32,7 +31,6 @@ async function firstAdmin(name = "first.admin") {
   return { b, secret, name }
 }
 
-/** An admin creates a user; that user signs in and enrolls in a new browser. */
 async function newUser(admin: TestBrowser, name: string, role: "admin" | "agent") {
   const created = await admin.call("POST", "/api/auth/admin/create-user", {
     email: userEmail(name),
@@ -64,7 +62,6 @@ describe("setup", () => {
   })
 
   it("creates one admin when setup sign-ups race, more of them than the connection pool holds", async () => {
-    // The test pool holds 5 connections; 12 sign-ups at once must neither hang nor create a second admin.
     const names = Array.from({ length: 12 }, (_, i) => `racer.${String.fromCharCode(97 + i)}`)
     const answers = await Promise.all(names.map((n) => browser().setup(n, password)))
     expect(answers.filter((a) => a.status === 200)).toHaveLength(1)
@@ -157,9 +154,7 @@ describe("two-factor before anything else", () => {
     expect((await other.passwordSignIn("first.admin", password)).status).toBe(200)
     expect((await other.call("GET", "/api/v1/me")).json).toEqual({ error: "totp_required" })
     await setupBrowser.enroll(password)
-    // The check reads the user's flag, not whether this session passed the second factor.
     expect((await other.call("GET", "/api/v1/me")).status).toBe(200)
-    // The setup page then signs out the other browsers, which ends it.
     await setupBrowser.call("POST", "/api/auth/revoke-other-sessions", {})
     expect((await other.call("GET", "/api/v1/me")).status).toBe(401)
   })
@@ -265,7 +260,6 @@ describe("roles and admin actions", () => {
       expect(await agent.b.call(method, path, body), what).toEqual({ status: 403, json: { error: "forbidden" } })
     }
 
-    // A refusal keeps the UI's security headers and is never cached, whether the role check or a service refused.
     for (const [answer, status, json] of [
       [await agent.b.get("/api/v1/admin/organizations"), 403, { error: "forbidden" }],
       [await admin.get(org), 404, { error: "organization_not_found" }],
@@ -367,7 +361,6 @@ describe("roles and admin actions", () => {
   it("refuses a banned user whose sessions were not cleaned up, on every protected route", async () => {
     const { b: admin } = await firstAdmin()
     const other = await newUser(admin, "admin.three", "admin")
-    // The ban stored, the session cleanup not done: what a failure between the plugin's two steps leaves.
     await database.db.update(authUser).set({ banned: true }).where(eq(authUser.id, other.id))
     expect((await other.b.call("GET", "/api/v1/me")).status).toBe(401)
     const res = await other.b.call("GET", "/api/auth/admin/list-users")

@@ -1,8 +1,3 @@
-// The audit log, /audit, admins only: who did what and when, newest first (GET /api/v1/audit?before=<id>&limit=50).
-// "Show older entries" follows the cursor after the last row shown (v3 TB-6); the page reads itself again every 30
-// seconds and keeps every page it shows. Each action has its words in the locale files; one the UI does not know yet
-// shows its code. A user an action names is shown by username when the user list knows them.
-
 import { TICKET_STATUSES } from "@maane/shared"
 import { useQuery } from "@tanstack/react-query"
 import { type AuditEntry, api, type AuditPage as Page, qk } from "../api/endpoints.ts"
@@ -19,10 +14,6 @@ import { AdminOnly } from "./AdminOnly.tsx"
 import { labelKey, SETTING_ROWS } from "./SettingsPage.tsx"
 import { readUsers } from "./UsersPage.tsx"
 
-/**
- * Every action the server writes, each with its words in the locale files (audit.action.*). guards.test.ts reads the
- * actions from the server's writeAudit calls and fails on one missing here.
- */
 export const AUDIT_ACTIONS = [
   "account.setup",
   "account.password_change",
@@ -186,10 +177,6 @@ function AuditRow({ entry, names }: { entry: AuditEntry; names: Map<string, stri
 
 type Fact = { label: string; value: string; ltr?: boolean }
 
-/**
- * The facts of an entry worth reading: the user, the role, the setting and its new value, the sign-in stage, and for
- * an organization its name, the address, and what came before.
- */
 export function describe(
   entry: AuditEntry,
   names: Map<string, string>,
@@ -197,8 +184,6 @@ export function describe(
 ): Fact[] {
   const details = entry.details ?? {}
   const facts: Fact[] = []
-  // The user an admin acted on: named in the details when it was created, else found by its id. An action on one's
-  // own account (account.*) names no one else.
   const named = typeof details.username === "string" ? details.username : null
   const target =
     named ?? (entry.action.startsWith("user.") && entry.entityId ? (names.get(entry.entityId) ?? null) : null)
@@ -248,7 +233,6 @@ export function describe(
       facts.push({ label: t("audit.fact.organization"), value: t("audit.change", { from: source, to: target }) })
     if (entry.action === "ticket.move" && typeof details.scheduledCancelled === "number")
       facts.push({ label: t("audit.fact.scheduledCancelled"), value: formatNumber(details.scheduledCancelled) })
-    // Snooze (plan 4.2): until when, and how it ended.
     if (typeof details.until === "string")
       facts.push({ label: t("audit.fact.snoozedUntil"), value: formatTime(details.until, { seconds: false }) })
     if (
@@ -278,7 +262,6 @@ export function describe(
       facts.push({ label: t("audit.fact.recipients"), value: details.recipients.join(", "), ltr: true })
     if (typeof details.problem === "string")
       facts.push({ label: t("audit.fact.problem"), value: t(`delivery.problem.${details.problem}`) })
-    // A scheduled reply (plan 4.2): its time; a reply it made says so.
     if (typeof details.sendAt === "string")
       facts.push({ label: t("audit.fact.sendAt"), value: formatTime(details.sendAt, { seconds: false }) })
     if (typeof details.scheduled === "string")

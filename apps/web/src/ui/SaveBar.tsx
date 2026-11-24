@@ -1,6 +1,3 @@
-// The floating save bar (v3 SV-1): shown only while something differs from what was loaded, with
-// the number of changes, Discard and Save changes. It is part of the page, not a layer.
-
 import { useI18n } from "../i18n/i18n.tsx"
 
 export function SaveBar({

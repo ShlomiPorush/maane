@@ -1,9 +1,3 @@
-// The composer's uploads (plan 3.1), the `upload-scan` job: the server kept the bytes in the upload's row; the worker
-// scans them with the 2.2 file service and stores what may be kept, under its hash's lock, in one transaction with the
-// row's new status. An upload is refused when it is infected, of a blocked type, too large, or when no scanner can
-// answer and the policy blocks (a file that would wait is refused, never attached unscanned). The bytes leave the
-// row in every case.
-
 import type { Db } from "@maane/server/db/client"
 import { upload } from "@maane/server/db/schema"
 import { log } from "@maane/server/log"

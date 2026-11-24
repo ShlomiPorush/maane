@@ -28,7 +28,6 @@ function client(maxAttempts = 3): ZendeskClient {
     apiOrigin: zendesk.apiOrigin,
     authorization: zendesk.authorization,
     allowHttp: true,
-    // The stand-in's file host is the loopback address: allowed here, never by the command line.
     fileHostAllowed: (host) => host === "127.0.0.1",
     sleep: async () => {},
     maxAttempts,
@@ -51,7 +50,6 @@ describe("backup", () => {
     expect(result.coveredUntil).not.toBeNull()
     expect(result.sideConversations).toBe("available")
 
-    // Raw pages are stored exactly as Zendesk sent them, with metric sets asked for.
     const firstPage = await readFile(join(dir, "raw/incremental/tickets/000001.json"), "utf8")
     expect(JSON.parse(firstPage).tickets[0]).toMatchObject({ id: 1, encoded_id: "X1Y" })
     expect(
@@ -73,7 +71,6 @@ describe("backup", () => {
     expect(files["201"]?.error).toContain("larger than the limit")
     expect(files["301"]?.error).toContain("404")
 
-    // The token went to the API only, never to the file host after the redirect.
     expect(zendesk.fileHostAuthorizations).toEqual([])
     expect(zendesk.requests.some((r) => r.includes("comments.json?include_inline_images=true"))).toBe(true)
 
@@ -111,7 +108,6 @@ describe("backup", () => {
     const check = await checkArchive(dir)
     expect(check.problems).toEqual([])
     expect(check.counts.tickets).toBe(4)
-    // The second run read the ticket stream from the saved cursor: one more page, empty, at its end.
     expect(await readdir(join(dir, "raw/incremental/tickets"))).toEqual([
       "000001.json",
       "000002.json",
@@ -152,7 +148,6 @@ describe("backup", () => {
     const check = await checkArchive(dir)
     expect(check.problems).toEqual([])
     expect(check.warnings.some((w) => w.includes("side conversations could not be read"))).toBe(true)
-    // Asked again on the next run: the add-on may have been added since.
     zendesk.sideConversationsAvailable = true
     zendesk.addComment(1, { id: 16, public: true, body: "Again", files: [] })
     expect((await backup()).sideConversations).toBe("available")
@@ -172,11 +167,9 @@ describe("backup", () => {
   })
 
   it("records the files of pages saved before a ticket was deleted between runs", async () => {
-    // The first run saves ticket 2's comments, then stops before its files.
     zendesk.failWhen = (path) => path.includes("/tickets/2/audits")
     await expect(backup(2)).rejects.toThrow("500")
     zendesk.failWhen = null
-    // The ticket is deleted before the next run.
     const ticket = zendesk.tickets.get(2)
     if (ticket) ticket.gone = true
     await backup()
@@ -198,7 +191,6 @@ describe("backup", () => {
     zendesk.failWhen = (path) => path.includes("/tickets/2/audits")
     await expect(backup(2)).rejects.toThrow("500")
     zendesk.failWhen = null
-    // What an earlier version of the tool left: ticket 2 marked gone, its files not recorded.
     const stateFile = join(dir, "state.json")
     const state = JSON.parse(await readFile(stateFile, "utf8")) as {
       tickets: Record<string, { gone?: boolean; savedFor: string | null; updatedAt: string }>
@@ -216,7 +208,6 @@ describe("backup", () => {
   })
 
   it("stops on a ticket folder it cannot read, and records its files once it can", async () => {
-    // Root reads every folder: the case needs an ordinary user, as the tests run in the toolchain.
     if (process.getuid?.() === 0) return
     zendesk.failWhen = (path) => path.includes("/tickets/2/audits")
     await expect(backup(2)).rejects.toThrow("500")
@@ -238,7 +229,6 @@ describe("backup", () => {
     await backup()
     zendesk.setStatus(2, "deleted")
     await backup()
-    // Restored with a new comment and file; the next run saves its comments, then stops before the files.
     zendesk.setStatus(2, "pending")
     zendesk.addComment(2, {
       id: 22,
@@ -256,14 +246,12 @@ describe("backup", () => {
   })
 
   it("records the files of side conversation pages added before the ticket was deleted", async () => {
-    // Saved without side conversations; the next run adds sc-1's events page, then stops before its file.
     zendesk.sideConversationsAvailable = false
     await backup()
     zendesk.sideConversationsAvailable = true
     zendesk.brokenSideConversations.push("sc-broken")
     await expect(backup()).rejects.toThrow("404")
     expect((await manifest()).files["401"]).toBeUndefined()
-    // Ticket 1 is deleted before the next run.
     zendesk.brokenSideConversations.length = 0
     zendesk.deletedDuringSave.add(1)
     await backup()
@@ -347,7 +335,6 @@ describe("backup", () => {
     await expect(runBackup({ client: other, archive: new Archive(dir), maxFileBytes: 1024 })).rejects.toThrow(
       "another Zendesk account",
     )
-    // A lock left by a process that is long gone: still refused, with the file to remove.
     await writeFile(join(dir, ".lock"), JSON.stringify({ pid: 999_999_999 }))
     await expect(backup()).rejects.toThrow("remove")
     await rm(join(dir, ".lock"))
@@ -367,7 +354,6 @@ describe("check", () => {
     await writeFile(join(dir, "files", sha.slice(0, 2), sha), "changed")
     const folder = (await readdir(join(dir, "raw/tickets/1")))[0] ?? ""
     await rm(join(dir, "raw/tickets/1", folder, "comments-000001.json"))
-    // Still valid JSON, but not what Zendesk sent.
     await writeFile(join(dir, "raw/incremental/users/000001.json"), '{"users":[],"end_of_stream":false}')
 
     const problems = (await checkArchive(dir)).problems.join("\n")
@@ -381,7 +367,6 @@ describe("check", () => {
 
   it("checks files of every saved version, not only the newest", async () => {
     await backup()
-    // Ticket 1 changes; its older version keeps file 101, which the newest version no longer lists.
     const ticket = zendesk.tickets.get(1)
     if (ticket) ticket.comments = ticket.comments.slice(1)
     zendesk.addComment(1, { id: 15, public: true, body: "Later", files: [] })

@@ -1,10 +1,3 @@
-// Stage one of intake (plan 2.3): delta queries on the current source's folders. For each new message: fetch its raw
-// MIME within files.maxBytes, parse it, sanitize its HTML, scan the raw message and each part, then store, in one
-// transaction that holds the source FOR SHARE and commits only while it is still current, the message, its parts, the
-// files that may be kept, and the raw MIME when it and every part scanned clean. Only after a page's messages are
-// committed is its nextLink or deltaLink stored, so a crash re-reads the page and skips what is stored (unique on
-// source and Graph immutable ID). Nothing here decides about tickets: stage two does (process.ts).
-
 import type { Db } from "@maane/server/db/client"
 import { intakeCursor, intakeSource, message, messagePart } from "@maane/server/db/schema"
 import { holdSourceIfCurrent, type IntakeSource } from "@maane/server/intake/source"
@@ -48,23 +41,15 @@ import {
 import { type MailPart, type ParsedMessage, parseMessage } from "./parse.ts"
 import { wellFormed } from "./text.ts"
 
-/** The current source changed while this round ran: what it fetched since is discarded, and the job stops. */
 export class SourceChangedError extends Error {
   override name = "SourceChangedError"
 }
 
-/**
- * A value of the message the database refuses: a data exception (class 22, such as an invalid value) or a program
- * limit (class 54, such as an index entry too large). Retrying cannot help, so the message becomes a record for review.
- * Every other failure (the database or the disk unavailable) fails the round, and the message is fetched again.
- */
 export const isRefusedValue = (error: unknown) => /^(22|54|08P01)/.test(databaseError(error)?.code ?? "")
 
-/** The pages one folder may take in one run; the cursor keeps the place for the next run. */
 export const MAX_PAGES_PER_RUN = 100
 
 export interface SyncHooks {
-  /** After a page's messages are committed, before its link is stored: a test makes the worker "crash" here. */
   afterMessages?: (folder: GraphFolder, page: number) => Promise<void>
 }
 
@@ -90,7 +75,6 @@ type PartScan =
 
 const isStored = (status: PartStatus): status is StoredStatus => (STORED_STATUSES as readonly string[]).includes(status)
 
-/** Graph's metadata of a message, as the record keeps it. */
 function metadataOf(item: DeltaItem, folder: GraphFolder): GraphMeta {
   return {
     id: item.id,
@@ -119,7 +103,6 @@ export class IntakeSync {
     this.#now = options.now ?? (() => new Date())
   }
 
-  /** One round over both folders of the current source. Throws on a temporary Graph failure; the cursor stays. */
   async run(hooks: SyncHooks = {}, maxPages = MAX_PAGES_PER_RUN): Promise<SyncSummary> {
     const summary: SyncSummary = { status: "done", stored: 0, skipped: 0, removed: 0, pages: 0 }
     const config = await graphConfig(this.#settings)
@@ -160,7 +143,6 @@ export class IntakeSync {
       try {
         result = await this.#graph.delta(config, link)
       } catch (error) {
-        // The delta token expired: a full sync of the folder, skipping what is stored (requirements 2.1).
         if (isExpiredDelta(error) && !restarted && link !== first) {
           log.warn("the delta token expired; a full sync of the folder follows", { folder })
           restarted = true
@@ -172,7 +154,6 @@ export class IntakeSync {
       }
       summary.pages++
       for (const item of result.items) {
-        // A vanished item: never stored, nothing to do; already stored, Maane keeps what it stored.
         if (item["@removed"]) {
           summary.removed++
           continue
@@ -215,7 +196,6 @@ export class IntakeSync {
     })
   }
 
-  /** Fetches, parses, scans, and stores one message. Returns false when it was already stored meanwhile. */
   async #takeIn(config: GraphConfig, source: IntakeSource, folder: GraphFolder, item: DeltaItem): Promise<boolean> {
     const limit = await this.#settings.get("files.maxBytes")
     const meta = metadataOf(item, folder)
@@ -223,7 +203,6 @@ export class IntakeSync {
     try {
       fetched = await this.#graph.mime(config, source.mailbox, item.id, limit)
     } catch (error) {
-      // A 404 is final: the item is recorded with its Graph metadata, and the cursor moves on.
       if (graphStatus(error) === 404) return this.#storeRecord(source, folder, item, meta, "unavailable", null)
       throw error
     }
@@ -234,7 +213,6 @@ export class IntakeSync {
     } catch {
       return this.#storeRecord(source, folder, item, meta, "unparsed", fetched.bytes.byteLength)
     }
-    // The text fields are scanned like files before anything is stored.
     const content = contentOf(parsed, meta)
     const fields = await scanFields(this.#files, fieldTexts(content))
     const raw = await this.#files.scan(fetched.bytes, null)
@@ -256,10 +234,6 @@ export class IntakeSync {
     }
   }
 
-  /**
-   * A message stage one could not read in full: only Graph's metadata, flagged for review. Graph's subject and sender
-   * name are scanned like the header block of a parsed message and kept only when the scan allows it.
-   */
   async #storeRecord(
     source: IntakeSource,
     folder: GraphFolder,
@@ -346,7 +320,6 @@ export class IntakeSync {
     if (parts.some((scan) => "tooLarge" in scan)) flags.push("part_too_large")
     if (Object.values(fields).some((scan) => refused(scan))) flags.push("blocked_content")
     const everyPartClean = parts.every((scan) => "outcome" in scan && scan.outcome.status === "clean")
-    // The raw MIME holds every field and part: kept only when it and all of them scanned clean.
     const keepRaw =
       rawScan.status === "clean" && everyPartClean && Object.values(fields).every((scan) => scan?.status === "clean")
 

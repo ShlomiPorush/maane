@@ -32,7 +32,6 @@ async function firstAdmin() {
   return { b, id: me.json.id as string }
 }
 
-/** An admin creates a user, who signs in and enrolls in a browser of their own. */
 async function newUser(admin: TestBrowser, name: string, role: "admin" | "agent") {
   const created = await admin.call("POST", "/api/auth/admin/create-user", {
     email: userEmail(name),
@@ -125,7 +124,6 @@ describe("organizations", () => {
   it("refuses to delete an organization with mail history, and says so", async () => {
     const { b: admin } = await firstAdmin()
     const id = await createOrganization(admin, "With mail")
-    // A ticket of the organization (no address, no member left).
     await database.db
       .insert(ticket)
       .values({ referenceCode: "ABCD-EFGH", organizationId: id, supportAddress: "help@example.com" })
@@ -201,7 +199,6 @@ describe("support addresses", () => {
     })
     expect((await admin.call("PUT", `${BASE}/${one}/addresses/${first}/default`)).status).toBe(200)
     expect((await admin.call("PUT", `${BASE}/${two}/addresses/${second}/default`)).status).toBe(200)
-    // An address of another organization is not found through this one.
     expect((await admin.call("PUT", `${BASE}/${one}/addresses/${second}/default`)).status).toBe(404)
     const defaults = await database.db.select().from(supportAddress).where(eq(supportAddress.isDefault, true))
     expect(defaults.map((row) => row.value)).toEqual(["help@two.example.com"])
@@ -297,7 +294,6 @@ describe("membership and scope", () => {
       all: false,
       organizationIds: [one, two].sort(),
     })
-    // Removed between two requests: the next read no longer includes it, with nothing cached in between.
     expect((await admin.call("DELETE", `${BASE}/${one}/members/${agent.id}`)).status).toBe(200)
     expect(await visibleOrganizations(db, { id: agent.id, role: "agent" })).toEqual({
       all: false,
@@ -330,12 +326,10 @@ describe("a role change and memberships", () => {
     expect(cleared.map((row) => [row.entityId, row.actorLabel, row.details])).toEqual([
       [agent.id, "first.admin", { username: "agent.one", role: "admin", organizations: 2 }],
     ])
-    // An admin is never added.
     expect((await admin.call("POST", `${BASE}/${one}/members`, { userId: agent.id })).json).toEqual({
       error: "member_not_agent",
     })
 
-    // Made an agent again: no old membership comes back, and nothing to audit.
     expect((await setRole(admin, agent.id, "agent")).status).toBe(200)
     expect(await rowsOf(agent.id)).toEqual([])
     expect(await visibleOrganizations(database.db, { id: agent.id, role: "agent" })).toEqual({
@@ -350,7 +344,6 @@ describe("a role change and memberships", () => {
     const user = await newUser(admin, "agent.two", "agent")
     const one = await createOrganization(admin, "One")
     expect((await setRole(admin, user.id, "admin")).status).toBe(200)
-    // A row left behind, as a failed clearing after the promotion would leave it.
     await database.db.insert(organizationMember).values({ organizationId: one, userId: user.id })
     expect((await setRole(admin, user.id, "agent")).status).toBe(200)
     expect(await rowsOf(user.id)).toEqual([])
@@ -363,13 +356,11 @@ describe("a role change and memberships", () => {
     for (let round = 0; round < 6; round++) {
       const add = admin.call("POST", `${BASE}/${id}/members`, { userId: user.id })
       const promote = setRole(admin, user.id, "admin")
-      // Both requests are in flight together; the order they were sent in alternates.
       let added: Answer
       let promoted: Answer
       if (round % 2 === 0) [added, promoted] = await Promise.all([add, promote])
       else [promoted, added] = await Promise.all([promote, add])
       expect(promoted.status).toBe(200)
-      // Either the membership came first and the promotion removed it, or the promotion came first and adding refused.
       expect([201, 400]).toContain(added.status)
       expect(await rowsOf(user.id), `round ${round}: ${JSON.stringify(added.json)}`).toEqual([])
       expect((await setRole(admin, user.id, "agent")).status).toBe(200)
@@ -394,7 +385,6 @@ describe("the default address", () => {
     })
     const defaults = await database.db.select().from(supportAddress).where(eq(supportAddress.isDefault, true))
     expect(defaults.map((row) => row.value)).toEqual(["support@example.com"])
-    // No intake mode any more (phase 6): its row is gone, and the settings refuse the key.
     expect(await database.db.select().from(setting).where(eq(setting.key, "intake.mode"))).toEqual([])
     expect((await admin.call("PUT", "/api/v1/settings", { "intake.mode": "live" })).json).toMatchObject({
       error: "setting_unknown",

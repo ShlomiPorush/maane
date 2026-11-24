@@ -1,10 +1,3 @@
-// Clicks and downloads of a reply (plan 3.4): each link the reply carried that was clicked, and each history file that
-// was downloaded, with how many times and when; then each click, newest first: the country's flag first in reading
-// order (flag-icons, served from Maane's own origin), the address isolated left to right, the time, the device, and a
-// "possibly a scanner" mark that states a doubt, not a verdict. The city, region, and ISP are the address's tooltip,
-// and also written under it, so a phone, which shows no tooltip, reads them too (v3 MO-4). The server sends at most the
-// newest 50 clicks of a link with its total, and the list says when it shows only those.
-
 import "flag-icons/css/flag-icons.min.css"
 import type { ClickView, TrackedLinkView } from "@maane/shared"
 import { formatNumber } from "../../format/number.ts"
@@ -12,7 +5,6 @@ import { useI18n } from "../../i18n/i18n.tsx"
 import { Time } from "../../ui/Time.tsx"
 import { Tag } from "../../ui/tags.tsx"
 
-/** The city, region, and ISP of a click, one per line, as its tooltip and its line under the address. */
 function placeOf(click: ClickView, t: ReturnType<typeof useI18n>["t"]): string[] {
   const lines: string[] = []
   if (click.city) lines.push(t("links.city", { value: click.city }))

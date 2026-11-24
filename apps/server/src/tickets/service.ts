@@ -1,9 +1,3 @@
-// What agents read of tickets (plan 2.4): the list, one ticket with its messages and files, a message's body, and a
-// file. Every query takes the result of visibleOrganizations, read on each request, and a ticket, message, or file
-// outside it reads as not found. A file is reached only through its attachment, its message, and its ticket, never by
-// its hash, so the same content in two organizations leaks nothing across them. The intake log is for admins and reads
-// every record.
-
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import {
@@ -68,13 +62,10 @@ import type { OrganizationScope } from "../organizations/scope.ts"
 import { reminderMayGoAgain } from "../reminders/checks.ts"
 import { categoriesOf, moveTargets } from "./workflow.ts"
 
-/** The image types an inline part may be embedded as, by the type read from its content. */
 const INLINE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
-/** Inline images are embedded up to these sizes; a larger one stays a file to download. */
 export const INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 export const INLINE_IMAGES_MAX_BYTES = 20 * 1024 * 1024
 
-/** A reply's unmatched delivery event as the ticket view shows it, its stored JSON read field by field. */
 function unmatchedOf(row: {
   unmatchedDeliveryAt: Date | null
   unmatchedDeliverySource: string | null
@@ -101,14 +92,12 @@ function unmatchedOf(row: {
 const STORED = new Set<string>(STORED_STATUSES)
 const isPartStatus = (value: string): value is PartStatus => (PART_STATUSES as readonly string[]).includes(value)
 
-/** The scope as a condition on an organization column: every row, the listed organizations, or none. */
 function inScope(scope: OrganizationScope, column: Column): SQL | undefined {
   if (scope.all) return undefined
   if (scope.organizationIds.length === 0) return sql`false`
   return inArray(column, scope.organizationIds)
 }
 
-/** A keyset cursor: an instant written by PostgreSQL to the microsecond, and a tie breaker. */
 function encodeCursor(at: string, key: string | number): string {
   return Buffer.from(JSON.stringify([at, key]), "utf8").toString("base64url")
 }
@@ -116,7 +105,6 @@ function encodeCursor(at: string, key: string | number): string {
 const CURSOR_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-/** A cursor this service made, or null when the text is not one. */
 function decodeCursor<K extends "number" | "uuid">(
   text: string,
   kind: K,
@@ -134,7 +122,6 @@ function decodeCursor<K extends "number" | "uuid">(
   }
 }
 
-/** An instant as UTC text to the microsecond, for a cursor that compares exactly with the column. */
 const microseconds = (column: Column) =>
   sql<string>`to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
 
@@ -147,7 +134,6 @@ const addressesOf = (value: unknown): MailAddress[] =>
         .map((item) => ({ address: item.address, name: typeof item.name === "string" ? item.name : null }))
     : []
 
-/** The field scans that kept a text field from being stored as received. */
 function fieldNotices(scans: unknown): FieldNotice[] {
   if (typeof scans !== "object" || scans === null) return []
   const notices: FieldNotice[] = []
@@ -164,7 +150,6 @@ function fieldNotices(scans: unknown): FieldNotice[] {
   return notices
 }
 
-/** A message's subject as stored, or Graph's while its header block may be shown (it is null otherwise). */
 function subjectOf(row: { subject: string | null; graph: unknown }): string | null {
   if (row.subject !== null) return row.subject
   const graph = row.graph as { subject?: unknown } | null
@@ -179,10 +164,6 @@ function senderOf(row: { fromAddress: string | null; fromName: string | null; gr
   return { address: address.toLowerCase(), name: typeof graph?.from?.name === "string" ? graph.from.name : null }
 }
 
-/**
- * What the body document is made of: the stored text and HTML, their field scans, and the scan state of the parts an
- * HTML body can show inline. It changes when a waiting field or image is decided, so the frame loads the new document.
- */
 function bodyVersion(
   m: { textBody: string | null; htmlBody: string | null; fieldScans: unknown },
   inline: { part: { id: string; status: string; storedSha256: string | null }; storedStatus: string | null }[],
@@ -194,32 +175,20 @@ function bodyVersion(
   return hash.digest("hex").slice(0, 16)
 }
 
-/** About how many lines a body takes at a usual width: its text wrapped at 90 characters, and room for images. */
 function bodyLines(text: string | null, html: string | null): number {
   const source = text ?? (html ? html.replace(/<[^>]*>/g, " ") : "")
   let lines = 0
   for (const line of source.split(/\r?\n/)) lines += Math.max(1, Math.ceil(line.length / 90))
-  // Only an estimate of the frame height: the HTML itself is never rewritten by a pattern.
   const images = html ? (html.match(/<img\b/gi)?.length ?? 0) : 0
   return Math.min(400, lines + images * 3)
 }
 
-/** A term as a LIKE pattern that finds it anywhere, its backslash, percent, and underscore taken literally. */
 export function containsPattern(term: string): string {
   return `%${term.replace(/[\\%_]/g, (char) => `\\${char}`)}%`
 }
 
-/** A term that names a ticket number: digits, or "#" and digits. */
 const NUMBER_TERM = /^#?([1-9][0-9]{0,15})$/
 
-/**
- * The tickets a search term finds (plan 4.4), as a condition on the list's ticket row: its subject, its participants'
- * addresses and names (the customer and the Cc), the text of any of its messages (internal notes too), or its number.
- * A substring match, ILIKE '%term%' with the term's wildcards escaped, which pg_trgm's GIN indexes serve from three
- * characters; a shorter term matches the same rows, by a scan. One uncorrelated IN over a UNION ALL (IN needs no
- * deduplication), so each source uses its own index. Each branch keeps only tickets of the user's organizations, so
- * no match outside the scope is ever computed; the list's own rows carry the scope too.
- */
 export function searchCondition(term: string, scope: OrganizationScope): SQL {
   const pattern = containsPattern(term)
   const digits = NUMBER_TERM.exec(term)?.[1]
@@ -259,28 +228,20 @@ export function searchCondition(term: string, scope: OrganizationScope): SQL {
   return inArray(ticket.id, found)
 }
 
-/** A snooze while its time is ahead; a past one (its job not run yet) reads as none. */
 function snoozedUntil(until: Date | null): string | null {
   return until && until.getTime() > Date.now() ? until.toISOString() : null
 }
 
 export interface ListFilters {
   organization?: string
-  /** A search term (plan 4.4), trimmed and well formed; it narrows the list like any other filter. */
   search?: string
-  /**
-   * Open work (new, open, on hold, not snoozed) by default (plans 4.1, 4.2), every status, one, or the snoozed; every
-   * status while searching unless one is chosen (plan 4.4).
-   */
   status: StatusFilter
-  /** Only the tickets that carry this category. */
   category?: string
   flagged?: boolean
   cursor?: string
   limit: number
 }
 
-/** A file the user may reach: the part, and the stored file when there is one. */
 export interface FileAccess {
   fileName: string | null
   status: PartStatus
@@ -296,7 +257,6 @@ export class Tickets {
     private readonly filesDir: string,
   ) {}
 
-  /** The ticket list: newest activity first, by a cursor after the last row shown; a search narrows it (plan 4.4). */
   async list(scope: OrganizationScope, filters: ListFilters): Promise<TicketList> {
     const rows = await this.listQuery(scope, filters)
 
@@ -313,7 +273,6 @@ export class Tickets {
           .where(inArray(message.ticketId, ids))
           .orderBy(message.ticketId, asc(message.receivedAt), asc(message.createdAt))
       : []
-    // Every message of these tickets, for the count and the review flags a ticket's messages carry.
     const messageRows = ids.length
       ? await this.db
           .select({ ticketId: message.ticketId, reviewFlags: message.reviewFlags })
@@ -355,20 +314,16 @@ export class Tickets {
     }
   }
 
-  /** The list's rows as the list reads them: the scope, every filter, the search, and the cursor, in one query. */
   listQuery(scope: OrganizationScope, filters: ListFilters) {
     const cursor = filters.cursor ? decodeCursor(filters.cursor, "number") : null
     if (filters.cursor && !cursor) throw new CursorError()
     const flagged = sql`(cardinality(${ticket.reviewFlags}) > 0 or exists (select 1 from ${message} where ${message.ticketId} = ${ticket.id} and cardinality(${message.reviewFlags}) > 0))`
     const statuses = statusesOf(filters.status)
-    // A snooze holds while its time is ahead, by the database's clock: the list never waits for its job (plan 4.2).
     const snoozed = sql`(${ticket.snoozedUntil} is not null and ${ticket.snoozedUntil} > now())`
     const conditions = [
       inScope(scope, ticket.organizationId),
       filters.organization ? eq(ticket.organizationId, filters.organization) : undefined,
       statuses ? inArray(ticket.status, [...statuses]) : undefined,
-      // Open work leaves snoozed tickets out; the snoozed filter shows only them, of every status. A search with no
-      // status chosen runs on every status (plan 4.4), so it finds a snoozed ticket too.
       filters.status === "open_work" ? sql`not ${snoozed}` : filters.status === "snoozed" ? snoozed : undefined,
       filters.category
         ? sql`exists (select 1 from ${ticketCategory} where ${ticketCategory.ticketId} = ${ticket.id} and ${ticketCategory.categoryId} = ${filters.category})`
@@ -400,7 +355,6 @@ export class Tickets {
       .limit(filters.limit)
   }
 
-  /** The organizations a user may see, by name. */
   async organizations(scope: OrganizationScope): Promise<{ id: string; name: string }[]> {
     return this.db
       .select({ id: organization.id, name: organization.name })
@@ -409,10 +363,6 @@ export class Tickets {
       .orderBy(asc(sql`lower(${organization.name})`))
   }
 
-  /**
-   * One ticket by its number, with its messages, files, participants, and links; null outside the scope. The route adds
-   * what the composer starts from.
-   */
   async view(
     scope: OrganizationScope,
     number: number,
@@ -448,7 +398,6 @@ export class Tickets {
       .from(ticketParticipant)
       .where(eq(ticketParticipant.ticketId, t.id))
       .orderBy(asc(ticketParticipant.createdAt), asc(ticketParticipant.address))
-    // Replies and notes: their authors' display names, and where each reply's sending is, per recipient.
     const authorIds = [...new Set(messages.flatMap((m) => (m.authorUserId ? [m.authorUserId] : [])))]
     const authors = authorIds.length
       ? await this.db
@@ -502,10 +451,6 @@ export class Tickets {
       )
       .orderBy(asc(other.number))
 
-    // The links each reply carried that were clicked, and its history files that were downloaded (plan 3.4). A click is
-    // early against the reply's first delivery (the earliest `first_delivered_at` of its recipients, set once and never
-    // moved by a later status), else against the first time a provider accepted it (`accepted_at`; an agent's Mark as
-    // sent does not count). Never the current status's `delivery_at`, nor `updated_at`: later events rewrite both.
     const earliest = (dates: (Date | null)[]) =>
       dates.reduce<Date | null>((first, date) => (date && (first === null || date < first) ? date : first), null)
     const sentAt = (id: string) => {
@@ -520,7 +465,6 @@ export class Tickets {
       replyIds.map((id) => ({ id, since: sentAt(id) })),
     )
     const authorOf = new Map(authors.map((a) => [a.id, { id: a.id, name: a.name || a.username || a.id }]))
-    // The reminders Send again may send again, by the rule it checks itself (plan 4.3).
     const reminderResend = new Set<string>()
     for (const sent of outboxes)
       if (
@@ -558,7 +502,6 @@ export class Tickets {
             deliveryDetail: r.deliveryDetail,
           })),
         unmatchedDelivery: unmatchedOf(sent),
-        // A scheduled reply stopped before it went out (plan 4.2): Send again refuses it, so the view never offers it.
         scheduledEnded:
           sent.actionKind === "reply" &&
           !actionPassed(
@@ -567,7 +510,6 @@ export class Tickets {
               : { state: sent.actionState, version: sent.actionCurrent },
             sent.actionVersion,
           ),
-        // An automatic reminder (plan 4.3) goes again only by the rule Send again checks.
         reminder: sent.actionKind === "reminder",
         reminderResend: reminderResend.has(id),
       }
@@ -588,7 +530,6 @@ export class Tickets {
             blockedBy: part.blockedBy,
             unavailableReason: part.unavailableReason,
             detectedType: stored ? detectedType : null,
-            // The part and the stored file both say clean.
             preview: stored && storedStatus === "clean" ? previewKind(status, detectedType) : null,
             download: stored,
           }
@@ -623,7 +564,6 @@ export class Tickets {
         imported: m.zendeskKey !== null ? messageSourceView(m.zendesk) : null,
       }
     })
-    // The reminder of the ticket's waiting period that has not gone yet (plan 4.3): when it goes.
     const [pending] = await this.db
       .select({ id: timedAction.id, dueAt: timedAction.dueAt, state: timedAction.state })
       .from(timedAction)
@@ -651,7 +591,6 @@ export class Tickets {
         categories: await categoriesOf(this.db, t.id),
         snoozedUntil: snoozedUntil(t.snoozedUntil),
         snoozeOverdue: t.snoozedUntil !== null && t.snoozedUntil.getTime() <= Date.now(),
-        // An imported ticket (plan 5.1) is read-only for agents until the import is finished.
         imported:
           t.zendeskId !== null ? ticketSourceView(t.zendeskId, t.zendesk, (await finishedAt(this.db)) === null) : null,
       },
@@ -668,7 +607,6 @@ export class Tickets {
     }
   }
 
-  /** A message of a ticket in the scope, with what its body needs; null outside the scope or without a ticket. */
   async body(
     scope: OrganizationScope,
     messageId: string,
@@ -684,7 +622,6 @@ export class Tickets {
     const text = row.textBody !== null && row.textBody !== "" ? row.textBody : null
     if (row.htmlBody === null || row.htmlBody === "") return text === null ? null : { kind: "text", text }
 
-    // The inline images this message may show: its own parts that scanned clean, stored as clean, with an image type.
     const inline = await this.db
       .select({ contentId: messagePart.contentId, sha256: storedFile.sha256, detectedType: storedFile.detectedType })
       .from(messagePart)
@@ -709,14 +646,12 @@ export class Tickets {
       total += bytes.length
       urls.set(part.contentId, `data:${part.detectedType};base64,${bytes.toString("base64")}`)
     }
-    // The direction of each paragraph first, then the allow list once more, last.
     const dir = messageDirection(text, row.htmlBody, "ltr")
     const directed = directBlocks(row.htmlBody, dir)
     const rendered = renderMailHtml(directed, { remoteImages, inline: (id) => urls.get(id) ?? null })
     return { kind: "html", html: rendered.html, dir }
   }
 
-  /** An attachment or inline part of a ticket's message in the scope, or null. */
   async file(scope: OrganizationScope, partId: string): Promise<FileAccess | null> {
     if (!UUID.test(partId)) return null
     const [row] = await this.db
@@ -741,7 +676,6 @@ export class Tickets {
     return storedFilePath(this.filesDir, sha256)
   }
 
-  /** The intake log (admins): every record, newest first, with the review flags of its message and thread. */
   async intake(filters: { flagged?: boolean; cursor?: string; limit: number }): Promise<IntakeLog> {
     const cursor = filters.cursor ? decodeCursor(filters.cursor, "uuid") : null
     if (filters.cursor && !cursor) throw new CursorError()

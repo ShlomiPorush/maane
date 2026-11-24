@@ -1,9 +1,3 @@
-// Two-factor enrollment on Better Auth's routes. The password starts it (POST /two-factor/enable answers the
-// authenticator link and the backup codes), the first code finishes it (/two-factor/verify-totp). Then every other
-// session of the account is ended (/revoke-other-sessions), tried three times, before the backup codes are shown,
-// so a browser that signed in with the password alone does not keep a session. The QR code is a data: image, which
-// the Content Security Policy allows (img-src 'self' data:), and names the account after the username.
-
 import QRCode from "qrcode"
 import { useEffect, useRef, useState } from "react"
 import { authClient } from "../../api/auth.ts"
@@ -15,7 +9,6 @@ import { Copyable } from "../../ui/Copyable.tsx"
 import { Loading } from "../../ui/states.tsx"
 import { type CodeAnswer, CodeField, FormError, PasswordField } from "./parts.tsx"
 
-/** How often enrollment tries to end the other sessions before it asks the user to try again. */
 export const SIGN_OUT_OTHERS_TRIES = 3
 
 export function TotpStep({
@@ -23,10 +16,8 @@ export function TotpStep({
   onEnrolled,
   retryDelayMs = 500,
 }: {
-  /** The password typed just before (setup or sign-in): enrollment starts without asking for it again. */
   known: string | null
   onEnrolled: (backupCodes: string[]) => void
-  /** The pause before each new try to end the other sessions (tests make it 0). */
   retryDelayMs?: number
 }) {
   const { t } = useI18n()
@@ -38,8 +29,6 @@ export function TotpStep({
   const [error, setError] = useState<string | null>(null)
   const [signOutOthersFailed, setSignOutOthersFailed] = useState(false)
   const started = useRef(false)
-  // False once the step is left: a late answer must not start another account-wide request, which would go out with
-  // whatever session the browser holds by then.
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -58,7 +47,6 @@ export function TotpStep({
         return
       }
       setPassword("")
-      // The authenticator app names the account after the username, not the synthetic e-mail.
       setUri(authenticatorUri(data.totpURI))
       setBackupCodes(data.backupCodes)
     } catch {
@@ -69,7 +57,6 @@ export function TotpStep({
     }
   }
 
-  // Starts once with the password typed just before; a ref keeps the development double effect from starting twice.
   // biome-ignore lint/correctness/useExhaustiveDependencies: starts once, as soon as the password is known
   useEffect(() => {
     if (known && !uri && !started.current) {
@@ -89,7 +76,6 @@ export function TotpStep({
     }
   }, [uri])
 
-  /** Better Auth's revokeOtherSessions, tried three times; the user can try again when all fail. */
   const signOutOthers = async (codes: string[]) => {
     setBusy(true)
     try {

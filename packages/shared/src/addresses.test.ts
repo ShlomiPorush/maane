@@ -77,7 +77,6 @@ describe("patterns", () => {
     expect(patternMatches("support-*@example.com", "support-@example.com")).toBe(false)
     expect(patternMatches("*@example.com", "a@sub.example.com")).toBe(false)
     expect(patternMatches("*@example.com", "a@example.com.mail.example.com")).toBe(false)
-    // Characters that mean something in a regular expression are literal in a pattern.
     expect(patternMatches("a+*@example.com", "a+b@example.com")).toBe(true)
     expect(patternMatches("a+*@example.com", "aab@example.com")).toBe(false)
     expect(patternMatches("*@example.com", "a@exampleXcom")).toBe(false)
@@ -93,13 +92,11 @@ describe("patterns", () => {
       expect(patternMatches(pattern, address)).toBe(false)
       expect(matchSupportAddress(address, [{ kind: "pattern", value: pattern, isDefault: false }])).toBeNull()
     }
-    // Twenty rounds of the worst case take a few milliseconds; the regular expression took minutes for one.
     expect(performance.now() - started).toBeLessThan(500)
     expect(patternMatches(pattern, `${"a".repeat(62)}b@example.com`)).toBe(true)
   })
 
   it("matches exactly as a star of one or more non-@ characters, on every small case", () => {
-    // The definition, as a regular expression: fine for these short texts, and independent of the matcher.
     const reference = (p: string, a: string) =>
       new RegExp(
         `^${p
@@ -145,12 +142,11 @@ describe("match order", () => {
   })
 
   it("breaks a tie by the pattern text in byte order, whatever order the rules come in", () => {
-    // Both have 13 literal characters and both match "ab@example.com".
     const a = pattern("a*@example.com")
     const b = pattern("*b@example.com")
     expect(literalCount(a.value)).toBe(literalCount(b.value))
     const first = compareBytes(a.value, b.value) < 0 ? a : b
-    expect(first).toBe(b) // "*" (0x2a) sorts before "a" (0x61)
+    expect(first).toBe(b)
     expect(matchSupportAddress("ab@example.com", [a, b])?.rule).toBe(b)
     expect(matchSupportAddress("ab@example.com", [b, a])?.rule).toBe(b)
   })

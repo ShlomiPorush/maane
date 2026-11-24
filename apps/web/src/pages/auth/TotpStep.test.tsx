@@ -1,7 +1,3 @@
-// Two-factor enrollment, step by step: the QR code names the account after the username and the key shown is
-// Better Auth's; a wrong code is explained and cleared; a right one ends the other sessions before the backup codes
-// are handed on; when ending them fails three times, the user can try again. Secrets are new for every run.
-
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"

@@ -1,8 +1,3 @@
-// The workflow of plans 4.1 and 4.2, mounted under /api/v1 behind its session, two-factor, CSRF, and Origin checks: a
-// ticket's status, categories, organization, and snooze (any user, within their scope, read on each request; a ticket
-// outside it answers 404), and the categories themselves at /admin/categories (admins only). A refusal answers
-// {error: code, ...details} with a stable code (apps/web/src/api/errors.ts explains each one).
-
 import { TICKET_STATUSES } from "@maane/shared"
 import { type Context, Hono } from "hono"
 import { z } from "zod"
@@ -22,7 +17,6 @@ const StatusBody = z.object({ status: z.enum(TICKET_STATUSES) })
 const CategoriesBody = z.object({ categories: z.array(z.string().regex(UUID)) })
 const MoveBody = z.object({ organizationId: z.string().regex(UUID) })
 const NameBody = z.object({ name: z.string() })
-/** A snooze's end, as an instant with its offset (the UI enters it in Israel time). */
 const SnoozeBody = z.object({ until: z.iso.datetime({ offset: true }) })
 
 async function body<T>(c: Context<ApiEnv>, schema: z.ZodType<T>): Promise<T> {
@@ -31,7 +25,6 @@ async function body<T>(c: Context<ApiEnv>, schema: z.ZodType<T>): Promise<T> {
   return parsed.data
 }
 
-/** The ticket number in the path, or a 404 refusal. */
 function numberOf(c: Context<ApiEnv>): number {
   const text = c.req.param("number") ?? ""
   const number = NUMBER.test(text) ? Number(text) : Number.NaN

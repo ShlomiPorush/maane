@@ -1,8 +1,3 @@
-// First run, /setup: while GET /api/setup/status says setup is open (no user exists and the server started less
-// than 5 minutes ago), it creates the first admin through Better Auth's sign-up (which signs them in), then sets up
-// two-factor and shows the backup codes. When the window closed with no user, it says that a server restart opens it
-// again for 5 minutes. Once a user exists, sign-in decides where to go.
-
 import { isValidUsername, PASSWORD_MAX, PASSWORD_MIN, USERNAME_MAX, USERNAME_MIN, userEmail } from "@maane/shared"
 import { useQueryClient } from "@tanstack/react-query"
 import { type FormEvent, useId, useState } from "react"
@@ -23,7 +18,6 @@ export function SetupPage() {
   const [params] = useSearchParams()
   const next = safeNext(params.get("next"))
   const status = useSetupStatus({ fresh: true })
-  // The password typed in the account step starts the two-factor setup without asking for it again; in memory only.
   const [created, setCreated] = useState<{ password: string } | null>(null)
   const [codes, setCodes] = useState<string[] | null>(null)
   const step = codes ? 2 : created ? 1 : 0
@@ -97,7 +91,6 @@ function Steps({ current }: { current: number }) {
 
 type Field = "username" | "password" | "repeat"
 
-/** The first admin: a username and a password typed twice. The same rules the server applies are checked first. */
 export function AccountStep({ onCreated, onClosed }: { onCreated: (password: string) => void; onClosed: () => void }) {
   const { t } = useI18n()
   const usernameId = useId()

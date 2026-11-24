@@ -1,6 +1,3 @@
-// The web UI entry: fonts and the one stylesheet, the query client, the router. Fonts are bundled files (the
-// Content Security Policy allows fonts only from Maane's own origin).
-
 import "@fontsource-variable/onest/wght.css"
 import "@fontsource-variable/noto-sans-hebrew/wght.css"
 import "@fontsource/ibm-plex-mono/400.css"
@@ -21,7 +18,6 @@ import { createRouter } from "./routes.tsx"
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // One more try for a network hiccup; never for an answer that will not change.
       retry: (failures, error) =>
         failures < 1 && !(error instanceof ApiError && error.status >= 400 && error.status < 500),
       staleTime: 10_000,
@@ -30,7 +26,6 @@ const queryClient = new QueryClient({
 })
 
 const router = createRouter()
-// The service worker shows browser notifications and opens their ticket (plan 4.5); it caches nothing.
 registerServiceWorker()
 const root = document.getElementById("root")
 if (!root) throw new Error("index.html has no #root")

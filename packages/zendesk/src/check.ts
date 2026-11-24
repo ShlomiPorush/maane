@@ -39,27 +39,14 @@ export interface CheckCounts {
 }
 
 export interface CheckResult {
-  /** Problems make the archive incomplete or unreadable. */
   problems: string[]
-  /** Explicit failures and other facts the owner should know; they do not fail the check. */
   warnings: string[]
   counts: CheckCounts
   coveredUntil: string | null
 }
 
-/** Pages of one list: sequence number to whether that page links to a next one. */
 type Pages = Map<number, boolean>
 
-/**
- * Reads the whole archive without any access to Zendesk, one file at a time:
- * - every raw page is listed in raw-index.jsonl with the hash it was written with, and still has it;
- * - every export has its pages from the first to the saved position without a gap, ending the stream;
- * - every ticket's newest version has its marker and every page of the lists the marker names, each list linking from
- *   one page to the next and ending on a page without a next link;
- * - each collection's newest run is complete, or records why the account could not read it;
- * - every file any saved version lists, and every file in manifest.json, is stored with a matching SHA-256 and size,
- *   or recorded as an explicit failure.
- */
 export async function checkArchive(root: string): Promise<CheckResult> {
   const archive = new Archive(root)
   const problems: string[] = []
@@ -114,20 +101,18 @@ export async function checkArchive(root: string): Promise<CheckResult> {
   }
   files.sort()
 
-  // What the pages say, kept small: no page body stays in memory.
-  const exportPages = new Map<string, Pages>() // source -> seq -> end_of_stream
+  const exportPages = new Map<string, Pages>()
   const tickets = new Map<string, { updatedAt: string; status: string }>()
   const users = new Set<string>()
   const organizations = new Set<string>()
-  const lists = new Map<string, Map<string, Pages>>() // "tickets/<id>/<version>" -> list -> pages
-  const markers = new Map<string, VersionMarker>() // "tickets/<id>/<version>" -> marker
-  const collections = new Map<string, Map<string, Pages | "unavailable">>() // name -> run -> pages
+  const lists = new Map<string, Map<string, Pages>>()
+  const markers = new Map<string, VersionMarker>()
+  const collections = new Map<string, Map<string, Pages | "unavailable">>()
   const expectedFiles = new Map<string, { inline: boolean }>()
-  const tallies = new Map<string, { comments: number; internal: number }>() // folder -> counts
+  const tallies = new Map<string, { comments: number; internal: number }>()
   const present = new Set<string>()
 
   for (const file of files) {
-    // A temporary file a crash left behind; the page it would have become is checked by its own name.
     if (file.split("/").at(-1)?.startsWith(".tmp-")) continue
     const relativePath = `raw/${file}`
     present.add(relativePath)
@@ -214,7 +199,6 @@ export async function checkArchive(root: string): Promise<CheckResult> {
     if (!present.has(path)) problems.push(`${path} is listed in ${RAW_INDEX} but missing`)
   }
 
-  // Exports: every page from the first to the saved position, and each export reached its end.
   for (const source of INCREMENTAL_SOURCES) {
     const position = state.exports[source.name]
     const pages = exportPages.get(source.name) ?? new Map<number, boolean>()
@@ -233,7 +217,6 @@ export async function checkArchive(root: string): Promise<CheckResult> {
   counts.users = users.size
   counts.organizations = organizations.size
 
-  // Tickets: the newest version of each has its marker and every page of every list the marker names.
   for (const [id, ticket] of tickets) {
     if (ticket.status === "deleted") {
       counts.deletedTickets++
@@ -269,7 +252,6 @@ export async function checkArchive(root: string): Promise<CheckResult> {
     counts.internalNotes += tally?.internal ?? 0
   }
 
-  // Collections: the newest run that read each one is complete, or says why it could not.
   for (const source of COLLECTION_SOURCES) {
     const runs = collections.get(source.name)
     const newest = runs ? [...runs.keys()].sort().at(-1) : undefined
@@ -282,7 +264,6 @@ export async function checkArchive(root: string): Promise<CheckResult> {
     }
   }
 
-  // Files: every file any saved version lists, and every file in the manifest.
   for (const id of expectedFiles.keys()) {
     if (!manifest.files[id]) problems.push(`file ${id} is listed in a saved page but not in manifest.json`)
   }
@@ -314,7 +295,6 @@ export async function checkArchive(root: string): Promise<CheckResult> {
   return result
 }
 
-/** raw-index.jsonl, read line by line; the last entry for a path wins. A damaged line is a problem. */
 async function readIndex(path: string, problems: string[]): Promise<Map<string, RawIndexEntry>> {
   await stat(path)
   const index = new Map<string, RawIndexEntry>()
@@ -334,10 +314,6 @@ async function readIndex(path: string, problems: string[]): Promise<Map<string, 
   return index
 }
 
-/**
- * Why a list's pages are incomplete, or null: pages 1 to N with no gap, every page but the last linking to a next
- * one, and the last linking to none.
- */
 function listGap(pages: Pages): string | null {
   let last = 0
   for (const seq of pages.keys()) last = Math.max(last, seq)
@@ -358,7 +334,6 @@ function mapOf<K, V extends Map<unknown, unknown>>(outer: Map<K, V>, key: K): V 
   return inner
 }
 
-/** Adds every file under `dir`, relative to the raw folder, to `out`. Throws when a folder cannot be read. */
 async function collectFiles(dir: string, prefix: string, out: string[]): Promise<void> {
   for await (const entry of await opendir(dir)) {
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name

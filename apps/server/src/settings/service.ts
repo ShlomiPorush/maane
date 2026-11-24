@@ -7,7 +7,6 @@ import { setting } from "../db/schema.ts"
 import { makeSourceCurrent } from "../intake/source.ts"
 import type { SettingsCipher } from "./crypto.ts"
 
-/** A refusal the API maps to a stable error code. */
 export class SettingsError extends Error {
   constructor(
     readonly code: "setting_locked" | "setting_invalid" | "setting_unknown",
@@ -18,10 +17,6 @@ export class SettingsError extends Error {
   }
 }
 
-/**
- * The settings the owner manages: the environment first, per field, then the stored value, then the default. A
- * field the environment sets is locked: changes are refused and the UI names the variable.
- */
 export class Settings {
   constructor(
     private readonly db: Db,
@@ -29,13 +24,11 @@ export class Settings {
     private readonly overrides: Partial<Record<SettingKey, string>>,
   ) {}
 
-  /** The value in effect. A secret that cannot be decrypted (its key version is gone) reads as its default. */
   async get<K extends SettingKey>(key: K): Promise<SettingValue<K>> {
     const values = await this.#effective([key])
     return values.get(key)?.value as SettingValue<K>
   }
 
-  /** Every setting as the API shows it: a secret only says whether it is set. */
   async view(): Promise<SettingView[]> {
     const values = await this.#effective(SETTING_KEYS)
     return SETTING_KEYS.map((key) => {
@@ -53,11 +46,6 @@ export class Settings {
     })
   }
 
-  /**
-   * Stores changes in one transaction with one audit row each. Refuses a locked field, an unknown key, or a value
-   * that does not validate, before anything is written. A new Graph tenant or mailbox makes the matching intake source
-   * current in the same transaction, after it locked the current one (intake/source.ts).
-   */
   async update(changes: Record<string, unknown>, actor: Actor, ipAddress: string | null = null): Promise<void> {
     const rows: { key: SettingKey; value: unknown; ciphertext: string | null }[] = []
     for (const [key, raw] of Object.entries(changes)) {
@@ -65,7 +53,6 @@ export class Settings {
       const settingKey = key as SettingKey
       const definition = SETTINGS[settingKey]
       if (this.overrides[settingKey] !== undefined) throw new SettingsError("setting_locked", key)
-      // A generated secret (the SMTP2GO webhook's) is only ever made by generate().
       if (definition.generated) throw new SettingsError("setting_invalid", key)
       const parsed = definition.schema.safeParse(raw)
       if (!parsed.success) throw new SettingsError("setting_invalid", key)
@@ -103,10 +90,6 @@ export class Settings {
     })
   }
 
-  /**
-   * Makes a new value for each generated secret given (32 bytes from the CSPRNG, base64url), stores it encrypted with
-   * one audit row each (never the value), and returns the values once, for the admin to copy.
-   */
   async generate<K extends SettingKey>(
     keys: K[],
     actor: Actor,

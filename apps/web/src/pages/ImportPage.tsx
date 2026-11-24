@@ -1,12 +1,3 @@
-// Import from Zendesk, /import, admins only (plan 5.1): the archive at its read-only mount, the brand and tag
-// mappings, the Maane user that Zendesk agents' comments and notes are attributed to, Start, the run's progress, and
-// the paged report of the newest run (GET /api/v1/admin/import). The import runs until an admin presses Finish import
-// (phase 6, refused while a run is open, asked once more, final); after that the page says when it finished, and
-// imported tickets are ordinary tickets. Until then they are read-only for agents. A run that stopped on an error stays
-// open; once its job has used up its retries the page offers Continue (the same Start), and the report names the
-// ticket that stopped it and why. An open run can be cancelled: what it imported stays, and the next start is a full
-// pass.
-
 import {
   IMPORT_FAILURES,
   type ImportCounts,
@@ -33,7 +24,6 @@ import { showToast } from "../ui/Toast.tsx"
 import { Tag } from "../ui/tags.tsx"
 import { AdminOnly } from "./AdminOnly.tsx"
 
-/** How often the page reads again while a run works. */
 const WHILE_RUNNING = 3_000
 
 export function ImportPage() {
@@ -62,7 +52,6 @@ const same = (a: Mapping, b: Mapping) => JSON.stringify(a) === JSON.stringify(b)
 function Import() {
   const { t } = useI18n()
   usePageMeta(t("import.title"))
-  // The page reads the archive's summary at the usual pace; a run's progress has its own, faster read (RunPanel).
   const query = usePageQuery({ queryKey: qk.importPage, queryFn: api.importPage, every: EVERY.live })
   const view = query.data
 
@@ -88,7 +77,6 @@ function Import() {
 function ImportBody({ view }: { view: ImportView }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
-  // While a run works, only the run is read again, every few seconds: the page's summary reads the whole archive.
   const [running, setRunning] = useState(view.run?.state === "running" && view.run.jobActive)
   const progress = usePageQuery({
     queryKey: qk.importRun,
@@ -104,7 +92,6 @@ function ImportBody({ view }: { view: ImportView }) {
   const saved = mappingOf(view)
   const [mapping, setMapping] = useState<Mapping>(saved)
   const [base, setBase] = useState<Mapping>(saved)
-  // A newer answer replaces what is shown unless the admin changed something since.
   useEffect(() => {
     const fresh = mappingOf(view)
     if (!same(fresh, base)) {
@@ -341,11 +328,9 @@ function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: bool
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState<"start" | "cancel" | null>(null)
-  // An open run without a job (it used up its retries) goes on from its last ticket: Start is Continue then.
   const resumable = run?.state === "running" && !run.jobActive
   const working = run?.state === "running" && !resumable
 
-  // `call` answers false when there was nothing to act on (the confirmed run had already ended).
   const act = async (kind: "start" | "cancel", call: () => Promise<boolean>, done: string, failed: string) => {
     setBusy(kind)
     try {
@@ -372,7 +357,6 @@ function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: bool
       "import.run.startFailed",
     )
   const cancel = async () => {
-    // The run the dialog asks about: a newer run started meanwhile is not cancelled by this answer.
     const runId = run?.id
     if (!runId) return
     const yes = await confirmDialog({
@@ -421,7 +405,6 @@ function RunPanel({ run, canStart }: { run: ImportRunView | null; canStart: bool
   )
 }
 
-/** Finish import (phase 6): final, so it asks once more; refused while a run is open. */
 function FinishPanel({ runOpen }: { runOpen: boolean }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
@@ -625,7 +608,6 @@ function ReportPanel({ run }: { run: ImportRunView }) {
   )
 }
 
-/** A report row's detail: for a ticket that stopped the run, why in plain words and the database rule it named. */
 function ReportDetail({ row }: { row: ImportReportRow }) {
   const { t } = useI18n()
   if (!row.detail) return null

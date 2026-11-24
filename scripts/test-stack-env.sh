@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Tests for ensure_vapid_keys (scripts/lib/common.sh), which scripts/local.sh, scripts/verify.sh, and
-# scripts/try-pr.sh call after the image build: a data directory's app.env gets a VAPID pair only when it holds none,
-# and an existing pair is never replaced. The image's generator is replaced by a stand-in that prints a pair new for
-# each call, so no Docker is needed. Run with the guards (scripts/lib/guards.sh).
 set -uo pipefail
 
 # shellcheck source=scripts/lib/common.sh
@@ -23,12 +19,10 @@ check() {
   fi
 }
 
-# Characters of base64url from the kernel's generator, as many as asked for.
 random_b64url() {
   LC_ALL=C tr -dc 'A-Za-z0-9_-' </dev/urandom | head -c "$1"
 }
 
-# The stand-in generator: GENERATOR=pair (a new pair), fail, or odd (a wrong line).
 GENERATOR=pair
 vapid_generator() {
   case "$GENERATOR" in
@@ -38,7 +32,6 @@ vapid_generator() {
   esac
 }
 
-# A data directory with the app.env ensure_stack_env writes, values new for each case.
 new_dir() {
   local dir
   dir="$(mktemp -d "$WORK/stack.XXXXXX")"
@@ -58,7 +51,6 @@ count() {
   grep -c "^$2=" "$1/app.env"
 }
 
-# Missing keys are added once, after the other values, and the file stays owner-only.
 dir="$(new_dir)"
 before="$(cat "$dir/app.env")"
 check "adds a missing pair" run "$dir"
@@ -68,12 +60,10 @@ check "keeps the other values first and unchanged" [ "$(head -3 "$dir/app.env")"
 check "stays mode 600" [ "$(stat -c %a "$dir/app.env")" = 600 ]
 check "never prints a key" bash -c "! grep -q 'MAANE_VAPID_PRIVATE_KEY=' '$WORK/out'"
 
-# A second run, also with a generator that would make a new pair, changes nothing.
 after="$(sha256sum <"$dir/app.env")"
 check "a second run succeeds" run "$dir"
 check "a second run replaces nothing" [ "$(sha256sum <"$dir/app.env")" = "$after" ]
 
-# An app.env whose last line has no newline: the pair goes on lines of its own, the last value unchanged.
 dir="$(new_dir)"
 before="$(cat "$dir/app.env")"
 truncate -s -1 "$dir/app.env"
@@ -83,7 +73,6 @@ check "one public key after a last line without a newline" [ "$(count "$dir" MAA
 check "one private key after a last line without a newline" [ "$(count "$dir" MAANE_VAPID_PRIVATE_KEY)" = 1 ]
 check "stays mode 600 after a last line without a newline" [ "$(stat -c %a "$dir/app.env")" = 600 ]
 
-# Half a pair, or an empty key, is refused and left as it is.
 for partial in "MAANE_VAPID_PUBLIC_KEY=$(random_b64url 87)" "MAANE_VAPID_PRIVATE_KEY=$(random_b64url 43)" \
   "MAANE_VAPID_PUBLIC_KEY=" "MAANE_VAPID_PUBLIC_KEY=
 MAANE_VAPID_PRIVATE_KEY="; do
@@ -94,8 +83,6 @@ MAANE_VAPID_PRIVATE_KEY="; do
   check "leaves half a pair unchanged" [ "$(sha256sum <"$dir/app.env")" = "$after" ]
 done
 
-# A key in any other form Compose reads (leading whitespace, export, spaces or a colon around the separator) is a key
-# already there: refused and left as it is, so no second pair overrides the one the devices use.
 n=0
 TAB="$(printf '\t')"
 public="$(random_b64url 87)"
@@ -113,7 +100,6 @@ export MAANE_VAPID_PRIVATE_KEY=$private"; do
   check "leaves a key in another form unchanged ($n)" [ "$(sha256sum <"$dir/app.env")" = "$after" ]
 done
 
-# A comment, or another name that starts the same, is not a key: the pair is added.
 for other in "# MAANE_VAPID_PUBLIC_KEY=" "MAANE_VAPID_PUBLIC_KEY_OLD=$public"; do
   dir="$(new_dir)"
   printf '%s\n' "$other" >>"$dir/app.env"
@@ -121,7 +107,6 @@ for other in "# MAANE_VAPID_PUBLIC_KEY=" "MAANE_VAPID_PUBLIC_KEY_OLD=$public"; d
   check "one public key next to a comment or another name" [ "$(count "$dir" MAANE_VAPID_PUBLIC_KEY)" = 1 ]
 done
 
-# A generator that fails or prints something else changes nothing.
 for GENERATOR in fail odd; do
   dir="$(new_dir)"
   after="$(sha256sum <"$dir/app.env")"
@@ -130,7 +115,6 @@ for GENERATOR in fail odd; do
 done
 GENERATOR=pair
 
-# An app.env that is not owner-only, or not there, is refused.
 dir="$(new_dir)"
 chmod 644 "$dir/app.env"
 if run "$dir"; then check "refuses an app.env that is not mode 600" false; else check "refuses mode 644" true; fi

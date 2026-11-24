@@ -1,7 +1,3 @@
-// No area is ever blank (v3 FB-1, FB-3, FB-5, FB-6): loading names what is loading, an empty area says what is
-// missing, a failure says what failed and offers Try again, and a control that cannot work is replaced by a locked
-// area that says what is missing.
-
 import { Lock } from "lucide-react"
 import type { ReactNode } from "react"
 import { errorText } from "../api/errors.ts"
@@ -60,7 +56,6 @@ export function Banner({
   action,
 }: {
   tone: "info" | "ok" | "warn" | "fail"
-  /** A sentence, or an element such as an address isolated left to right. */
   title: ReactNode
   children?: ReactNode
   action?: ReactNode
@@ -76,7 +71,6 @@ export function Banner({
   )
 }
 
-/** A background refresh that failed keeps what is shown and says so (SV-10). */
 export function StaleNote({ failed }: { failed: boolean }) {
   const { t } = useI18n()
   if (!failed) return null

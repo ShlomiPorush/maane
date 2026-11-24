@@ -58,7 +58,6 @@ describe("classification (RFC 3834, RFC 3464)", () => {
         signs: [],
         possiblyAutomated: false,
       })
-    // A report of another kind is not a delivery or disposition report.
     expect(
       classify({ headers: [], contentType: { value: "multipart/report", reportType: "x" }, from: null }).automated,
     ).toBe(false)
@@ -92,7 +91,6 @@ describe("classification (RFC 3834, RFC 3464)", () => {
         "delivery_report",
       ])
     }
-    // A media type that is not a plain token pair is stored as octet-stream.
     expect(storedContentType({ value: "text/<b>", params: {} }).value).toBe("application/octet-stream")
   })
 })
@@ -107,14 +105,12 @@ describe("threading hints and the reference code", () => {
       codes.add(code)
     }
     expect(codes.size).toBe(2000)
-    // Every symbol of the alphabet shows up, and nothing else.
     const seen = new Set([...codes].join("").replaceAll("-", ""))
     expect([...seen].sort().join("")).toBe([...REFERENCE_ALPHABET].sort().join(""))
   })
 
   it("finds codes that stand alone in a body and numbers written as [#n] in a subject", () => {
     expect(referenceCodesIn("Ref: K7QX-92MF\n> Ref: K7QX-92MF and AB2C-DEFG")).toEqual(["K7QX-92MF", "AB2C-DEFG"])
-    // Inside a longer word, in lower case, or with a look-alike character: not a code.
     expect(referenceCodesIn("XK7QX-92MF K7QX-92MFA k7qx-92mf K7QX-920F")).toEqual([])
     expect(referenceCodesIn(`${SHALOM} K7QX-92MF ${SHALOM}`)).toEqual(["K7QX-92MF"])
     expect(ticketNumbersIn("Re: [#1234] help [#77] [#1234]")).toEqual([1234, 77])
@@ -193,7 +189,6 @@ describe("parsing", () => {
       const parsed = await parseMessage(mime({ text: { content: SHALOM_OLAM, charset: "windows-1255", encoding } }))
       expect(parsed.text?.trim(), encoding).toBe(SHALOM_OLAM)
     }
-    // The fixtures are what they claim: QP of UTF-8 Hebrew is all escapes, Windows-1255 one byte a letter.
     expect(quotedPrintable(Buffer.from(SHALOM, "utf8"))).toBe("=D7=A9=D7=9C=D7=95=D7=9D")
     expect([...windows1255(SHALOM)]).toEqual([0xf9, 0xec, 0xe5, 0xed])
     expect(base64Lines(Buffer.from("x"))).toBe("eA==")
@@ -212,7 +207,6 @@ describe("parsing", () => {
         ],
       }),
     )
-    // RFC 2047 6.2: the white space between two adjacent encoded words is not part of the text.
     expect(parsed.subject).toBe(`${SHALOM} order1234`)
     expect(parsed.text?.trim()).toBe(mixed)
     expect(parsed.html).toBe(`<p dir="rtl">${mixed}</p>`)
@@ -318,7 +312,6 @@ describe("parsing", () => {
       }),
     )
     expect(parsed.reportOriginalMessageId).toBe("sent-7@maane.example.com")
-    // The returned message stays a part (scanned and kept like a file), not text of the report.
     expect(parsed.text).not.toContain("The original.")
   })
 
@@ -368,10 +361,8 @@ describe("parsing", () => {
       { address: "nostatus@example.com", action: "failed", status: null },
     ])
     expect(parsed.reportOriginalMessageId).toBe("sent-2@maane.example.com")
-    // The main parse is as 2.3 stored it: the report's fields are in the text, and not a part.
     expect(parsed.text).toContain("Reporting-MTA")
     expect(parsed.parts.map((part) => part.declaredType)).toEqual(["text/rfc822-headers"])
-    // A report that names no recipient reads as an empty list; RFC 6533's global form is read too.
     expect((await report("Reporting-MTA: dns; mx.example.com")).deliveryReport).toEqual([])
     expect(
       (
@@ -382,7 +373,6 @@ describe("parsing", () => {
         )
       ).deliveryReport,
     ).toEqual([{ address: "ron@example.com", action: "failed", status: null }])
-    // A disposition notification (a read receipt) and an ordinary message have none.
     expect(
       (
         await report(
@@ -469,7 +459,6 @@ describe("Graph errors", () => {
       code: "TypeError",
       status: null,
     })
-    // A code that is not a plain identifier is never repeated.
     expect(describeGraphError(graphError(500, "<b>x</b>")).code).toBeNull()
   })
 })

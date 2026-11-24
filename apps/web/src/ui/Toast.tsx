@@ -1,7 +1,3 @@
-// The one toast (v3 FB-2, FB-16): bottom end corner (above the tab bar on phones), one at a time
-// (a new one replaces the current one), four seconds by default, waits while the pointer or the
-// focus is on it and then keeps at least 1.5 seconds.
-
 import { CircleAlert, CircleCheck, Info, TriangleAlert, X } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
@@ -47,7 +43,6 @@ export function ToastHost() {
 
   useEffect(() => {
     emit = (next) => {
-      // The keyboard in the toast being replaced moves to the new one.
       const hadFocus = !!boxRef.current?.contains(document.activeElement)
       setToast(next)
       held.current = false
@@ -72,14 +67,11 @@ export function ToastHost() {
     arm(Math.max(deadline.current - Date.now(), REST_MS))
   }
 
-  // The wrapper stays in <body> while the host lives, outside every layer and never made inert
-  // (layers.ts skips data-layer-keep). React owns it, so StrictMode's second effect run in
-  // development keeps rendering into the element that is in the page.
   const Icon = toast ? ICONS[toast.type] : null
   return createPortal(
     <div data-layer-keep="true">
       {toast && Icon ? (
-        // biome-ignore lint/a11y/noStaticElementInteractions: the toast is a status or alert region; pointer and focus only pause its timer (v3 FB-2)
+        // biome-ignore lint/a11y/noStaticElementInteractions: the toast is a status or alert region; pointer and focus only pause its timer
         <div
           ref={boxRef}
           key={toast.id}

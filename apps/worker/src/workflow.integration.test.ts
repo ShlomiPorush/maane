@@ -29,11 +29,6 @@ import { type IntakeHarness, startIntake } from "./testing/intake.ts"
 import { fromCodePoints, mime } from "./testing/mime.ts"
 import { type StandInSmtp, startStandInSmtp } from "./testing/smtp.ts"
 
-// The workflow of plan 4.1 from the API through intake and the sender: statuses and who may set them, what a customer
-// reply is (and every kind of mail that is not one), the follow-up of a closed ticket, "Send and set pending", moving a
-// ticket to another organization, and categories. The server app, intake (stand-in Graph and clamd), and the worker's
-// sender (stand-in SMTP) share one migrated database. Nothing leaves this process.
-
 const QUICK: SmtpTimeouts = { connection: 2000, greeting: 1500, socket: 3000, setup: 4000, send: 5000 }
 const SUPPORT = "support@example.com"
 const OTHER = "billing@example.com"
@@ -110,7 +105,6 @@ async function firstAdmin() {
   return b
 }
 
-/** An agent signed in with two-factor, a member of these organizations. */
 async function newAgent(admin: TestBrowser, name: string, organizations: string[]) {
   const created = await admin.call("POST", "/api/auth/admin/create-user", {
     email: userEmail(name),
@@ -131,7 +125,6 @@ async function newAgent(admin: TestBrowser, name: string, organizations: string[
 
 const DANA = "Dana Customer <dana@example.com>"
 
-/** A customer's message through intake: its ticket's number and ID, and the message's own Message-ID. */
 async function customerTicket(subject = "A question") {
   const messageId = `${randomUUID()}@mail.example.com`
   const graphId = h.graph.add(mime({ messageId, subject, from: DANA, to: SUPPORT, text: { content: TODA } }))
@@ -141,7 +134,6 @@ async function customerTicket(subject = "A question") {
   return { number: found.number, id: found.id, messageId, graphId }
 }
 
-/** The customer answers the ticket's first message (In-Reply-To), through intake. Returns the new message's Graph ID. */
 async function customerAnswers(t: { messageId: string }, values: Parameters<typeof mime>[0] = {}) {
   const graphId = h.graph.add(
     mime({ from: DANA, to: SUPPORT, subject: "Re: A question", inReplyTo: t.messageId, ...values }),
@@ -175,7 +167,6 @@ async function statusOf(id: string): Promise<string | undefined> {
 const setStatus = (b: TestBrowser, number: number, status: string) =>
   b.call("PUT", `/api/v1/tickets/${number}/status`, { status })
 
-/** The audit rows of status changes of one ticket, oldest first. */
 async function statusChanges(ticketId: string) {
   const rows = await db()
     .select({ actor: auditLog.actorLabel, details: auditLog.details })
@@ -201,7 +192,6 @@ describe("statuses", () => {
       expect((await setStatus(agent, t.number, status)).status, status).toBe(200)
       expect(await statusOf(t.id)).toBe(status)
     }
-    // The same status again changes nothing and writes nothing.
     expect((await setStatus(agent, t.number, "open")).status).toBe(200)
     expect(await statusChanges(t.id)).toHaveLength(steps.length)
 
@@ -246,7 +236,6 @@ describe("send and set pending", () => {
     expect((await post({})).status).toBe(201)
     expect(await statusOf(t.id)).toBe("new")
 
-    // The default action of the composer: pending as soon as the reply is written, before the worker sends it.
     const pending = await post({ setPending: true })
     expect(pending.status).toBe(201)
     expect(await statusOf(t.id)).toBe("pending")
@@ -255,7 +244,6 @@ describe("send and set pending", () => {
     ])
     expect(await sender().send(pending.json.id)).toBe("accepted")
     expect(await statusOf(t.id)).toBe("pending")
-    // A note on a pending ticket leaves it pending, and so does a note with the flag (it applies to replies only).
     expect((await post({ kind: "note", from: null, to: [], setPending: true })).status).toBe(201)
     await db().update(ticket).set({ status: "open" }).where(eq(ticket.id, t.id))
     expect((await post({ kind: "note", from: null, to: [], setPending: true })).status).toBe(201)
@@ -273,7 +261,6 @@ describe("send and set pending", () => {
     expect(refused.json).toEqual({ error: "status_admin_only" })
     expect(await messagesOf(t.id)).toBe(before)
     expect(await statusOf(t.id)).toBe("closed")
-    // A plain reply on a closed ticket is written and leaves it closed.
     expect((await agent.call("POST", `/api/v1/tickets/${t.number}/messages`, reply())).status).toBe(201)
     expect(await statusOf(t.id)).toBe("closed")
   })
@@ -298,7 +285,6 @@ describe("a customer reply", () => {
       { actor: "system", ticket: t.number, from: "on_hold", to: "open", via: "customer_reply" },
       { actor: "system", ticket: t.number, from: "solved", to: "open", via: "customer_reply" },
     ])
-    // The definition over stored records finds exactly these three.
     const [found] = await db()
       .select({ n: count() })
       .from(intakeRecord)
@@ -318,7 +304,6 @@ describe("a customer reply", () => {
       .where(eq(message.id, written.json.id))
     const replyId = ours?.id ?? ""
 
-    // Each would reach the ticket by its headers if it were the customer's mail: In-Reply-To names the ticket's mail.
     const dsn = h.graph.add(
       mime({
         from: "Mail Delivery System <MAILER-DAEMON@example.com>",
@@ -362,7 +347,6 @@ describe("a customer reply", () => {
     const list = h.graph.add(
       mime({ from: DANA, to: SUPPORT, inReplyTo: replyId, headers: [["List-Id", "<news.example.com>"]] }),
     )
-    // Maane's own reply coming back into the mailbox, and a copy of the customer's first message.
     const echo = h.graph.add(smtp2go.received.at(-1)?.raw ?? Buffer.alloc(0))
     const copy = h.graph.add(
       mime({ messageId: t.messageId, subject: "A question", from: DANA, to: SUPPORT, text: { content: TODA } }),
@@ -382,11 +366,9 @@ describe("a customer reply", () => {
       expect(record && isCustomerReply(record), name).toBe(false)
       expect(await statusOf(t.id), name).toBe("pending")
     }
-    // The delivery report about Maane's reply still updates its delivery (plan 3.3).
     expect(await h.recordOf(dsn)).toMatchObject({ matchedTicketId: t.id })
     expect((await view(admin, t.number)).ticket.reviewFlags).toContain("delivery_failed")
 
-    // The customer's own mail is a customer reply.
     const answer = await customerAnswers(t)
     expect(await h.recordOf(answer)).toMatchObject({ outcome: "joined", classification: "customer" })
     expect(await statusOf(t.id)).toBe("open")
@@ -414,10 +396,8 @@ describe("a customer reply", () => {
     expect(await db().select().from(ticketPendingReference).where(eq(ticketPendingReference.ticketId, t.id))).toEqual(
       [],
     )
-    // Both tickets show the link, the follow-up's way and the closed ticket's way.
     expect((await view(admin, followUp?.number ?? 0)).links).toEqual([{ number: t.number, reason: "follow_up" }])
     expect((await view(admin, t.number)).links).toEqual([{ number: followUp?.number, reason: "follow_up" }])
-    // The follow-up is the customer's new ticket: a further reply joins it, and the closed ticket stays closed.
     const again = await customerAnswers({ messageId: (await h.messageOf(answer)).messageIdHeader ?? "" })
     expect((await h.ticketOf(again))?.id).toBe(followUp?.id)
     expect(await statusOf(t.id)).toBe("closed")
@@ -438,7 +418,6 @@ describe("moving a ticket to another organization", () => {
     expect((await view(one, t.number)).moveTargets).toEqual([])
     expect((await view(both, t.number)).moveTargets).toEqual([{ id: other, name: "Example Other" }])
     expect((await view(admin, t.number)).moveTargets).toEqual([{ id: other, name: "Example Other" }])
-    // A reply written before the move, from the old organization's address.
     const early = await both.call("POST", `/api/v1/tickets/${t.number}/messages`, reply())
     expect(early.status).toBe(201)
 
@@ -449,7 +428,6 @@ describe("moving a ticket to another organization", () => {
     expect((await move(admin, randomUUID())).json).toEqual({ error: "organization_not_found" })
     expect((await move(both, other)).status).toBe(200)
     expect((await db().select().from(ticket).where(eq(ticket.id, t.id)))[0]?.organizationId).toBe(other)
-    // The ticket now belongs to the other organization: the agent of the old one no longer sees it.
     expect((await one.call("GET", `/api/v1/tickets/${t.number}`)).status).toBe(404)
     expect((await view(outsider, t.number)).ticket.organization).toEqual({ id: other, name: "Example Other" })
     expect((await move(admin, org)).status).toBe(200)
@@ -486,8 +464,6 @@ describe("moving a ticket to another organization", () => {
       },
     ])
 
-    // From now on the composer offers the new organization's addresses, the old one is refused when written and when
-    // sent, and a reply goes out from the new address.
     const compose = (await view(both, t.number)).compose
     expect(compose.from).toEqual([OTHER])
     expect(compose.defaultFrom).toBe(OTHER)
@@ -521,7 +497,6 @@ describe("moving a ticket to another organization", () => {
         .from(auditLog)
         .where(and(eq(auditLog.action, "ticket.move"), eq(auditLog.entityId, t.id))),
     ).toEqual([])
-    // An organization with an exact address takes it, and its replies come from that address.
     expect((await move(other)).status).toBe(200)
   })
 
@@ -531,12 +506,10 @@ describe("moving a ticket to another organization", () => {
     const t = await customerTicket()
     const before = await messagesOf(t.id)
     let posted: Promise<{ status: number; json: unknown }> = Promise.resolve({ status: 0, json: null })
-    // A move holds the ticket row as Workflow.move does (FOR UPDATE) while the agent's note is written.
     await db().transaction(async (tx) => {
       await tx.select({ id: ticket.id }).from(ticket).where(eq(ticket.id, t.id)).for("update")
       await tx.update(ticket).set({ organizationId: other }).where(eq(ticket.id, t.id))
       posted = one.call("POST", `/api/v1/tickets/${t.number}/messages`, reply({ kind: "note", from: null, to: [] }))
-      // The note waits on the ticket's lock: bounded, and a note that does not wait fails here.
       let waiting = false
       for (let tries = 0; tries < 200 && !waiting; tries++) {
         const result = await db().execute<{ n: number }>(
@@ -616,7 +589,6 @@ describe("categories", () => {
       { ticket: t.number, added: ["Invoices", "Shipping"], removed: [] },
       { ticket: t.number, added: [], removed: ["Invoices"] },
     ])
-    // A participant row was never touched by any of this.
     expect(await db().select().from(ticketParticipant).where(eq(ticketParticipant.ticketId, t.id))).toHaveLength(1)
   })
 })

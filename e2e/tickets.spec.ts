@@ -3,16 +3,8 @@ import { type Browser, expect, type Page, test } from "@playwright/test"
 import { en, fillSecret, freshAddress, he, signIn, waitShown } from "./helpers.ts"
 import { totp } from "./totp.ts"
 
-// Tickets that intake made from the stand-in Graph in the stack stage (apps/worker/src/testing/stack-intake.ts, which
-// runs before these tests; keep the names below in step with its FIXTURES): the list, a ticket's framed body in
-// Hebrew right to left and in English, the remote images switch, what a scan blocked, image, PDF, and text previews,
-// the intake log, and an agent of another organization, who gets 404 for every route of a ticket that is not theirs.
-// The framed body is read inside the browser, so the body route's policy and frame headers are proven to let it
-// render. Every Content Security Policy violation the browser reports fails the test.
 test.describe.configure({ mode: "serial" })
 
-// Hebrew from code points: only he.json holds Hebrew. "Shalom olam" and "heshbonit" (an invoice), as stack-intake.ts
-// builds them through apps/worker/src/testing/mime.ts.
 const SHALOM_OLAM = `${String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)} ${String.fromCodePoint(0x5e2, 0x5d5, 0x5dc, 0x5dd)}`
 const INVOICE = String.fromCodePoint(0x5d7, 0x5e9, 0x5d1, 0x5d5, 0x5e0, 0x5d9, 0x5ea)
 const HEBREW_SUBJECT = `${SHALOM_OLAM} - ${INVOICE}`
@@ -26,7 +18,6 @@ const SCANNED = "Scanned documents"
 const AGENT = "agent3"
 const agentPassword = randomBytes(18).toString("base64url")
 
-/** Fails the test on any report of a Content Security Policy violation, in the page or in a frame. */
 function watchPolicy(page: Page): string[] {
   const violations: string[] = []
   page.on("console", (message) => {
@@ -53,7 +44,6 @@ async function openTicket(page: Page, subject: string): Promise<number> {
 
 const frame = (page: Page) => page.frameLocator("iframe.ui-mail-frame").first()
 
-/** Waits until an image has been decoded by the browser: its natural width is above zero. */
 async function decoded(locator: ReturnType<Page["locator"]>) {
   await expect
     .poll(() => locator.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth))
@@ -72,12 +62,10 @@ test.describe("desktop", () => {
     await expect(page.locator(".ui-facts")).toContainText("Example Alpha")
     await expect(page.locator('.ui-facts bdi[dir="ltr"]').first()).toHaveText("alpha@example.com")
 
-    // The body renders inside the sandboxed frame: the route's policy and frame headers allow it.
     const body = frame(page).locator("body")
     await expect(body).toHaveAttribute("dir", "rtl")
     await expect(frame(page).getByText(SHALOM_OLAM, { exact: false }).first()).toBeVisible()
     expect(await body.evaluate((element) => getComputedStyle(element).direction)).toBe("rtl")
-    // The inline image is the message's own clean part; the remote one is not there until it is allowed.
     await decoded(frame(page).locator('img[alt="logo"]'))
     await expect(frame(page).locator('img[alt="banner"]')).toHaveCount(0)
     await page.getByRole("button", { name: he("ticket.showImages"), exact: true }).click()
@@ -85,7 +73,6 @@ test.describe("desktop", () => {
     await expect(frame(page).locator('img[alt="banner"]')).toHaveCount(1)
     await expect(page.getByRole("button", { name: he("ticket.hideImages"), exact: true })).toBeVisible()
 
-    // A link in the frame opens in a new tab with its own address, cut off from Maane; the ticket stays as it was.
     const ticketUrl = page.url()
     const [popup] = await Promise.all([
       page.waitForEvent("popup"),
@@ -96,10 +83,8 @@ test.describe("desktop", () => {
     expect(await popup.evaluate(() => window.opener === null)).toBe(true)
     await popup.close()
     expect(page.url()).toBe(ticketUrl)
-    // A link of another scheme keeps its words but no address.
     await expect(frame(page).getByText("Call us", { exact: true })).not.toHaveAttribute("href", /.*/)
 
-    // An image preview: the browser decodes the file the preview route serves.
     await page
       .locator('[data-file="photo.png"]')
       .getByRole("button", { name: he("ticket.preview") })
@@ -109,7 +94,6 @@ test.describe("desktop", () => {
     await page.keyboard.press("Escape")
     await expect(imageDialog).toHaveCount(0)
 
-    // A PDF preview: pdf.js draws the page on a canvas, its worker from Maane's own origin.
     await page
       .locator(`[data-file="${INVOICE}.pdf"]`)
       .getByRole("button", { name: he("ticket.preview") })
@@ -122,7 +106,6 @@ test.describe("desktop", () => {
     expect(painted).toBe(true)
     await page.keyboard.press("Escape")
 
-    // The same ticket in English, left to right; the Hebrew body keeps its own direction.
     await chooseLanguage(page, "en")
     await expect(page.locator("html")).toHaveAttribute("dir", "ltr")
     await expect(page.getByRole("heading", { name: en("ticket.details"), exact: true })).toBeVisible()
@@ -151,7 +134,6 @@ test.describe("desktop", () => {
     await expect(infected.locator('bdi[dir="ltr"]')).toContainText(/Eicar/i)
     await expect(infected.locator("a[download]")).toHaveCount(0)
     await expect(infected.getByRole("button")).toHaveCount(0)
-    // Markup downloads only.
     const drawing = page.locator('[data-file="drawing.svg"]')
     await expect(drawing.locator("a[download]")).toHaveCount(1)
     await expect(drawing.getByRole("button", { name: he("ticket.preview") })).toHaveCount(0)
@@ -170,7 +152,6 @@ test.describe("desktop", () => {
     const violations = watchPolicy(page)
     await signIn(page)
     await openTicket(page, SCANNED)
-    /** Opens a file's PDF preview, waits until its page is drawn, and counts the page's dark pixels. */
     const drawn = async (fileName: string) => {
       await page
         .locator(`[data-file="${fileName}"]`)
@@ -190,12 +171,9 @@ test.describe("desktop", () => {
       })
       return { dialog, dark }
     }
-    // The images of a scan (JBIG2) and a fax (CCITT): pdf.js decodes them with its own decoders, served from Maane's
-    // origin, and draws their black band.
     for (const fileName of ["scan-jbig2.pdf", "fax-ccitt.pdf", "embedded-font.pdf"]) {
       const { dialog, dark } = await drawn(fileName)
       expect(dark, fileName).toBeGreaterThan(1000)
-      // pdf.js says nothing when it leaves a part out: every PDF preview says the download holds the original.
       await expect(dialog.getByTestId("pdf-note")).toHaveText(he("ticket.pdfNote"))
       await page.keyboard.press("Escape")
       await expect(dialog).toHaveCount(0)
@@ -206,26 +184,22 @@ test.describe("desktop", () => {
   test("the intake log shows what intake did, with no listening view", async ({ page }) => {
     await signIn(page)
     await page.goto("/intake")
-    // Rows are told apart by their outcome: one word of an outcome can be part of another's.
     const automated = page.locator('.ui-intake-row[data-outcome="automated"]')
     await expect(automated).toHaveCount(1)
     await expect(automated).toContainText(he("intake.outcome.automated"))
     const opened = page.locator('.ui-intake-row[data-outcome="new_ticket"]')
     await expect(opened.first()).toContainText(he("intake.outcome.new_ticket"))
-    // Maane is live from the first moment (phase 6): no row carries a mode.
     await expect(page.locator(".ui-intake-row[data-mode]")).toHaveCount(0)
   })
 
   test("an agent of another organization gets 404 for a ticket, its body, and its files", async ({ page, browser }) => {
     await signIn(page)
-    // What the agent will ask for: Alpha's ticket, one of its messages, and one of its files.
     const alpha = await openTicket(page, HEBREW_SUBJECT)
     const view = await (await page.request.get(`/api/v1/tickets/${alpha}`)).json()
     const messageId: string = view.messages[0].id
     const fileId: string = view.messages[0].attachments.find((file: { preview: string | null }) => file.preview).id
     const beta = await openTicket(page, BETA_SUBJECT)
 
-    // The agent, a member of Beta only.
     await page.goto("/users")
     await page.getByRole("button", { name: he("users.create"), exact: true }).click()
     const userDialog = page.getByRole("dialog")
@@ -264,7 +238,6 @@ test.describe("desktop", () => {
   })
 })
 
-/** The agent's own browser: the first sign-in sets up two-factor. */
 async function agentPage(browser: Browser): Promise<Page> {
   const context = await browser.newContext({ baseURL: "http://127.0.0.1:8095" })
   const page = await context.newPage()
@@ -295,7 +268,6 @@ test.describe("phone", () => {
     await expect(frame(page).locator("body")).toHaveAttribute("dir", "rtl")
     await expect(frame(page).getByText(SHALOM_OLAM, { exact: false }).first()).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-    // An admin has six pages: four tabs (the intake log among them), and More with the other two.
     const tabs = page.locator(".ui-tabbar")
     await tabs.getByRole("link", { name: he("nav.intake") }).click()
     await expect(page).toHaveURL(/\/intake$/)

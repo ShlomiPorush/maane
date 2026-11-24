@@ -1,17 +1,5 @@
 import { connect, type Socket } from "node:net"
 
-// Maane's clamd client: the part of clamd's protocol that `man clamd` documents and Maane needs, over node:net. Owner's
-// decision, 2026-11-12: it replaces the clamscan package, whose timeout is an idle timeout only: against a peer that
-// keeps a half-closed connection open without answering, a clamscan scan never settled, and pg-boss's job expiry does
-// not free the worker that awaits it. Every operation here has a hard deadline that destroys the socket and rejects,
-// plus a connect timeout and a bounded reply. It never logs, and never puts content into an error.
-//
-// Commands use the `z` form: the command and every reply end with a NUL byte. INSTREAM sends the content as chunks,
-// each prefixed by its length as 4 bytes in network order, and a zero length ends the stream. The reply is
-// `stream: OK`, `stream: <signature> FOUND`, or `<message> ERROR` (`INSTREAM size limit exceeded. ERROR` for a stream
-// longer than clamd's StreamMaxLength). clamd closes the connection after it answers.
-
-/** Why an exchange gave no answer. Never holds content. */
 export type ClamdFailure =
   | "connect_timeout"
   | "deadline"
@@ -36,22 +24,14 @@ export interface ClamdTarget {
 }
 
 export interface ExchangeLimits {
-  /** The whole operation, from connect to the last byte of the reply. */
   deadlineMs: number
-  /** Connecting alone. */
   connectTimeoutMs?: number
 }
 
-/** A reply longer than this is not clamd's: a signature name and its frame fit easily. */
 export const MAX_REPLY_BYTES = 4096
 export const CONNECT_TIMEOUT_MS = 5_000
 const CHUNK_BYTES = 64 * 1024
 
-/**
- * One exchange: connect, send what `send` writes, read one NUL-terminated reply. Settles exactly once, always with
- * the socket destroyed: with the reply's text, or with a ClamdError when the deadline passes, connecting takes too
- * long, the connection fails or closes before a full reply, or the reply grows past MAX_REPLY_BYTES.
- */
 function exchange(
   target: ClamdTarget,
   limits: ExchangeLimits,
@@ -78,14 +58,12 @@ function exchange(
     socket.on("connect", () => {
       clearTimeout(connecting)
       send(socket, () => settled).catch(() => {
-        // A write that fails ends the exchange, unless clamd's reply (such as the size limit error) came first.
         if (!settled) finish(new ClamdError("connection"))
       })
     })
     socket.on("data", (data: Buffer) => {
       received = Buffer.concat([received, data])
       const end = received.indexOf(0)
-      // The limit applies to the reply itself, also when its terminator has arrived: a padded reply is never read.
       if ((end >= 0 ? end : received.length) > MAX_REPLY_BYTES) finish(new ClamdError("reply_too_long"))
       else if (end >= 0) finish(null, received.subarray(0, end).toString("utf8").trim())
     })
@@ -97,7 +75,6 @@ function exchange(
   })
 }
 
-/** Waits while the socket's buffer is full: a peer that does not read holds us only until the deadline. */
 async function write(socket: Socket, data: Uint8Array, finished: () => boolean): Promise<void> {
   if (finished()) throw new Error("finished")
   if (socket.write(data)) return
@@ -124,10 +101,6 @@ const length = (n: number) => {
 
 export type ScanReply = { found: string | null }
 
-/**
- * Scans content through zINSTREAM. Resolves with the signature clamd found, or null for `stream: OK`; rejects with a
- * ClamdError for anything else, `size_limit` for clamd's StreamMaxLength refusal and `error_reply` for another ERROR.
- */
 export async function scanStream(target: ClamdTarget, bytes: Uint8Array, limits: ExchangeLimits): Promise<ScanReply> {
   const content = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   const reply = await exchange(target, limits, async (socket, finished) => {
@@ -146,7 +119,6 @@ export async function scanStream(target: ClamdTarget, bytes: Uint8Array, limits:
   throw new ClamdError("bad_reply")
 }
 
-/** zPING: resolves when clamd answers PONG. */
 export async function ping(target: ClamdTarget, limits: ExchangeLimits): Promise<void> {
   const reply = await exchange(target, limits, (socket, finished) =>
     write(socket, Buffer.from("zPING\0", "latin1"), finished),
@@ -154,7 +126,6 @@ export async function ping(target: ClamdTarget, limits: ExchangeLimits): Promise
   if (reply !== "PONG") throw new ClamdError("bad_reply")
 }
 
-/** zVERSION: clamd's version line, such as `ClamAV 1.5.4/28181/<date of the signatures>`. */
 export async function version(target: ClamdTarget, limits: ExchangeLimits): Promise<string> {
   const reply = await exchange(target, limits, (socket, finished) =>
     write(socket, Buffer.from("zVERSION\0", "latin1"), finished),

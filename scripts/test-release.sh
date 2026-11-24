@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Tests for scripts/release.sh: real git against a local bare remote, with docker and gh replaced by
-# stand-ins that keep the registry and the GitHub Releases in files and fail on request. Covers a
-# release, its refusals, each way a run can stop halfway, and the run after it. No network. Run by
-# scripts/lib/guards.sh (inside the toolchain container) or on its own.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,8 +20,6 @@ check() {
     [ -f "$WORK/case/out" ] && sed 's/^/      | /' "$WORK/case/out"
   fi
 }
-
-# --- stand-ins -------------------------------------------------------------------------------
 
 mkdir -p "$WORK/bin"
 cat >"$WORK/bin/docker" <<'EOF'
@@ -98,9 +92,6 @@ exit 2
 EOF
 chmod +x "$WORK/bin/docker" "$WORK/bin/gh"
 
-# --- sandbox ---------------------------------------------------------------------------------
-
-# A fresh origin with one commit on main and a fresh registry and Releases; prints nothing.
 sandbox() {
   rm -rf "$WORK/case"
   mkdir -p "$WORK/case/images" "$WORK/case/releases"
@@ -121,7 +112,6 @@ sandbox() {
   git -C "$seed" push --quiet origin main
 }
 
-# A new checkout of origin's main, as each workflow run makes; prints its path.
 checkout() {
   local dir
   dir="$(mktemp -d "$WORK/case/run.XXXX")"
@@ -131,13 +121,11 @@ checkout() {
 
 origin_head() { git -C "$WORK/case/origin.git" rev-parse main; }
 
-# Runs release.sh with the given arguments in the checkout DIR (a new one unless DIR is set).
 run_in() {
   local dir="${DIR:-$(checkout)}"
   (cd "$dir" && PATH="$WORK/bin:$PATH" bash scripts/release.sh "$@") >"$WORK/case/out" 2>&1
 }
 
-# Runs a release in a new checkout, verified at origin's current main unless EXPECT is set.
 release() {
   run_in --target ghcr --bump "${BUMP:-minor}" --skip-verify --expect-sha "${EXPECT:-$(origin_head)}"
 }
@@ -156,8 +144,6 @@ complete() {
   rev="$(tag_rev "v$1")"
   [ "$(image_rev "$1")" = "$rev" ] && [ "$(image_rev latest)" = "$rev" ] && has_release "v$1"
 }
-
-# --- a release and the next one --------------------------------------------------------------
 
 sandbox
 release
@@ -185,8 +171,6 @@ check "the next run releases 0.1.1 with --bump patch" complete 0.1.1
 check "0.1.1's notes hold only its own entries" [ "$(sed -n '2,$p' "$STATE/releases/v0.1.1")" = "$(printf '### Fixed\n\n- A fix.')" ]
 check "0.1.0 is left as it was" [ "$(image_rev 0.1.0)" = "$(tag_rev v0.1.0)" ]
 check ":latest is 0.1.1" [ "$(image_rev latest)" = "$(tag_rev v0.1.1)" ]
-
-# --- refusals before anything changes --------------------------------------------------------
 
 sandbox
 run_in --bump minor
@@ -260,8 +244,6 @@ release
 check "an empty Unreleased section stops the run" [ $? -ne 0 ]
 check "  with a clear reason" said "no entries under \[Unreleased\]"
 
-# --- dry run ---------------------------------------------------------------------------------
-
 sandbox
 dir="$(checkout)"
 before="$(git -C "$dir" rev-parse HEAD) $(git -C "$dir" status --porcelain | wc -l)"
@@ -278,8 +260,6 @@ MOCK_FAIL_BUILD=1 release
 DIR="$(checkout)" run_in --target ghcr --bump major --dry-run
 check "a dry run after a stopped run says it would finish that version" said "Would finish v0.1.0"
 check "  and publishes nothing" [ ! -e "$STATE/images/ghcr.io_shlomiporush_maane_0.1.0" ]
-
-# --- a run that stopped halfway, and the next run --------------------------------------------
 
 sandbox
 printf '#!/bin/sh\nexit 1\n' >"$WORK/case/origin.git/hooks/pre-receive" && chmod +x "$WORK/case/origin.git/hooks/pre-receive"
@@ -338,8 +318,6 @@ MOCK_GH_DOWN=1 release
 check "GitHub that cannot be read stops the run" [ $? -ne 0 ]
 check "  and starts no new version" lacks_tag v0.2.0
 
-# --- one run at a time -----------------------------------------------------------------------
-
 lock_rev() { git -C "$WORK/case/origin.git" rev-parse -q --verify refs/maane/release-lock; }
 no_lock() { [ -z "$(lock_rev)" ]; }
 
@@ -349,7 +327,6 @@ check "a finished release leaves no lock on origin" no_lock
 BUMP=patch MOCK_FAIL_BUILD=1 release
 check "a run that stops removes its lock too" no_lock
 
-# Another run holds the lock: this one stops before it looks at anything.
 sandbox
 other="$(checkout)"
 held="$(git -C "$other" commit-tree "$(git -C "$other" hash-object -t tree -w /dev/null)" -m "another run")"
@@ -366,8 +343,6 @@ git -C "$other" push --quiet origin --delete refs/maane/release-lock
 release
 check "once the lock is gone, the release runs" complete 0.1.0
 
-# --- release_notes on its own ----------------------------------------------------------------
-
 # shellcheck source=scripts/release.sh
 source "$REPO/scripts/release.sh"
 set +e
@@ -379,13 +354,8 @@ check "notes: a section twice fails" grep -q "found 2" <(notes 1.0.0 "$(printf '
 check "notes: a section of headings only fails" grep -q "has no entries" <(notes 1.0.0 "$(printf '## [1.0.0] - 2026-01-02\n\n### Added\n\n')")
 check "notes: 1.0.0 does not match 1.0.01" grep -q "found 0" <(notes 1.0.0 "## [1.0.01] - 2026-01-02")
 
-# --- the lock on its own ---------------------------------------------------------------------
-
-# Two runs with the same pid in the same second (as on two machines) still make different lock commits: the second
-# is refused instead of finding its own commit already there.
 sandbox
 REPO_ROOT="$(checkout)"
-# The clock is fixed, as two machines in the same second would see it, so only the nonce can tell the runs apart.
 lock_once() {
   (
     date() { echo 2026-01-01T00:00:00Z; }
@@ -400,10 +370,6 @@ check "lock: a second run with the same pid in the same second is refused" [ -z 
 check "lock: the refusal leaves the first run's lock" [ "$(lock_rev)" = "$first" ]
 REPO_ROOT="$REPO"
 
-# --- the repository's own files --------------------------------------------------------------
-
-# The sandbox above uses its own package.json and CHANGELOG; these are the ones a real release reads. Unreleased may
-# be empty (right after a release), so only the format is checked.
 check "package.json: release.sh reads its version" [ -n "$(version_in <"$REPO/package.json")" ]
 check "CHANGELOG.md: the first section is ## [Unreleased], once" \
   [ "$(grep -E '^## ' "$REPO/CHANGELOG.md" | head -1)|$(grep -cxF '## [Unreleased]' "$REPO/CHANGELOG.md")" = "## [Unreleased]|1" ]

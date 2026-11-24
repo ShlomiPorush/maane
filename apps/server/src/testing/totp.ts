@@ -1,8 +1,5 @@
 import { createHmac } from "node:crypto"
 
-// RFC 6238 TOTP (SHA-1, 6 digits, 30-second steps), as authenticator apps compute it. Written here, not taken from
-// Better Auth, so the tests check its codes against an independent implementation.
-
 function base32Decode(input: string): Buffer {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
   let bits = ""
@@ -25,5 +22,4 @@ export function totp(secret: string, time = Date.now()): string {
   return code.toString().padStart(6, "0")
 }
 
-/** The base32 secret of an otpauth:// URI. */
 export const secretOf = (uri: string) => new URL(uri).searchParams.get("secret") ?? ""

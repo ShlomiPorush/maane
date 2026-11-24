@@ -1,18 +1,9 @@
 import { expect, type Page, test } from "@playwright/test"
 import { he, signIn } from "./helpers.ts"
 
-// A reply through the composer (plan 3.1), against the stack's worker with stand-in SMTP servers in its own process
-// (apps/worker/src/testing/stack-worker.ts, started by scripts/verify.sh for these tests): a Hebrew paragraph and an
-// English one, each taking its own direction in the editor, and a file uploaded and scanned by the real ClamAV. The
-// reply is sent through SMTP2GO's stand-in and accepted; verify.sh then checks what the stand-in received. Then an
-// internal note. The composer's default action sets the ticket to pending (plan 4.1); the test sets it back to open
-// through the status control, so the ticket stays in the list's default view for the tests after it. Maane is live from
-// the first moment (phase 6), so there is no mode to switch; the reply needs the default address organizations.spec.ts
-// made. Every Content Security Policy violation fails the test.
 test.describe.configure({ mode: "serial" })
 
 const BETA_SUBJECT = "Question for Beta"
-// "Shalom olam", from code points: only he.json holds Hebrew.
 const SHALOM_OLAM = `${String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)} ${String.fromCodePoint(0x5e2, 0x5d5, 0x5dc, 0x5dd)}`
 const ENGLISH = "The English paragraph of this reply."
 
@@ -47,7 +38,6 @@ test.describe("desktop", () => {
     await page.keyboard.type(SHALOM_OLAM)
     await page.keyboard.press("Enter")
     await page.keyboard.type(ENGLISH)
-    // Each paragraph takes the direction of its first letter.
     await expect(editor.locator("p")).toHaveCount(2)
     const directions = await editor
       .locator("p")
@@ -70,11 +60,9 @@ test.describe("desktop", () => {
     await composer.getByTestId("composer-send").click()
     await expect(page.getByText(he("compose.replyQueuedPending"))).toBeVisible()
     await expect(editor.locator("p")).toHaveCount(1)
-    // Send and set pending: the status changed with the reply, before the worker sent it.
     const status = page.getByTestId("ticket-status")
     await expect(status).toHaveValue("pending")
 
-    // The worker sends it; the page shows each recipient's state once it reads the ticket again.
     const reply = page.locator('.ui-message[data-direction="out"]').last()
     await expect(async () => {
       await page.reload()
@@ -87,14 +75,12 @@ test.describe("desktop", () => {
     await expect(body.getByText(SHALOM_OLAM)).toBeVisible()
     await expect(body.getByText(ENGLISH)).toBeVisible()
 
-    // An internal note: never sent, shown apart.
     await composer.locator('button[data-kind="note"]').click()
     await editor.click()
     await page.keyboard.type("A note for the team.")
     await composer.getByTestId("composer-send").click()
     await expect(page.getByText(he("compose.noteAdded"))).toBeVisible()
     await expect(page.locator('.ui-message[data-direction="note"]').last()).toContainText(he("ticket.direction.note"))
-    // A note leaves the status; the status control sets it back to open.
     await expect(status).toHaveValue("pending")
     await status.selectOption("open")
     await expect(status).toHaveValue("open")

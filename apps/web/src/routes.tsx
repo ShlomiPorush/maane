@@ -1,6 +1,3 @@
-// Every page and its address. guards.test.ts reads PAGES and fails on a page module that registers no refresh of its
-// own (v3 SV-10), unless it is listed there with its reason.
-
 import type { ComponentType } from "react"
 import { createBrowserRouter, type RouteObject } from "react-router"
 import { AccountPage } from "./pages/AccountPage.tsx"
@@ -23,7 +20,6 @@ import { Shell } from "./shell/Shell.tsx"
 
 type PageRoute = { id: string; path: string; Component: ComponentType }
 
-/** The pages inside the shell: they need a full session (two-factor on). */
 export const PAGES: readonly PageRoute[] = [
   { id: "home", path: "/", Component: TicketsPage },
   { id: "ticket", path: "/tickets/:number", Component: TicketPage },

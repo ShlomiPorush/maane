@@ -1,22 +1,14 @@
-// MIME fixtures for intake tests, built at run time. Hebrew never appears as a literal in a tracked file: it is built
-// from code points here and encoded as each test needs (UTF-8, Windows-1255, quoted-printable, base64, encoded words,
-// RFC 2231 file names). Addresses use example.com.
-
 import { randomBytes } from "node:crypto"
 import iconv from "iconv-lite"
 
-/** Text from code points (Hebrew letters are U+05D0 to U+05EA). */
 export const fromCodePoints = (...points: number[]) => String.fromCodePoint(...points)
 
-/** A Hebrew word ("shalom"), a phrase ("shalom olam"), and a file name stem ("hashbonit", an invoice). */
 export const SHALOM = fromCodePoints(0x5e9, 0x5dc, 0x5d5, 0x5dd)
 export const SHALOM_OLAM = `${SHALOM} ${fromCodePoints(0x5e2, 0x5d5, 0x5dc, 0x5dd)}`
 export const INVOICE = fromCodePoints(0x5d7, 0x5e9, 0x5d1, 0x5d5, 0x5e0, 0x5d9, 0x5ea)
 
-/** Windows-1255 bytes of a text, encoded by iconv-lite (a devDependency of this package). */
 export const windows1255 = (text: string): Buffer => iconv.encode(text, "windows-1255")
 
-/** Quoted-printable (RFC 2045) of bytes, CRLF line ends kept as hard breaks, soft breaks under 76 characters. */
 export function quotedPrintable(bytes: Buffer): string {
   const lines: string[] = []
   for (const line of bytes.toString("latin1").split("\r\n")) {
@@ -33,16 +25,13 @@ export function quotedPrintable(bytes: Buffer): string {
       out += piece
       width += piece.length
     }
-    // A space at the end of a line would be lost in transport.
     lines.push(out.endsWith(" ") ? `${out.slice(0, -1)}=20` : out)
   }
   return lines.join("\r\n")
 }
 
-/** Base64 in lines of 76 characters. */
 export const base64Lines = (bytes: Buffer) => (bytes.toString("base64").match(/.{1,76}/g) ?? [""]).join("\r\n")
 
-/** An RFC 2047 encoded word of UTF-8 text (B or Q). */
 export function encodedWord(text: string, encoding: "B" | "Q" = "B"): string {
   const bytes = Buffer.from(text, "utf8")
   if (encoding === "B") return `=?UTF-8?B?${bytes.toString("base64")}?=`
@@ -54,14 +43,11 @@ export function encodedWord(text: string, encoding: "B" | "Q" = "B"): string {
   return `=?UTF-8?Q?${q}?=`
 }
 
-/** An RFC 2231 parameter value of UTF-8 text: `UTF-8''%D7%A9...`. */
 export const rfc2231 = (text: string) =>
   `UTF-8''${[...Buffer.from(text, "utf8")].map((byte) => `%${byte.toString(16).toUpperCase().padStart(2, "0")}`).join("")}`
 
 export interface Body {
-  /** The decoded content. */
   content: string | Buffer
-  /** `utf-8` (text is encoded as UTF-8) or `windows-1255` (text is encoded with windows1255()). */
   charset?: "utf-8" | "windows-1255"
   encoding?: "base64" | "quoted-printable" | "8bit" | "7bit"
 }
@@ -75,23 +61,18 @@ export interface Attachment {
 }
 
 export interface MimeOptions {
-  /** Without brackets; null for a message with no Message-ID. Default: a new one. */
   messageId?: string | null
   from?: string
   to?: string
   cc?: string
-  /** The header value as written (an encoded word stays as given). */
   subject?: string
-  /** The Date header as written; null for none. */
   date?: string | null
   inReplyTo?: string
   references?: string[]
-  /** More header lines, as written. */
   headers?: [string, string][]
   text?: Body
   html?: Body
   attachments?: Attachment[]
-  /** A whole multipart/report instead of a body: its report type and its parts, as written. */
   report?: { type: string; parts: { contentType: string; body: string }[] }
 }
 
@@ -133,7 +114,6 @@ function multipart(type: string, parts: string[]): string {
   return `Content-Type: ${type}; boundary="${mark}"\r\n\r\n${parts.map((part) => `--${mark}\r\n${part}`).join("")}--${mark}--\r\n`
 }
 
-/** A whole message as bytes (CRLF line ends). */
 export function mime(options: MimeOptions = {}): Buffer {
   const messageId =
     options.messageId === undefined ? `${randomBytes(8).toString("hex")}@mail.example.com` : options.messageId

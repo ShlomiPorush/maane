@@ -1,5 +1,3 @@
-// An address that names no page: it says so and leads home; the address stays as typed.
-
 import { Link } from "react-router"
 import { useI18n } from "../i18n/i18n.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"

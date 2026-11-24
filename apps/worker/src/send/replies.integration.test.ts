@@ -36,16 +36,10 @@ import type { SmtpTimeouts } from "./smtp.ts"
 import { smtpTest } from "./test.ts"
 import { scanUpload } from "./uploads.ts"
 
-// Replies that send (plan 3.1), from the composer's API to the stand-in SMTP servers and back through intake: the
-// server app and the worker's sender on one migrated database, the intake harness (stand-in Graph and clamd, a file
-// store in a temporary directory), and two stand-in SMTP servers: SMTP2GO (STARTTLS, outcomes by recipient) and the
-// failover (TLS from the first byte, accepts everything). Nothing leaves this process.
-
 const QUICK: SmtpTimeouts = { connection: 2000, greeting: 1500, socket: 3000, setup: 4000, send: 5000 }
 const SUPPORT = "support@example.com"
 const OTHER = "billing@example.com"
 const BOUNCE = "bounce@example.com"
-// Hebrew from code points: "shalom" and "toda" (thanks).
 const SHALOM = fromCodePoints(0x5e9, 0x5dc, 0x5d5, 0x5dd)
 const TODA = fromCodePoints(0x5ea, 0x5d5, 0x5d3, 0x5d4)
 
@@ -87,7 +81,6 @@ afterEach(async () => {
   await h.close()
 })
 
-/** The worker's settings: the stand-ins' addresses and credentials, given to this process only. */
 function workerSettings(values: Partial<Record<SettingKey, string>> = {}) {
   return new Settings(h.database.db, createSettingsCipher([{ version: 1, value: h.cipherKey }]), {
     "smtp2go.host": smtp2go.host,
@@ -139,7 +132,6 @@ async function newAgent(admin: TestBrowser, name: string) {
   return { b, id: created.json.user.id as string }
 }
 
-/** A customer's message through intake: returns its ticket's number and the message's own Message-ID. */
 async function customerTicket(subject = "A question", messageId = `${randomUUID()}@mail.example.com`) {
   const graphId = h.graph.add(
     mime({ messageId, subject, from: "Dana Customer <dana@example.com>", to: SUPPORT, text: { content: SHALOM } }),
@@ -150,7 +142,6 @@ async function customerTicket(subject = "A question", messageId = `${randomUUID(
   return { number: found.number, referenceCode: found.referenceCode, messageId }
 }
 
-/** The multipart upload the composer makes, with the browser's cookies and the headers /api/v1 needs. */
 async function uploadFile(b: TestBrowser, name: string, bytes: Buffer): Promise<{ status: number; json: any }> {
   const form = new FormData()
   form.set("file", new File([new Uint8Array(bytes)], name, { type: "application/octet-stream" }))
@@ -169,7 +160,6 @@ async function uploadFile(b: TestBrowser, name: string, bytes: Buffer): Promise<
   return { status: response.status, json: await response.json() }
 }
 
-/** Uploads and scans a file as the worker would; returns the upload's ID. */
 async function scanned(b: TestBrowser, name: string, bytes: Buffer): Promise<string> {
   const uploaded = await uploadFile(b, name, bytes)
   expect(uploaded.status).toBe(202)
@@ -197,7 +187,6 @@ async function view(b: TestBrowser, number: number): Promise<TicketView> {
 
 const deliveryOf = (v: TicketView, id: string) => v.messages.find((m) => m.id === id)?.delivery
 
-/** Whether another session waits on a row lock within five seconds: bounded, so one that never waits fails. */
 async function someoneWaits(): Promise<boolean> {
   for (let tries = 0; tries < 200; tries++) {
     const result = await h.database.db.execute<{ n: number }>(
@@ -232,7 +221,6 @@ describe("a reply, end to end", () => {
     expect(written.status, JSON.stringify(written.json)).toBe(201)
     const id = written.json.id as string
 
-    // The message and its job were written together.
     const [job] = await boss.fetch<{ messageId: string }>(SEND_REPLY)
     expect(job?.data.messageId).toBe(id)
     expect(await sender().send(id)).toBe("accepted")
@@ -245,7 +233,6 @@ describe("a reply, end to end", () => {
     expect(parsed.subject).toBe(`Re: A question [#${ticket.number}]`)
     expect(parsed.inReplyTo).toBe(`<${ticket.messageId}>`)
     expect(parsed.from?.value).toEqual([{ address: SUPPORT, name: "first.admin (Example Support)" }])
-    // The header line, then the reference code isolated left to right (U+2066 ... U+2069).
     const [header, reference] = (parsed.text ?? "").split(/\r?\n/)
     expect(header).toBe(MESSAGES.he.mail.header)
     expect(reference).toBe(
@@ -254,7 +241,6 @@ describe("a reply, end to end", () => {
     expect(parsed.text).toContain(`${SHALOM}, ${TODA}`)
     expect(parsed.text).toContain("The English paragraph.")
     expect(parsed.html).toContain(`<span dir="ltr">${ticket.referenceCode}</span>`)
-    // The direction of each paragraph, set by the server.
     expect(parsed.html).toContain(`<p dir="rtl">${SHALOM}, ${TODA}</p>`)
     expect(parsed.html).toContain('<p dir="ltr">The English paragraph.</p>')
     expect(parsed.html).not.toContain('dir="auto"')
@@ -262,7 +248,6 @@ describe("a reply, end to end", () => {
     expect(parsed.attachments.map((a) => [a.filename, a.content.toString()])).toEqual([
       ["notes.txt", "The notes of the meeting.\n"],
     ])
-    // A customer's client finds the ticket again by the reference code and the subject number intake reads.
     expect(referenceCodesIn(parsed.text ?? "")).toContain(ticket.referenceCode)
     expect(ticketNumbersIn(parsed.subject ?? "")).toEqual([ticket.number])
 
@@ -279,7 +264,6 @@ describe("a reply, end to end", () => {
       },
     })
     expect(out?.attachments.map((a) => a.fileName)).toEqual(["notes.txt"])
-    // A reply without "set pending" leaves the status as it is (plan 4.1).
     expect(after.ticket.status).toBe("new")
     const [recipient] = await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id))
     expect(recipient?.response).toContain(`OK id=${sent.queueId}`)
@@ -287,14 +271,12 @@ describe("a reply, end to end", () => {
 
   it("quotes the ticket's public history in the layout: newest first, never a note or a reply nobody accepted", async () => {
     const admin = await firstAdmin()
-    // A Hebrew customer message with a large inline screenshot.
     const graphId = h.graph.add(
       mime({
         messageId: `${randomUUID()}@mail.example.com`,
         subject: "A screenshot",
         from: "Dana Customer <dana@example.com>",
         to: SUPPORT,
-        // The screenshot named percent-encoded (RFC 2392), as some clients write it; the photo over one image's limit.
         html: {
           content: `<p>${SHALOM}</p><p><img src="cid:shot%40mail.example.com" alt="shot"></p><p><img src="cid:big@mail.example.com"></p>`,
         },
@@ -320,7 +302,6 @@ describe("a reply, end to end", () => {
     await h.round()
     const found = await h.ticketOf(graphId)
     if (!found) throw new Error("no ticket")
-    // The photo as if it were 6 MB: decided from its stored size, shown by name, never read.
     const [big] = await h.database.db
       .select({ sha256: messagePart.storedSha256 })
       .from(messagePart)
@@ -350,7 +331,6 @@ describe("a reply, end to end", () => {
     const quote = html.indexOf('<blockquote type="cite"')
     expect(html.indexOf(found.referenceCode)).toBeLessThan(html.indexOf('class="email-avatar"'))
     expect(html.indexOf(`<p dir="rtl">${TODA}</p>`)).toBeLessThan(quote)
-    // Newest first: the accepted reply, then the customer's message.
     expect(html.indexOf("The first answer.")).toBeGreaterThan(quote)
     expect(html.indexOf(`<p dir="rtl">${SHALOM}</p>`)).toBeGreaterThan(html.indexOf("The first answer."))
     expect(html).not.toContain("An internal note")
@@ -358,8 +338,6 @@ describe("a reply, end to end", () => {
     expect(html).not.toContain('dir="auto"')
     expect(html).toContain('<span dir="ltr">invoice.pdf</span>')
     expect(html).toContain("<span>[big.png]</span>")
-    // The screenshot, downscaled and embedded, shown no wider than the history's column; an image alone stays right to
-    // left.
     const image =
       /<p dir="rtl"><img alt="shot" src="cid:([^"]+)" width="586" height="147" style="width:586px;max-width:100%;height:auto;border:0" \/><\/p>/.exec(
         html,
@@ -398,7 +376,6 @@ describe("a reply, end to end", () => {
     if (!sent) throw new Error("nothing reached the stand-in")
     const parsed = await simpleParser(sent.raw)
     const out = parsed.html || ""
-    // The public URL's origin, as no link domain is set.
     const tracked = /<a href="(http:\/\/127\.0\.0\.1:8090\/l\/[A-Za-z0-9_-]{22})"[^>]*>the guide<\/a>/.exec(out)
     const download =
       /<a href="(http:\/\/127\.0\.0\.1:8090\/f\/[A-Za-z0-9_-]{22})"[^>]*><span dir="ltr">invoice\.pdf<\/span><\/a>/.exec(
@@ -408,7 +385,6 @@ describe("a reply, end to end", () => {
     expect(download, out).not.toBeNull()
     expect(out).toContain('href="mailto:help@example.com"')
     expect(out).not.toContain("https://www.example.com/guide")
-    // The text part keeps the agent's link and names the file only.
     expect(parsed.text).toContain("https://www.example.com/guide")
     expect(parsed.text).not.toContain("127.0.0.1:8090/")
 
@@ -438,7 +414,6 @@ describe("a reply, end to end", () => {
       },
     ])
 
-    // With a link domain and tracking off: the agent's link as written, the history file's link on that domain.
     const settings = await admin.call("PUT", "/api/v1/settings", {
       "links.tracking": "off",
       "links.domain": "links.example.com",
@@ -466,7 +441,6 @@ describe("a reply, end to end", () => {
     if (!found) throw new Error("no ticket")
     const part = (await view(admin, found.number)).messages[0]?.attachments[0]
     if (!part) throw new Error("no part")
-    // The stored file as the provider would see it: larger than its limit once encoded. No byte is read for this.
     await h.database.db.update(storedFile).set({ size: MESSAGE_MAX_BYTES })
     const before = (await h.database.db.select({ id: message.id }).from(message)).length
     const answer = await admin.call("POST", `/api/v1/tickets/${found.number}/messages`, reply({ parts: [part.id] }))
@@ -504,7 +478,6 @@ describe("what a reply may carry and come from", () => {
       b.call("POST", `/api/v1/tickets/${ticket.number}/messages`, reply(values))
     expect((await post(admin, { uploads: [theirs] })).json).toEqual({ error: "attachment_invalid" })
     expect((await post(agent, { uploads: [mine] })).json).toEqual({ error: "attachment_invalid" })
-    // A part of another ticket's message.
     const otherNote = await admin.call(
       "POST",
       `/api/v1/tickets/${other.number}/messages`,
@@ -514,10 +487,8 @@ describe("what a reply may carry and come from", () => {
       ?.id
     expect(otherPart).toBeTruthy()
     expect((await post(admin, { parts: [otherPart] })).json).toEqual({ error: "attachment_invalid" })
-    // Still scanning: not attachable yet.
     const pending = await uploadFile(admin, "late.txt", Buffer.from("late"))
     expect((await post(admin, { uploads: [pending.json.id] })).json).toEqual({ error: "attachment_invalid" })
-    // A file of an internal note of the same ticket never goes to a customer.
     const ownNote = await admin.call(
       "POST",
       `/api/v1/tickets/${ticket.number}/messages`,
@@ -527,13 +498,11 @@ describe("what a reply may carry and come from", () => {
       ?.id
     expect(notePart).toBeTruthy()
     expect((await post(admin, { parts: [notePart] })).json).toEqual({ error: "attachment_invalid" })
-    // Its own upload and a file of an earlier reply are fine.
     const firstReply = await post(admin, { uploads: [mine] })
     expect(firstReply.status).toBe(201)
     const replyPart = (await view(admin, ticket.number)).messages.find((m) => m.id === firstReply.json.id)
       ?.attachments[0]?.id
     expect((await post(admin, { uploads: [mine], parts: [replyPart] })).status).toBe(201)
-    // An upload is its uploader's alone, also to read.
     expect((await agent.call("GET", `/api/v1/uploads/${mine}`)).status).toBe(404)
     expect((await admin.call("GET", `/api/v1/uploads/${mine}`)).json).toMatchObject({ status: "clean" })
   })
@@ -548,7 +517,6 @@ describe("what a reply may carry and come from", () => {
     expect((await post({ from: null })).json).toEqual({ error: "from_not_allowed" })
     expect((await post({ to: [] })).json).toEqual({ error: "recipients_required" })
     expect((await post({ to: [{ address: "not an address", name: null }] })).status).toBe(400)
-    // Written, then the address leaves the organization before the worker sends.
     const extra = "help@example.com"
     await h.database.db.insert(supportAddress).values({ organizationId: org, kind: "exact", value: extra })
     const written = await post({ from: extra })
@@ -590,7 +558,6 @@ describe("what a reply may carry and come from", () => {
     await organizations.removeMember(org, id, { actor: SYSTEM, ipAddress: null })
     expect(await sender().send(written.json.id)).toBe("failed")
     expect(deliveryOf(await view(admin, ticket.number), written.json.id)?.problem).toBe("author_not_allowed")
-    // Out of the organization, the agent cannot reach the ticket at all.
     expect((await agent.call("POST", `/api/v1/tickets/${ticket.number}/messages`, reply())).status).toBe(404)
   })
 })
@@ -618,7 +585,6 @@ describe("what each provider's answer means", () => {
     ])
     expect(failover.received.length).toBe(before + 1)
     expect(failover.received.at(-1)).toMatchObject({ from: BOUNCE, to: ["refuse.ron@example.com"] })
-    // Ron, whom the agent added, became a participant once accepted.
     const ticketRow = await h.tickets()
     expect(await h.participantsOf(ticketRow[0]?.id ?? "")).toContain("refuse.ron@example.com")
   })
@@ -655,14 +621,12 @@ describe("what each provider's answer means", () => {
     ])
     expect(failover.received.length).toBe(failoverBefore)
 
-    // "Send again": two clicks queue one attempt.
     const [first, second] = await Promise.all([
       result.admin.call("POST", `/api/v1/messages/${result.id}/resend`),
       result.admin.call("POST", `/api/v1/messages/${result.id}/resend`),
     ])
     expect([first?.status, second?.status].sort()).toEqual([200, 409])
     expect(await sender().send(result.id)).toBe("unknown")
-    // "Mark as sent", one recipient at a time: the other stays unknown, and so does the reply.
     const mark = (address?: string) =>
       result.admin.call("POST", `/api/v1/messages/${result.id}/mark-sent`, address === undefined ? {} : { address })
     expect((await mark()).status).toBe(400)
@@ -684,7 +648,6 @@ describe("what each provider's answer means", () => {
       ],
     })
     expect((await mark("drop.dana@example.com")).json).toEqual({ error: "reply_not_unknown" })
-    // Marked as sent, Ron (whom the agent added) is a participant, as one a provider accepted would be.
     expect(await h.participantsOf((await h.tickets())[0]?.id ?? "")).toEqual(
       expect.arrayContaining(["drop.dana@example.com", "ron@example.com"]),
     )
@@ -731,7 +694,6 @@ describe("attempts that overlap", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve
     })
-    // The first attempt claims, then stops before it sends, as a stalled worker would.
     const first = sender(
       {},
       {
@@ -742,13 +704,11 @@ describe("attempts that overlap", () => {
       },
     ).send(id)
     await paused
-    // A redelivered job finds it `sending` and marks it unknown; the agent sends again; a second attempt sends.
     expect(await sender().send(id)).toBe("unknown")
     expect((await admin.call("POST", `/api/v1/messages/${id}/resend`)).status).toBe(200)
     expect(await sender().send(id)).toBe("accepted")
     const received = smtp2go.received.length + failover.received.length
     const [after] = await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id))
-    // The first attempt goes on: it sends nothing and writes nothing.
     release()
     await first
     expect(smtp2go.received.length + failover.received.length).toBe(received)
@@ -769,7 +729,6 @@ describe("attempts that overlap", () => {
     const id = written.json.id as string
     const received = smtp2go.received.length + failover.received.length
     let sent: Promise<unknown> = Promise.resolve()
-    // A move holds the ticket row as Workflow.move does (FOR UPDATE) while the sender claims the reply.
     await h.database.db.transaction(async (tx) => {
       await tx
         .select({ id: ticketTable.id })
@@ -778,7 +737,6 @@ describe("attempts that overlap", () => {
         .for("update")
       await tx.update(ticketTable).set({ organizationId: otherOrg }).where(eq(ticketTable.number, ticket.number))
       sent = sender().send(id)
-      // The claim waits on the ticket's lock: bounded, and a claim that does not wait fails here.
       let waiting = false
       for (let tries = 0; tries < 200 && !waiting; tries++) {
         const result = await h.database.db.execute<{ n: number }>(
@@ -789,7 +747,6 @@ describe("attempts that overlap", () => {
       }
       expect(waiting).toBe(true)
     })
-    // Moved: the support address belongs to the old organization, so the send point refuses and sends nothing.
     expect(await sent).toBe("failed")
     expect(deliveryOf(await view(admin, ticket.number), id)).toMatchObject({
       state: "failed",
@@ -825,7 +782,6 @@ describe("attempts that overlap", () => {
       const before = { recipients: await recipients(), participants: await h.participantsOf(ticketId) }
       expect(before.participants).not.toContain("ron@example.com")
       let answer: Promise<{ status: number; json: unknown }> = Promise.resolve({ status: 0, json: null })
-      // A move holds the ticket row as Workflow.move does (FOR UPDATE) while the agent of the old organization acts.
       await h.database.db.transaction(async (tx) => {
         await tx.select({ id: ticketTable.id }).from(ticketTable).where(eq(ticketTable.id, ticketId)).for("update")
         await tx.update(ticketTable).set({ organizationId: otherOrg }).where(eq(ticketTable.id, ticketId))
@@ -839,7 +795,6 @@ describe("attempts that overlap", () => {
       const result = await answer
       expect(result.status).toBe(404)
       expect(result.json).toEqual({ error: "not_found" })
-      // Nothing written to the moved ticket: no recipient, state, participant, delivery flag, or audit row changed.
       expect(await recipients()).toEqual(before.recipients)
       expect(await h.participantsOf(ticketId)).toEqual(before.participants)
       const [row] = await h.database.db.select({ state: outbox.state }).from(outbox).where(eq(outbox.messageId, id))
@@ -865,9 +820,6 @@ describe("attempts that overlap", () => {
       .where(eq(ticketTable.number, ticket.number))
     const ticketId = ticketRow?.id ?? ""
     let sent: Promise<unknown> = Promise.resolve()
-    // The webhook's order (applyDeliveryEvent): a recipient row first, then the ticket FOR NO KEY UPDATE for its flag.
-    // The claim meanwhile holds the outbox row and the ticket, and waits for that recipient row. With a ticket lock
-    // that conflicts with FOR NO KEY UPDATE (FOR SHARE) the two would deadlock and PostgreSQL would abort one.
     await h.database.db.transaction(async (tx) => {
       await tx.update(outboxRecipient).set({ deliveryRecordedAt: sql`now()` }).where(eq(outboxRecipient.messageId, id))
       sent = sender().send(id)
@@ -890,11 +842,9 @@ describe("intake knows what Maane sent", () => {
       .where(eq(message.id, written.json.id))
     if (!ours?.id) throw new Error("the reply has no Message-ID")
 
-    // The customer answers our reply: no reference code, no [#n], only In-Reply-To.
     const answer = h.graph.add(
       mime({ subject: "Thanks", from: "Dana Customer <dana@example.com>", to: SUPPORT, inReplyTo: ours.id }),
     )
-    // Our own reply comes back into the mailbox, as a provider's copy would.
     const sent = smtp2go.received.at(-1)
     if (!sent) throw new Error("nothing was sent")
     const echo = h.graph.add(sent.raw)

@@ -1,12 +1,8 @@
-// The small parts the ticket list, the ticket view, and the intake log share: a ticket number, a sender, the status
-// and review tags, and a scan status in words. The word is the status; its colour only reinforces it (FB-14).
-
 import type { MailAddress, PartStatus, TicketStatus } from "@maane/shared"
 import { formatListTime } from "../../format/datetime.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { Tag, type Tone } from "../../ui/tags.tsx"
 
-/** The tone of each scan status: kept and clean is ok, blocked is a failure, anything not proven clean a warning. */
 export const SCAN_TONE: Record<PartStatus, Tone> = {
   clean: "ok",
   infected: "fail",
@@ -18,7 +14,6 @@ export const SCAN_TONE: Record<PartStatus, Tone> = {
   unavailable: "neutral",
 }
 
-/** "#123", isolated left to right so its sign stays before the digits in a right-to-left line. */
 export function TicketNumber({ number }: { number: number }) {
   return (
     <bdi className="ui-ticket-num ui-mono" dir="ltr">
@@ -27,7 +22,6 @@ export function TicketNumber({ number }: { number: number }) {
   )
 }
 
-/** A sender: the display name, or the address (in mono, left to right) when there is no name. */
 export function Sender({
   sender,
   unknownKey = "tickets.unknownSender",
@@ -45,7 +39,6 @@ export function Sender({
   )
 }
 
-/** A name and its address: "Dana Customer <dana@example.com>" with the address in mono, left to right. */
 export function AddressLine({ value }: { value: MailAddress }) {
   return (
     <span className="ui-address">
@@ -68,7 +61,6 @@ export function TicketTags({
 }: {
   status: TicketStatus
   flags: string[]
-  /** Plan 4.2: a snoozed ticket says until when. */
   snoozedUntil?: string | null
 }) {
   const { t } = useI18n()

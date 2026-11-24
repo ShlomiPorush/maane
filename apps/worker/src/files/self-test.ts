@@ -4,10 +4,6 @@ import type { ScannerCheck } from "@maane/shared"
 import { CLEAN_SAMPLE, ENCRYPTED_PDF, ENCRYPTED_ZIP, eicar } from "./samples.ts"
 import { PROBE_DEADLINE_MS, SAMPLE_DEADLINE_MS, type Scanner, type Verdict } from "./scanner.ts"
 
-// The scanner contract (plan 2.2): "clean" is trusted only from a scanner that passed this self-test. It runs on
-// worker start, every hour, when the scanner address changes, and for a connection test from Settings. A scanner that
-// fails it counts as unavailable, and the Settings page names the check that failed.
-
 export interface SelfTestResult {
   address: string
   ok: boolean
@@ -20,7 +16,6 @@ const ENCRYPTED = /^Heuristics\.Encrypted\./
 
 const encrypted = (verdict: Verdict) => verdict.kind === "not_fully_scanned" && ENCRYPTED.test(verdict.signature)
 
-/** The sample checks after `connection`, in the order of SCANNER_CHECKS: each sample and the verdict it needs. */
 export const SAMPLE_CHECKS: readonly {
   check: ScannerCheck
   sample: () => Uint8Array
@@ -32,7 +27,6 @@ export const SAMPLE_CHECKS: readonly {
   { check: "clean", sample: () => CLEAN_SAMPLE, passes: (verdict) => verdict.kind === "clean" },
 ]
 
-/** Runs every check in order against `address` and stops at the first that fails. Writes nothing. */
 export async function runSelfTest(
   scanner: Scanner,
   address: string,
@@ -53,7 +47,6 @@ export async function runSelfTest(
   return result(null, version)
 }
 
-/** Keeps the result as the scanner's current status: the one row the file service and the Settings page read. */
 export async function recordSelfTest(db: Pick<Db, "insert">, result: SelfTestResult): Promise<void> {
   const row = {
     address: result.address,
@@ -68,7 +61,6 @@ export async function recordSelfTest(db: Pick<Db, "insert">, result: SelfTestRes
     .onConflictDoUpdate({ target: scannerCheck.id, set: row })
 }
 
-/** The status as the server shows it and the queue keeps it as a job's output. */
 export function selfTestView(result: SelfTestResult) {
   return {
     address: result.address,

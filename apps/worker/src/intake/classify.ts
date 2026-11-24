@@ -1,32 +1,19 @@
-// Automated mail (plan 2.3; requirements 2.2), per RFC 3834 (automatic responses), RFC 3464 (delivery status
-// notifications), RFC 8098 (disposition notifications), RFC 2919 and RFC 2369 (mailing lists). Automated mail never
-// opens, joins, or reopens a ticket. `X-Auto-Response-Suppress` asks others not to answer; it says nothing about the
-// message that carries it, so it is never a sign. A From of MAILER-DAEMON or postmaster without any sign opens a ticket
-// flagged "possibly automated" for a person to look at.
-
-// The signs of automated mail, as the intake record names them, live in @maane/shared (intake.ts), where the intake
-// log finds their words.
 import type { AutomatedSign } from "@maane/shared"
 
 export { AUTOMATED_SIGNS, type AutomatedSign } from "@maane/shared"
 
 export interface ClassifyInput {
-  /** Every header line as received (`Key: value`, possibly folded). */
   headers: { key: string; line: string }[]
-  /** The top-level content type as mailparser parsed it, stored bounded (content.ts). */
   contentType: { value: string; reportType: string | null }
-  /** The From address, lower case. */
   from: string | null
 }
 
 export interface Classification {
   automated: boolean
   signs: AutomatedSign[]
-  /** From MAILER-DAEMON or postmaster with no sign: a ticket, flagged for review. */
   possiblyAutomated: boolean
 }
 
-/** A header's values: the text after the first colon of each line with that name, unfolded and trimmed. */
 function values(headers: ClassifyInput["headers"], name: string): string[] {
   return headers
     .filter((header) => header.key.toLowerCase() === name)
@@ -40,7 +27,6 @@ const has = (headers: ClassifyInput["headers"], name: string) => values(headers,
 
 export function classify(input: ClassifyInput): Classification {
   const signs: AutomatedSign[] = []
-  // RFC 3834 5.1: any value but "no" (its keyword is case-insensitive; parameters follow a semicolon).
   const autoSubmitted = values(input.headers, "auto-submitted")
   if (autoSubmitted.some((value) => (value.split(";")[0] ?? "").trim().toLowerCase() !== "no"))
     signs.push("auto_submitted")

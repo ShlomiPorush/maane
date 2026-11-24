@@ -8,10 +8,6 @@ import { createTestApp } from "../testing/app.ts"
 import { nextIp, TestBrowser, testPassword } from "../testing/browser.ts"
 import { createTestDatabase } from "../testing/db.ts"
 
-// The admin parts of sending (plan 3.1): an agent's display name, set through Maane's own endpoint with Better Auth's
-// documented server API (its HTTP route /admin/update-user stays closed), an organization's signature, and the SMTP
-// connection tests the server only queues (a pg-boss client plays the worker).
-
 let database: Awaited<ReturnType<typeof createTestDatabase>>
 let queue: JobQueue
 let app: ReturnType<typeof createTestApp>

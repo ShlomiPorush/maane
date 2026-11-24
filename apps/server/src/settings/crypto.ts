@@ -1,18 +1,11 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto"
 import type { VersionedKey } from "../config.ts"
 
-// Secret settings, encrypted with MAANE_SETTINGS_KEYS, never with the auth secrets. A value is
-// `v<version>.<iv>.<ciphertext+tag>` in base64url: AES-256-GCM with a 12-byte random IV, and the setting key as
-// additional authenticated data, so a value copied to another setting does not decrypt. The AES key is
-// HKDF-SHA256(key, salt "maane", info "settings-secret"). The first key encrypts; any listed version decrypts. A
-// value whose version is no longer listed, or that does not decrypt, cannot be read: the UI asks for it again.
-
 const IV_BYTES = 12
 const TAG_BYTES = 16
 
 export type SettingsCipher = {
   encrypt(settingKey: string, plain: string): string
-  /** The plain value, or null when it cannot be read (unknown version, wrong key, damaged). */
   decrypt(settingKey: string, stored: string): string | null
 }
 

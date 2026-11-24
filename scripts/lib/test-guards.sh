@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
-# Plants each violation the guards look for in a scratch repository and checks that the guard meant for it fails,
-# and that the guards pass again once it is removed. Run inside the toolchain container (scripts/verify.sh does).
-# Planted values are assembled at run time, so this file itself never matches a guard.
 set -euo pipefail
 
 GUARDS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/guards.sh"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
-export CI=1 # the guards then print file and line only
+export CI=1
 
 git -C "$scratch" init -q
 mkdir -p "$scratch/packages/shared/src/locales"
@@ -28,8 +25,6 @@ expect_pass() {
   }
 }
 
-# Expects the guards to fail with a message that contains EXPECTED, so a violation is caught by the guard
-# meant for it and not by another one by chance. HIDDEN, when given, must not appear in the output (CI logs).
 expect_failure() {
   local name="$1" expected="$2" hidden="${3:-}" out
   if out="$(bash "$GUARDS" "$scratch" 2>&1)"; then
@@ -47,7 +42,6 @@ expect_failure() {
   fi
 }
 
-# Plants a file with the given content, expects that failure, removes the file, expects a pass again.
 plant() {
   local name="$1" expected="$2" path="$3" content="$4" hidden="${5:-}"
   mkdir -p "$(dirname "$scratch/$path")"
@@ -135,27 +129,22 @@ plant "a half placeholder" "$secret" docs/db.md "postgres""://maane:\$PASSWORD}@
 plant "a password with an empty username" "$secret" docs/db.md "postgresql""://:$(repeat x 12)@db/maane"$'\n'
 plant "a shellcheck finding" "SC2086" scripts/lib/bad.sh $'#!/usr/bin/env bash\necho $1\n'
 plant "a badly formatted script" "not formatted" scripts/lib/ugly.sh $'#!/usr/bin/env bash\nif true; then\necho ok\nfi\n'
-# A script that holds a token and cannot be parsed: neither shellcheck's nor shfmt's message may repeat the line.
 plant "an unparsable script with a token" "$secret" scripts/lib/broken.sh \
   $'#!/usr/bin/env bash\ncat <<EOF\n'"$token"$'EOF\n' "$token"
-# A locale file that does not parse is named, and the JSON error, which quotes the text, is not shown.
 printf '{ "app": { "name": %s } }\n' "$token" >"$scratch/packages/shared/src/locales/en.json"
 expect_failure "a locale file that is not JSON" "must be valid JSON" "$token"
 printf '{ "app": { "name": "Maane" } }\n' >"$scratch/packages/shared/src/locales/en.json"
 expect_pass "after the locale file was restored"
 
-# A malformed UTF-8 byte on the line of a token: grep would not match the line, so the file itself must fail.
 printf 'x \377 %s\n' "$token" >"$scratch/docs/legacy.md"
 expect_failure "a file that is not valid UTF-8" "not valid UTF-8" "$token"
 rm -f "$scratch/docs/legacy.md"
 expect_pass "after the file that is not valid UTF-8 was removed"
 
-# A binary image whose name git would quote is still an allowed binary file.
 printf '\x89PNG\r\n\x1a\n\000\000' >"$scratch/docs/l$(printf '\xc3\xb6')go.png"
 expect_pass "on an allowed binary file with a name git quotes"
 rm -f "$scratch/docs/l$(printf '\xc3\xb6')go.png"
 
-# A script that is not executable.
 mkdir -p "$scratch/scripts"
 printf '#!/usr/bin/env bash\necho ok\n' >"$scratch/scripts/run.sh"
 git -C "$scratch" add scripts/run.sh
@@ -165,7 +154,6 @@ git -C "$scratch" rm -q --cached scripts/run.sh
 rm -f "$scratch/scripts/run.sh"
 expect_pass "after the script was removed"
 
-# The local deny list: a listed term fails, case-insensitively, and the output never repeats it in CI.
 mkdir -p "$scratch/docs/private"
 term="examplecorp$(repeat q 3)"
 printf '# terms\n%s\n' "$term" >"$scratch/docs/private/deny-list.txt"
@@ -173,22 +161,17 @@ plant "a term from the deny list" "A term from docs/private/deny-list.txt" docs/
   "Made for ${term^^}."$'\n' "$term"
 rm -rf "$scratch/docs/private"
 
-# Locale key drift: the English file gets a key the Hebrew file lacks.
 cp "$scratch/packages/shared/src/locales/en.json" "$scratch/en.json.orig"
 printf '{ "app": { "name": "Maane", "extra": "x" } }\n' >"$scratch/packages/shared/src/locales/en.json"
 expect_failure "a key only in en.json" "key(s) differ between the locale files"
-# A token pasted as a key: valid JSON, so only the key check sees it, and CI output must not repeat the key.
 printf '{ "app": { "name": "Maane", "%s": "x" } }\n' "$token" >"$scratch/packages/shared/src/locales/en.json"
 expect_failure "a token as a locale key" "key(s) differ between the locale files" "$token"
 mv "$scratch/en.json.orig" "$scratch/packages/shared/src/locales/en.json"
 expect_pass "after the locale keys match again"
 
-# Allowed forms pass: pinned, local and digest-pinned actions; documentation addresses; empty and quoted-empty
-# examples; placeholder passwords in URLs; a version string; a binary image.
 mkdir -p "$scratch/.github/workflows" "$scratch/docs" "$scratch/docker"
 printf 'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@%s # v7\n      - uses: ./.github/actions/x\n' \
   "$(repeat a 40)" >"$scratch/.github/workflows/ok.yml"
-# Secrets through env_file, a value that is not secret interpolated, and $$ for the container's own variable.
 # shellcheck disable=SC2016 # the Compose variables must stay literal
 printf '%s\n' 'services:' '  server:' '    image: maane:dev' '    env_file: [app.env]' '    environment:' \
   '      MAANE_PUBLIC_URL: https://${DOMAIN}' '  postgres:' '    image: postgres' '    env_file: [postgres.env]' \

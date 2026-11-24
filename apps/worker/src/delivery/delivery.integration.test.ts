@@ -17,11 +17,6 @@ import { type StandInSmtp, startStandInSmtp } from "../testing/smtp.ts"
 import { type StandInSmtp2goApi, startStandInSmtp2goApi } from "../testing/smtp2go-api.ts"
 import { ActivityPoll, POLL_OVERLAP_MS } from "./poll.ts"
 
-// Delivery status and bounces (plan 3.3), end to end: replies written through the server's API and sent by the worker's
-// sender to the stand-in SMTP servers (SMTP2GO's answers with its queue ID), SMTP2GO's webhook through the server app
-// with secrets generated on the Settings API, its activity search through a stand-in API, and failover bounces through
-// the stand-in Graph into intake. Nothing leaves this process.
-
 const QUICK: SmtpTimeouts = { connection: 2000, greeting: 1500, socket: 3000, setup: 4000, send: 5000 }
 const SUPPORT = "support@example.com"
 const BOUNCE = "bounce@example.com"
@@ -64,7 +59,6 @@ afterEach(async () => {
   await h.close()
 })
 
-/** The worker's settings: the stand-ins' addresses and credentials, given to this process only. */
 function workerSettings(values: Partial<Record<SettingKey, string>> = {}, without: SettingKey[] = []) {
   const overrides: Partial<Record<SettingKey, string>> = {
     "smtp2go.host": smtp2go.host,
@@ -96,7 +90,6 @@ const sender = (
     ...hooks,
   })
 
-/** SMTP2GO cannot be logged in to, so the failover takes the reply (from the bounce address). */
 const viaFailover = () => ({ "smtp2go.password": `${smtp2go.password}x` })
 
 let admin: TestBrowser
@@ -107,7 +100,6 @@ async function firstAdmin() {
   return admin
 }
 
-/** A customer's message through intake: its ticket's number. */
 async function customerTicket(): Promise<number> {
   const graphId = h.graph.add(mime({ from: "Dana Customer <dana@example.com>", to: SUPPORT, text: { content: TODA } }))
   await h.round()
@@ -116,7 +108,6 @@ async function customerTicket(): Promise<number> {
   return found.number
 }
 
-/** A reply written through the API and sent by the worker. Returns its ID and its own Message-ID. */
 async function sentReply(
   number: number,
   to: string[],
@@ -142,7 +133,6 @@ async function sentReply(
   return { id, messageId: row?.messageId ?? "" }
 }
 
-/** SMTP2GO's queue ID for a recipient, as the stand-in answered it and the sender kept it. */
 async function queueIdOf(id: string, address: string): Promise<string> {
   const rows = await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, id))
   const row = rows.find((entry) => entry.address === address)
@@ -159,7 +149,6 @@ async function view(number: number): Promise<TicketView> {
 const recipientsOf = async (number: number, id: string) =>
   (await view(number)).messages.find((m) => m.id === id)?.delivery?.recipients ?? []
 
-/** Generates the webhook's secrets on the Settings API, as an admin. */
 async function webhookSecrets(): Promise<WebhookSecretsView & { path: string }> {
   const made = await admin.call("POST", "/api/v1/settings/smtp2go/webhook")
   expect(made.status).toBe(200)
@@ -167,7 +156,6 @@ async function webhookSecrets(): Promise<WebhookSecretsView & { path: string }> 
   return { ...view, path: new URL(view.url).pathname }
 }
 
-/** A webhook request as SMTP2GO sends one: JSON or a form, with its Authorization header. */
 function hook(path: string, body: Record<string, string>, authorization?: string, form = false) {
   const headers: Record<string, string> = {
     "content-type": form ? "application/x-www-form-urlencoded" : "application/json",
@@ -192,7 +180,6 @@ const event = (values: { event: string; email_id: string; rcpt: string; time: st
 describe("the SMTP2GO webhook", () => {
   it("is refused without both secrets: an unknown path as a path that does not exist, a wrong header with 401", async () => {
     await firstAdmin()
-    // Before any secret exists, nothing answers.
     const none = await hook("/hooks/smtp2go/anything", {}, "Bearer anything")
     expect(none.status).toBe(404)
     const { path, token, url } = await webhookSecrets()
@@ -209,7 +196,6 @@ describe("the SMTP2GO webhook", () => {
     expect((await hook(path, {}, `Basic ${token}`)).status).toBe(401)
     expect((await hook(path, { event: "processed" }, `Bearer ${token}`)).status).toBe(200)
 
-    // Shown once: the Settings API says only that they are set, and refuses them as typed values.
     const settings = await admin.call("GET", "/api/v1/settings")
     for (const key of ["smtp2go.webhookPath", "smtp2go.webhookToken"])
       expect(settings.json.settings.find((s: { key: string }) => s.key === key)).toMatchObject({
@@ -220,13 +206,11 @@ describe("the SMTP2GO webhook", () => {
     expect(JSON.stringify(settings.json)).not.toContain(token)
     const typed = await admin.call("PUT", "/api/v1/settings", { "smtp2go.webhookToken": "a".repeat(43) })
     expect(typed.status).toBe(400)
-    // The audit rows say they changed, never their values.
     const audit = JSON.stringify(await h.database.db.select().from(auditLog))
     expect(audit).toContain("smtp2go.webhookPath")
     expect(audit).not.toContain(token)
     expect(audit).not.toContain(path.slice("/hooks/smtp2go/".length))
 
-    // Replaced: the old ones stop at once.
     const next = await webhookSecrets()
     expect((await hook(path, { event: "processed" }, `Bearer ${token}`)).status).toBe(404)
     expect((await hook(next.path, { event: "processed" }, `Bearer ${token}`)).status).toBe(401)
@@ -257,7 +241,6 @@ describe("the SMTP2GO webhook", () => {
     let failed: Response
     let refused: Response
     try {
-      // The handler fails inside its transaction: the table it writes is gone for a moment.
       await h.database.db.execute(sql`alter table outbox_recipient rename to outbox_recipient_away`)
       failed = await hook(path, body, `Bearer ${token}`)
       await h.database.db.execute(sql`alter table outbox_recipient_away rename to outbox_recipient`)
@@ -270,7 +253,6 @@ describe("the SMTP2GO webhook", () => {
     expect(await failed.json()).toEqual({ error: "internal" })
     expect(refused.status).toBe(401)
     const log = lines.join("")
-    // The failure was logged, with the path hidden.
     expect(log).toContain('"message":"request failed"')
     expect(log).toContain('"path":"/hooks/[hidden]"')
     expect(log).toContain("the SMTP2GO webhook refused a request without its Authorization header")
@@ -288,7 +270,6 @@ describe("the SMTP2GO webhook", () => {
       hook(path, event(values), `Bearer ${token}`, form)
     const rcpt = "dana@example.com"
 
-    // A soft bounce, then the delivery (as a form, SMTP2GO's default).
     expect(
       (await send({ event: "bounce", bounce: "soft", email_id: providerId, rcpt, time: "2026-11-13T10:00:00Z" }))
         .status,
@@ -302,14 +283,12 @@ describe("the SMTP2GO webhook", () => {
       { delivery: "delivered", deliveryAt: "2026-11-13T10:05:00.000Z", deliveryDetail: null },
     ])
     expect((await view(number)).ticket.reviewFlags).not.toContain("delivery_failed")
-    // The same soft bounce again (a retry), and an older one arriving late: neither overwrites the delivery.
     await send({ event: "bounce", bounce: "soft", email_id: providerId, rcpt, time: "2026-11-13T10:00:00Z" })
     await send({ event: "bounce", bounce: "soft", email_id: providerId, rcpt, time: "2026-11-13T09:59:00Z" })
     await send({ event: "delivered", email_id: providerId, rcpt, time: "2026-11-13T10:05:00Z" })
     expect(await recipientsOf(number, reply.id)).toMatchObject([
       { delivery: "delivered", deliveryAt: "2026-11-13T10:05:00.000Z" },
     ])
-    // A newer spam report does, and flags the ticket.
     await send({ event: "spam", email_id: providerId, rcpt, time: "2026-11-14T08:00:00Z" })
     expect(await recipientsOf(number, reply.id)).toMatchObject([
       { delivery: "spam", deliveryDetail: "550 5.1.1 mailbox unavailable" },
@@ -371,14 +350,11 @@ describe("the ticket's delivery flag", () => {
     const list = await admin.call("GET", "/api/v1/tickets")
     expect(list.json.tickets[0].reviewFlags).toContain("delivery_failed")
 
-    // The agent writes again and the reply is accepted: the flag goes.
     const second = await sentReply(number, ["dana@example.com"])
     expect((await view(number)).ticket.reviewFlags).not.toContain("delivery_failed")
-    // A late, newer bounce of the first reply does not bring it back.
     await bounce(firstId, "2026-11-13T12:00:00Z")
     expect(await recipientsOf(number, first.id)).toMatchObject([{ delivery: "hard_bounce" }])
     expect((await view(number)).ticket.reviewFlags).not.toContain("delivery_failed")
-    // The second reply's own bounce does.
     await bounce(await queueIdOf(second.id, "dana@example.com"), "2026-11-13T13:00:00Z")
     expect((await view(number)).ticket.reviewFlags).toContain("delivery_failed")
   })
@@ -407,7 +383,6 @@ describe("the activity poll", () => {
     api.events.push(
       { event: "delivered", email_id: dana, recipient: "dana@example.com", date: iso(1) },
       { event: "soft-bounced", email_id: ron, recipient: "ron@example.com", date: iso(2), reason: "mailbox full" },
-      // An event of a message Maane never sent: dropped.
       { event: "hard-bounced", email_id: "someone-else", recipient: "dana@example.com", date: iso(3) },
     )
     const first = await poll(10).run()
@@ -420,7 +395,6 @@ describe("the activity poll", () => {
         event_types: ["delivered", "soft-bounced", "hard-bounced", "rejected", "spam"],
       },
     })
-    // The first window starts an overlap before the oldest recipient still waiting for a final status.
     const start = Date.parse(String(api.requests[0]?.body.start_date))
     expect(Math.abs(start - (sentAt - POLL_OVERLAP_MS))).toBeLessThanOrEqual(1000)
     expect(await recipientsOf(number, reply.id)).toMatchObject([
@@ -430,7 +404,6 @@ describe("the activity poll", () => {
     const [cursor] = await h.database.db.select().from(deliveryPoll)
     expect(cursor?.until.toISOString()).toBe(at(10).toISOString())
 
-    // A new process (a restart): it starts from the stored cursor, an overlap earlier, and reads a page at a time.
     api.events.push({ event: "delivered", email_id: ron, recipient: "ron@example.com", date: iso(95) })
     const second = await poll(100).run()
     expect(second).toMatchObject({ state: "done", applied: 1 })
@@ -439,7 +412,6 @@ describe("the activity poll", () => {
     )
     expect(await recipientsOf(number, reply.id)).toMatchObject([{ delivery: "delivered" }, { delivery: "delivered" }])
 
-    // Every recipient has a final status now: the poll asks nothing.
     expect(await poll(110).run()).toMatchObject({ state: "nothing_pending" })
     expect(api.requests).toHaveLength(2)
   })
@@ -459,7 +431,6 @@ describe("the activity poll", () => {
     const failing = new ActivityPoll({ db: h.database.db, settings: workerSettings(), baseUrl: api.baseUrl })
     await expect(failing.run()).rejects.toMatchObject({ name: "ActivityError", status: 503 })
     expect(await h.database.db.select().from(deliveryPoll)).toEqual([])
-    // A wrong key is refused by the stand-in, which accepts only the run's.
     api.failWith = null
     const wrong = new ActivityPoll({
       db: h.database.db,
@@ -471,7 +442,6 @@ describe("the activity poll", () => {
   })
 })
 
-/** A delivery status notification (RFC 3464) from the failover's mail system to the bounce address. */
 function deliveryReport(original: string, groups: { address: string; action: string; status: string }[]) {
   const fields = [
     "Reporting-MTA: dns; mx.example.com",
@@ -521,7 +491,6 @@ describe("failover bounces in the intake mailbox", () => {
       { address: "dana@example.com", action: "failed", status: "5.1.1" },
       { address: "ron@example.com", action: "delayed", status: "4.4.1" },
     ])
-    // Automated mail: it opened nothing, and its record names the reply it is about.
     expect(await h.recordOf(graphId)).toMatchObject({ outcome: "automated", matchedMessageId: reply.id })
     expect(await h.tickets()).toHaveLength(1)
   })
@@ -572,10 +541,8 @@ describe("failover bounces in the intake mailbox", () => {
   it("bounces only an accepted recipient: a report about an unknown one is recorded on the reply and flags nothing", async () => {
     await firstAdmin()
     const number = await customerTicket()
-    // SMTP2GO takes the data and drops the connection before its final reply: unknown, never sent again by itself.
     const reply = await sentReply(number, ["drop.dana@example.com"], { "failover.host": "" })
     expect(await recipientsOf(number, reply.id)).toMatchObject([{ state: "unknown" }])
-    // A report names the unknown recipient: it is kept on the reply, and the recipient keeps no status.
     const bounced = (status: string) =>
       deliveryReport(reply.messageId, [{ address: "drop.dana@example.com", action: "failed", status }])
     h.graph.add(bounced("5.1.1"))
@@ -584,14 +551,12 @@ describe("failover bounces in the intake mailbox", () => {
       unmatchedDelivery: expect.objectContaining({ source: "report" }),
       recipients: [{ state: "unknown", delivery: null }],
     })
-    // The agent sends it again and the failover takes it: the earlier attempt's report flags nothing.
     expect((await admin.call("POST", `/api/v1/messages/${reply.id}/resend`)).status).toBe(200)
     expect(await sender(viaFailover()).send(reply.id)).toBe("accepted")
     expect(await recipientsOf(number, reply.id)).toMatchObject([
       { state: "accepted", provider: "failover", delivery: null },
     ])
     expect((await view(number)).ticket.reviewFlags).not.toContain("delivery_failed")
-    // A report that comes after the accepted send bounces it.
     h.graph.add(bounced("5.2.2"))
     await h.round()
     expect(await recipientsOf(number, reply.id)).toMatchObject([{ delivery: "hard_bounce", deliveryDetail: "5.2.2" }])
@@ -600,7 +565,6 @@ describe("failover bounces in the intake mailbox", () => {
 })
 
 describe("review of 3.3", () => {
-  /** Send again through the failover, which takes it. */
   const resendViaFailover = async (id: string) => {
     expect((await admin.call("POST", `/api/v1/messages/${id}/resend`)).status).toBe(200)
     expect(await sender(viaFailover()).send(id)).toBe("accepted")
@@ -611,17 +575,13 @@ describe("review of 3.3", () => {
     await firstAdmin()
     const number = await customerTicket()
     const address = "drop.dana@example.com"
-    // A, written first: SMTP2GO drops the connection after the data, so its fate is unknown.
     const a = await sentReply(number, [address], { "failover.host": "" })
-    // B, written later, goes through the failover, and its report bounces it: flagged.
     const b = await sentReply(number, [address], viaFailover())
     h.graph.add(deliveryReport(b.messageId, [{ address, action: "failed", status: "5.1.1" }]))
     await h.round()
     expect(await flagged(number)).toBe(true)
-    // A is sent again and accepted after B: A, written first, is now the send accepted last, and the flag goes.
     await resendViaFailover(a.id)
     expect(await flagged(number)).toBe(false)
-    // A's own bounce brings it back, though B was written later.
     h.graph.add(deliveryReport(a.messageId, [{ address, action: "failed", status: "5.2.2" }]))
     await h.round()
     expect(await recipientsOf(number, a.id)).toMatchObject([{ delivery: "hard_bounce", deliveryDetail: "5.2.2" }])
@@ -633,12 +593,9 @@ describe("review of 3.3", () => {
     const number = await customerTicket()
     const address = "drop.dana@example.com"
     const reply = await sentReply(number, [address], { "failover.host": "" })
-    // The report reaches the mailbox and is stored (stage one) ...
     h.graph.add(deliveryReport(reply.messageId, [{ address, action: "failed", status: "5.1.1" }]))
     await h.sync.run()
-    // ... the agent sends again and the failover accepts it ...
     await resendViaFailover(reply.id)
-    // ... and only then is the report processed.
     await h.processor.run()
     expect((await view(number)).messages.find((m) => m.id === reply.id)?.delivery).toMatchObject({
       unmatchedDelivery: expect.objectContaining({ source: "report" }),
@@ -655,7 +612,6 @@ describe("review of 3.3", () => {
     const [row] = await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, reply.id))
     const sentAt = row?.acceptedAt?.getTime() ?? 0
     const iso = (minutes: number) => new Date(sentAt + minutes * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z")
-    // Four events of other mail first, then the one Maane needs: on the third page of two.
     for (let i = 0; i < 4; i++)
       api.events.push({ event: "delivered", email_id: `other-${i}`, recipient: "x@example.com", date: iso(1) })
     api.events.push({ event: "delivered", email_id: dana, recipient: "dana@example.com", date: iso(2) })
@@ -671,7 +627,6 @@ describe("review of 3.3", () => {
     expect(await poll(10).run()).toMatchObject({ state: "partial", events: 4, applied: 0 })
     const [kept] = await h.database.db.select().from(deliveryPoll)
     expect(kept?.continueToken).toBeTruthy()
-    // A new process goes on from the kept page, with the same window.
     expect(await poll(20).run()).toMatchObject({ state: "done", events: 1, applied: 1 })
     expect(api.requests).toHaveLength(3)
     expect(api.requests[2]?.body).toMatchObject({
@@ -690,7 +645,6 @@ describe("review of 3.3", () => {
     const number = await customerTicket()
     const address = "drop.dana@example.com"
     const reply = await sentReply(number, [address], { "failover.host": "" })
-    // SMTP2GO kept the message and gave it a queue ID Maane never heard.
     const queueId = smtp2go.received.at(-1)?.queueId ?? ""
     const { path, token } = await webhookSecrets()
     const answer = await hook(
@@ -702,7 +656,6 @@ describe("review of 3.3", () => {
       `Bearer ${token}`,
     )
     expect(answer.status).toBe(200)
-    // The status shows beside the recipient; whether it was sent stays the agent's to decide.
     expect((await view(number)).messages.find((m) => m.id === reply.id)?.delivery).toMatchObject({
       state: "unknown",
       unmatchedDelivery: null,
@@ -715,7 +668,6 @@ describe("review of 3.3", () => {
     const number = await customerTicket()
     const address = "drop.dana@example.com"
     const reply = await sentReply(number, [address], { "failover.host": "" })
-    // Sent again, and dropped again: both attempts may have reached the recipient.
     expect((await admin.call("POST", `/api/v1/messages/${reply.id}/resend`)).status).toBe(200)
     expect(await sender({ "failover.host": "" }).send(reply.id)).toBe("unknown")
     const { path, token } = await webhookSecrets()
@@ -728,7 +680,6 @@ describe("review of 3.3", () => {
       `Bearer ${token}`,
     )
     expect(answer.status).toBe(200)
-    // What the event said is kept for a person to read.
     expect((await view(number)).messages.find((m) => m.id === reply.id)?.delivery).toMatchObject({
       unmatchedDelivery: {
         source: "webhook",
@@ -740,7 +691,6 @@ describe("review of 3.3", () => {
       recipients: [{ state: "unknown", delivery: null }],
     })
     expect(await flagged(number)).toBe(false)
-    // An event naming a Message-ID Maane never sent is dropped and records nothing.
     const other = await sentReply(number, ["ron@example.com"])
     await hook(
       path,
@@ -758,7 +708,6 @@ describe("review of 3.3, round 2", () => {
   const crash = () => {
     throw new Error("the run stops here")
   }
-  /** A reply written through the API, not sent yet. */
   async function written(number: number, to: string[]): Promise<{ id: string; messageId: string }> {
     const answer = await admin.call("POST", `/api/v1/tickets/${number}/messages`, {
       submissionId: randomUUID(),
@@ -786,7 +735,6 @@ describe("review of 3.3, round 2", () => {
     await firstAdmin()
     const number = await customerTicket()
     const reply = await written(number, ["dana@example.com"])
-    // SMTP2GO accepts the data; the run stops before it saves the answer, so the queue ID is never stored.
     await expect(sender({ "failover.host": "" }, { afterSend: async () => crash() }).send(reply.id)).rejects.toThrow()
     expect(await possibleSends(reply.id)).toEqual([1])
     const { path, token } = await webhookSecrets()
@@ -818,7 +766,6 @@ describe("review of 3.3, round 2", () => {
     expect(await possibleSends(reply.id)).toEqual([1])
     const { path, token } = await webhookSecrets()
     expect((await admin.call("POST", `/api/v1/messages/${reply.id}/resend`)).status).toBe(200)
-    // The second attempt is claimed; while it may already be on its way, an event naming the Message-ID arrives.
     let during: Response | null = null
     const second = sender(
       { "failover.host": "" },
@@ -848,11 +795,9 @@ describe("review of 3.3, round 2", () => {
     await firstAdmin()
     const number = await customerTicket()
     const reply = await written(number, ["drop.dana@example.com"])
-    // The unknown answer is saved, then the run stops before it settles the row (still `sending`).
     await expect(sender({ "failover.host": "" }, { afterRecord: async () => crash() }).send(reply.id)).rejects.toThrow()
     const [row] = await h.database.db.select({ state: outbox.state }).from(outbox).where(eq(outbox.messageId, reply.id))
     expect(row?.state).toBe("sending")
-    // The next run finds it halfway and recovers it without sending.
     expect(await sender({ "failover.host": "" }).send(reply.id)).toBe("unknown")
     expect(await possibleSends(reply.id)).toEqual([1])
   })

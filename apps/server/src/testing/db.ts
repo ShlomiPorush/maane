@@ -5,10 +5,6 @@ import { type Database, migrateDatabase, openDatabase } from "../db/client.ts"
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("../../drizzle", import.meta.url))
 
-/**
- * A new, migrated database for one test file, inside the disposable PostgreSQL that scripts/verify.sh starts
- * (MAANE_TEST_DATABASE_URL, with a password generated for the run). Dropped by `drop()`.
- */
 export async function createTestDatabase(): Promise<Database & { url: string; drop(): Promise<void> }> {
   const base = process.env.MAANE_TEST_DATABASE_URL
   if (!base) throw new Error("MAANE_TEST_DATABASE_URL is not set: integration tests run only from scripts/verify.sh")
@@ -34,5 +30,4 @@ export async function createTestDatabase(): Promise<Database & { url: string; dr
   }
 }
 
-/** A key for tests, new on every run. */
 export const testKey = () => randomBytes(32).toString("hex")

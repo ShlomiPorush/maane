@@ -5,9 +5,6 @@ import { ClamdError, MAX_REPLY_BYTES, ping, scanStream, version } from "./clamd.
 import { CLEAN_SAMPLE, eicar } from "./samples.ts"
 import { clamdScanner } from "./scanner.ts"
 
-// Maane's clamd client against the stand-in: the answers clamd gives, and every way a peer can fail to give one. Each
-// failure must reject with its code within the operation's deadline and leave no socket behind.
-
 const opened: StandInClamd[] = []
 const standIn = async (options: StandInOptions = {}) => {
   const clamd = await startStandInClamd(options)
@@ -19,7 +16,6 @@ afterEach(async () => {
   for (const clamd of opened.splice(0)) await clamd.close()
 })
 
-/** The code an operation rejects with, and how long it took. */
 async function failure(operation: Promise<unknown>): Promise<{ code: string; ms: number }> {
   const started = Date.now()
   try {
@@ -80,7 +76,6 @@ describe("the clamd protocol", () => {
 
   it("gives up at the deadline on a peer that accepts and never reads", async () => {
     const { target } = await standIn({ peer: "noRead" })
-    // Far more than the socket buffers hold, so the client waits to write until the deadline frees it.
     const scan = await failure(scanStream(target, Buffer.alloc(32 * 1024 * 1024, 0x64), { deadlineMs: 800 }))
     expect(scan.code).toBe("deadline")
     expect(scan.ms).toBeLessThan(3_000)
@@ -111,8 +106,6 @@ describe("the clamd protocol", () => {
     const [host, port] = refused.split(":")
     const target = { host: host as string, port: Number(port) }
     expect((await failure(ping(target, { deadlineMs: 5_000 }))).code).toBe("refused")
-    // A listener whose backlog is full leaves new connections waiting; the documentation range never answers either,
-    // but needs a network. A connect timeout shorter than the deadline names the step.
     const blackhole = { host: "192.0.2.1", port: 3310 }
     const stuck = await failure(ping(blackhole, { deadlineMs: 2_000, connectTimeoutMs: 300 }))
     expect(["connect_timeout", "connection"]).toContain(stuck.code)
@@ -121,7 +114,6 @@ describe("the clamd protocol", () => {
 
   it("closes every socket it opened, also when it gives up", async () => {
     const connections = new Set<import("node:net").Socket>()
-    // Not half-open: the server side closes as soon as the client closes its own, so a count of 0 means none is left.
     const server = createServer((socket) => {
       connections.add(socket)
       socket.on("close", () => connections.delete(socket))

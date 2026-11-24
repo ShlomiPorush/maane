@@ -1,4 +1,3 @@
-// The container health check: the server answers /healthz/ready (the database answers and is migrated).
 export {}
 
 const port = Number(process.env.PORT ?? 8080)

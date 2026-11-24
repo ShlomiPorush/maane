@@ -1,11 +1,3 @@
-// What waits for the scanner (plan 2.3): while files, text fields, or a raw message wait, this job fetches their
-// messages again from Graph, by the message's own source (its mailbox) and immutable ID with the credential in effect
-// now, and scans what waits again. Finishing what was already taken in is not tied to the current source. A 401, 403,
-// or 404 (the message, or access to its old mailbox, is gone) makes what waits `unavailable` with that status as its
-// reason, so nothing waits for ever; any other failure leaves it waiting. The raw MIME is kept once it, every part, and
-// every text field scanned clean, also when they were decided after the raw message. Each run takes the messages tried
-// longest ago first, so messages that keep failing cannot starve the others.
-
 import type { Db } from "@maane/server/db/client"
 import { intakeSource, message, messagePart } from "@maane/server/db/schema"
 import { errorFacts, log } from "@maane/server/log"
@@ -28,7 +20,6 @@ import { type DeltaItem, type GraphConfig, type GraphGateway, graphConfig, graph
 import { type ParsedMessage, parseMessage } from "./parse.ts"
 import { wellFormed } from "./text.ts"
 
-/** The most messages one run fetches again. */
 export const MAX_RETRIES_PER_RUN = 50
 
 const isStored = (status: PartStatus): status is StoredStatus => (STORED_STATUSES as readonly string[]).includes(status)
@@ -78,10 +69,8 @@ export class WaitingFiles {
           ),
         ),
       )
-      // Tried longest ago first (never tried first), then the oldest mail.
       .orderBy(sql`${message.retryAt} asc nulls first`, asc(message.receivedAt))
       .limit(limit)
-    // Only intake's own messages have a source and a Graph ID (the inner join leaves out replies and notes).
     const waiting = rows.flatMap((row) => (row.graphId === null ? [] : [{ ...row, graphId: row.graphId }]))
     if (waiting.length === 0) return summary
     const config = await graphConfig(this.#settings)
@@ -90,7 +79,6 @@ export class WaitingFiles {
     for (const item of waiting) {
       summary.messages++
       await this.#db.update(message).set({ retryAt: this.#now() }).where(eq(message.id, item.id))
-      // A record kept only Graph's metadata: its header values come from that metadata, fetched again.
       if (item.content !== "parsed") {
         const result = await this.#retryRecord(config, item)
         if (result === "waiting") summary.stillWaiting++
@@ -130,7 +118,6 @@ export class WaitingFiles {
     return summary
   }
 
-  /** A record's header values (Graph's subject and sender name) fetched again and scanned. */
   async #retryRecord(
     config: GraphConfig,
     item: { id: string; graphId: string; mailbox: string },
@@ -182,7 +169,6 @@ export class WaitingFiles {
     return "decided"
   }
 
-  /** What waits on a message becomes unavailable, with the reason. Its text fields then stay unstored. */
   async #unavailable(messageId: string, reason: string): Promise<void> {
     await this.#db.transaction(async (tx) => {
       const [row] = await tx
@@ -206,7 +192,6 @@ export class WaitingFiles {
     log.info("what waited for the scanner became unavailable", { reason })
   }
 
-  /** Scans again what waits; returns whether anything still waits. */
   async #rescan(messageId: string, raw: Buffer, parsed: ParsedMessage): Promise<"waiting" | "decided"> {
     const [current] = await this.#db.select().from(message).where(eq(message.id, messageId))
     if (!current) return "decided"
@@ -229,7 +214,6 @@ export class WaitingFiles {
     const outcomes = new Map<string, ScanOutcome | "too_large" | "changed">()
     for (const part of parts.filter((row) => row.status === "waiting")) {
       const fresh = parsed.parts[part.index]
-      // The same content as the first time, or the part is not what was taken in.
       if (!fresh || sha256Of(fresh.content) !== part.sha256) {
         outcomes.set(part.id, "changed")
         continue
@@ -241,7 +225,6 @@ export class WaitingFiles {
         outcomes.set(part.id, "too_large")
       }
     }
-    // The raw message again: while it waits, and when it scanned clean but was not kept because a part waited.
     const rawOutcome =
       current.rawStatus === "waiting" || (current.rawStatus === "clean" && !current.rawSha256)
         ? await this.#files.scan(raw, null)
@@ -326,7 +309,6 @@ export class WaitingFiles {
         row.status = status
       }
 
-      // The raw message: kept only when it and every part scanned clean.
       let rawStatus = locked.rawStatus
       if (rawOutcome && locked.rawStatus === "waiting") {
         if (rawOutcome.status === "waiting") stillWaiting = true

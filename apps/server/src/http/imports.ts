@@ -1,7 +1,3 @@
-// The import page's routes (plan 5.1), mounted under /api/v1/admin/import behind its session, two-factor, CSRF, and
-// Origin checks: admins only. A refusal answers {error: code, ...details} with a stable code
-// (apps/web/src/api/errors.ts explains each one).
-
 import { Hono } from "hono"
 import { z } from "zod"
 import type { Imports } from "../imports/service.ts"
@@ -14,7 +10,6 @@ const MappingBody = z.object({
   agentUserId: z.string().min(1).max(200).nullable(),
 })
 
-/** Cancel names the run the admin confirmed, so a stale dialog cannot cancel a newer run. */
 const CancelBody = z.object({ runId: z.string().max(100) })
 
 export function importRoutes(imports: Imports): Hono<ApiEnv> {

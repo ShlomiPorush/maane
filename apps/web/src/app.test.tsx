@@ -1,7 +1,3 @@
-// The app's routes in a DOM, against a stand-in for Maane's API and Better Auth's client: where each session state
-// and role lands (signed out, two-factor off, agent, admin), the setup screen's states, sign-in with its second
-// step, and a session that ends while a page is open. Texts are read from the locale files.
-
 import { SEARCH_MAX_LENGTH } from "@maane/shared"
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act } from "react"
@@ -15,7 +11,6 @@ import { FSI, I18nProvider, PDI, translate, translateCount } from "./i18n/i18n.t
 import { browserDevice, type DeviceSubscription, setPushDevice } from "./notifications/device.ts"
 import { ROUTES } from "./routes.tsx"
 
-/** pdf.js, as the PDF preview loads it (pages/tickets/pdf.ts): component tests never run it. */
 const pdf = vi.hoisted(() => ({ loadPdfJs: vi.fn(), openPdf: vi.fn() }))
 vi.mock("./pages/tickets/pdf.ts", () => ({ loadPdfJs: pdf.loadPdfJs, openPdf: pdf.openPdf }))
 
@@ -33,7 +28,6 @@ const auth = vi.hoisted(() => ({
   signOut: vi.fn(),
 }))
 
-/** Better Auth's client session as useSession reads it, changed by a test the way another tab or a refresh does. */
 const session = vi.hoisted(() => {
   type Data = { session: { id: string }; user: { id: string; role: string } } | null
   let data: Data = null
@@ -105,7 +99,6 @@ async function renderAt(path: string, answers: Answers): Promise<void> {
   setTransport(async (request) => {
     requests.push(request)
     const path = request.url.split("?")[0] ?? ""
-    // The home page is the ticket list: an empty one unless the test answers it.
     const answer = answers[path] ?? (path === "/api/v1/tickets" ? noTickets : undefined)
     if (!answer) return { status: 404, body: { error: "not_found" } }
     return typeof answer === "function" ? answer(request) : answer
@@ -130,7 +123,6 @@ async function renderAt(path: string, answers: Answers): Promise<void> {
 const where = () => `${router?.state.location.pathname}${router?.state.location.search}`
 const text = () => document.body.textContent ?? ""
 
-/** Types into a React-controlled field the way a browser does. */
 function type(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set
   setter?.call(input, value)
@@ -179,7 +171,6 @@ describe("the session gate", () => {
   })
 
   it("hides admin pages from an agent and locks them on a direct address, without reading them", async () => {
-    // The session and Maane's API agree on who is signed in, as they do with one cookie.
     session.set({ session: { id: "current" }, user: { id: "u2", role: "agent" } })
     await renderAt("/users", { "/api/setup/status": status(), "/api/v1/me": agent })
     await vi.waitFor(() => expect(text()).toContain(he("adminOnly.title")))
@@ -262,7 +253,6 @@ describe("account", () => {
   const closeX = () =>
     document.querySelector<HTMLButtonElement>(`[role=dialog] button[aria-label="${he("common.close")}"]`)
 
-  // Built at run time: backup codes are secret-like values.
   let codes: string[] = []
 
   async function showNewCodes() {
@@ -322,7 +312,6 @@ describe("account", () => {
       expect(found).toBeDefined()
       return found as HTMLElement
     })
-    // Not dir="auto" (nor a bdi, auto without dir): the browser's name comes first and would turn it left to right.
     expect(label.tagName).not.toBe("BDI")
     expect(label.closest("[dir]")?.getAttribute("dir")).toBe("rtl")
   })
@@ -445,7 +434,6 @@ describe("settings", () => {
       "/api/v1/settings": ok({ settings: [view("general.defaultLocale", "he"), view("mail.bounceAddress", "")] }),
     })
     await vi.waitFor(() => expect(text()).toContain(he("settings.sending.mail.bounceAddress.label")))
-    // Not bounces@ before an isolated domain: the isolate is neutral to the text around it, so the domain went first.
     expect(text()).toContain(`${FSI}bounces@example.com${PDI}`)
   })
 
@@ -493,7 +481,6 @@ describe("settings", () => {
   const checkedAt = "2026-11-12T08:00:00.000Z"
   const button = (label: string) =>
     Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
-  /** Types into a React-controlled text area the way a browser does. */
   function typeArea(area: HTMLTextAreaElement, value: string) {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(area, value)
     area.dispatchEvent(new Event("input", { bubbles: true }))
@@ -553,7 +540,6 @@ describe("settings", () => {
       'input[data-setting="scanner.address"]',
     ) as HTMLInputElement
     await act(async () => type(address, "clamav"))
-    // A new address is tested only once it is saved.
     expect(text()).toContain(he("settings.scanner.saveFirst"))
     expect(button(he("settings.scanner.test"))?.disabled).toBe(true)
     await act(async () => document.querySelector<HTMLButtonElement>(".ui-savebar-save")?.click())
@@ -610,7 +596,6 @@ describe("settings", () => {
     })
     await vi.waitFor(() => expect(text()).toContain(he("settings.graphSecret.notSet")))
     const field = (key: string) => document.querySelector<HTMLInputElement>(`input[data-setting="${key}"]`)
-    // The environment sets the tenant: locked, with its variable named.
     expect(field("graph.tenantId")?.disabled).toBe(true)
     expect(text()).toContain("MAANE_SESSION_DAYS")
     const secretField = field("graph.clientSecret") as HTMLInputElement
@@ -618,7 +603,6 @@ describe("settings", () => {
     expect(secretField.value).toBe("")
     expect(text()).toContain(he("settings.graph.test.notTested"))
 
-    // A new application ID and secret: the test waits until they are saved, and the secret goes out once.
     const secret = crypto.randomUUID()
     await act(async () => type(field("graph.clientId") as HTMLInputElement, "not an id"))
     expect(text()).toContain(he("settings.graph.test.saveFirst"))
@@ -721,7 +705,6 @@ describe("organizations", () => {
     await vi.waitFor(() => expect(text()).toContain("*@two.example.com"))
     const asked = requests.find((r) => r.url.includes("address-check"))
     expect(asked?.url).toBe("/api/v1/admin/organizations/address-check?address=Billing%40two.example.com")
-    // The address shows isolated left to right inside the right-to-left page.
     expect(document.querySelector('.ui-banner bdi[dir="ltr"]')?.textContent).toBe("billing@two.example.com")
   })
 
@@ -799,7 +782,6 @@ describe("organizations", () => {
   it("makes SMTP2GO's webhook address and token, shows them once, and asks before replacing them", async () => {
     let made = false
     const secret = (key: string) => ({ key, value: null, secret: true, set: made, locked: false, variable: null })
-    // Built at run time: no secret-shaped literal in a tracked file.
     const url = `http://127.0.0.1:8090/hooks/smtp2go/${"p".repeat(43)}`
     const token = "t".repeat(43)
     await renderAt("/settings", {
@@ -823,14 +805,12 @@ describe("organizations", () => {
           b.textContent?.trim() ?? "",
         ),
       )
-    // The first ones are made at once: there is nothing to replace.
     await act(async () => make()?.click())
     await vi.waitFor(() => expect(document.querySelector("[data-webhook-url] bdi")?.textContent).toBe(url))
     expect(document.querySelector("[data-webhook-token] bdi")?.textContent).toBe(token)
     expect(document.querySelector("[data-webhook-url] bdi")?.getAttribute("dir")).toBe("ltr")
     expect(text()).toContain(he("settings.sending.webhook.shownOnce"))
     expect(requests.filter((r) => r.url === "/api/v1/settings/smtp2go/webhook")).toHaveLength(1)
-    // New ones only after asking: the old ones stop working at once.
     await act(async () => make()?.click())
     await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
     expect(document.querySelector("[role=alertdialog]")?.textContent).toContain(
@@ -854,7 +834,6 @@ describe("organization dialogs", () => {
     Array.from(within.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)
   const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')
   const agent = (id: string, username: string) => ({ id, username, name: username, role: "agent", createdAt: when })
-  /** A request that answers only when the test says so. */
   function held() {
     let release: (answer: TransportResponse) => void = () => {}
     const answer = new Promise<TransportResponse>((resolve) => {
@@ -862,7 +841,6 @@ describe("organization dialogs", () => {
     })
     return { answer: answer as unknown as TransportResponse, release: (a: TransportResponse) => release(a) }
   }
-  /** Closes the open dialog by its X and confirms dropping what was typed. */
   async function closeTyped() {
     await act(async () =>
       document.querySelector<HTMLButtonElement>(`[role=dialog] button[aria-label="${he("common.close")}"]`)?.click(),
@@ -906,7 +884,6 @@ describe("organization dialogs", () => {
         filterOperator: "eq",
       },
     })
-    // The agent already in the organization is not offered.
     expect(dialog()?.querySelector('input[type="radio"][value="u2"]')).toBeNull()
     expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(49)
 
@@ -920,11 +897,9 @@ describe("organization dialogs", () => {
   })
 
   it("reaches an agent that 50 others sort before, by loading the next page", async () => {
-    // "sam" sorts after a000.sam to a049.sam: the first page of a search for "sam" never holds it.
     const everyone = [
       ...Array.from({ length: 50 }, (_, i) => agent(`p${i}`, `a${String(i).padStart(3, "0")}.sam`)),
       agent("u7", "sam"),
-      // Not a match: the empty search counts one more than the search for "sam", so the test can tell them apart.
       agent("u8", "zed"),
     ]
     auth.listUsers.mockImplementation(async ({ query }: { query: Record<string, unknown> }) => {
@@ -950,7 +925,6 @@ describe("organization dialogs", () => {
     await vi.waitFor(() =>
       expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({ query: { searchValue: "sam", offset: 0 } }),
     )
-    // The answer for "sam" is on screen (51 found, not the 52 of the empty search) and the button can load more.
     await vi.waitFor(() => {
       expect(dialog()?.querySelector('[data-testid="agents-more"]')?.textContent).toBe(
         he("organization.members.more", { shown: 50, total: 51 }),
@@ -963,7 +937,6 @@ describe("organization dialogs", () => {
     await act(async () => button(he("organization.members.showMore"), dialog() as HTMLElement)?.click())
     await vi.waitFor(() => expect(dialog()?.querySelector('input[type="radio"][value="u7"]')).not.toBeNull())
     expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({ query: { searchValue: "sam", offset: 50 } })
-    // What was loaded stays, and nothing more is offered.
     expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(51)
     expect(button(he("organization.members.showMore"), dialog() as HTMLElement)).toBeUndefined()
   })
@@ -1022,7 +995,6 @@ describe("organization dialogs", () => {
       expect(found).not.toBeNull()
       return found as HTMLElement
     })
-    // No template: no reminders for this organization.
     expect(panel.textContent).toContain(he("organization.reminder.empty"))
     await act(async () => button(he("organization.reminder.edit"), panel)?.click())
     const form = await vi.waitFor(() => {
@@ -1040,7 +1012,6 @@ describe("organization dialogs", () => {
       type(days, "0")
     })
     await act(async () => button(he("organization.reminder.save"))?.click())
-    // Days outside their bounds are refused before anything is sent.
     expect(form.textContent).toContain(he("organization.reminder.daysRule", { min: 1, max: 60 }))
     expect(requests.some((r) => r.url.endsWith("/reminder"))).toBe(false)
     await act(async () => type(days, "5"))
@@ -1077,7 +1048,6 @@ describe("organization dialogs", () => {
     await act(async () => button(he("organization.delete"), question)?.click())
     await vi.waitFor(() => expect(requests.some((r) => r.method === "DELETE")).toBe(true))
 
-    // Straight from one organization to another, as Back or Forward does: the same route, another id.
     await act(async () => router?.navigate(`/organizations/${OTHER}`))
     await vi.waitFor(() => expect(text()).toContain("Second"))
     await act(async () => pending.release(ok({ ok: true })))
@@ -1350,7 +1320,6 @@ describe("turning two-factor off from a dialog that is gone", () => {
     })
     await vi.waitFor(() => expect(text()).toContain(he("login.description")))
     expect(document.querySelector("[role=dialog]")).toBeNull()
-    // Another user signs in elsewhere and needs the setup; the old dialog's answer arrives only now.
     answers["/api/v1/me"] = totpRequired
     await act(async () => session.set({ session: { id: "B" }, user: { id: "u2", role: "agent" } }))
     await act(async () => release({ data: { status: true }, error: null }))
@@ -1372,18 +1341,15 @@ describe("an identity that comes back, and a late settings answer", () => {
     })
     auth.revokeOtherSessions.mockResolvedValue({ data: { status: true }, error: null })
     const answers: Answers = { "/api/setup/status": status(), "/api/v1/me": agent }
-    // The session remains A while /me first reads B; handle this disagreement once.
     await renderAt("/account", answers)
     await vi.waitFor(() => expect(text()).toContain("agent.one"))
     await new Promise((resolve) => setTimeout(resolve, 80))
-    // /me catches up to A, while the session stays unchanged.
     answers["/api/v1/me"] = admin
     await act(async () => noteAuthStatus(401))
     await vi.waitFor(() => expect(text()).toContain("first.admin"))
     await vi.waitFor(() => expect(button(he("account.endOthers"))).toBeDefined())
     await act(async () => button(he("account.endOthers"))?.click())
     await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
-    // Another tab has signed in as B again; /me notices before useSession refreshes.
     answers["/api/v1/me"] = agent
     await act(async () => noteAuthStatus(401))
     await vi.waitFor(() => expect(text()).toContain("agent.one"))
@@ -1468,7 +1434,6 @@ describe("tickets", () => {
   const MESSAGE = "4b0f3c2d-1a2b-4c3d-8e4f-5a6b7c8d9e01"
   const CATEGORY = "2f9e8b2a-8c77-4da0-9e77-7b2d8c5a4c33"
   const CATEGORY_2 = "3a0f9c3b-9d88-4eb1-8f88-8c3e9d6b5d44"
-  // Hebrew from code points: apps/web holds no Hebrew.
   const SHALOM = String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)
   const when = "2026-11-12T08:00:00.000Z"
   const button = (label: string) =>
@@ -1616,7 +1581,6 @@ describe("tickets", () => {
     await vi.waitFor(() => expect(document.querySelector('a[data-number="9"]')).toBeNull())
     expect(requests.some((r) => r.url === "/api/v1/tickets?flagged=1")).toBe(true)
 
-    // The rows and the filters stay while the next answer is on its way (TB-5).
     const select = document.querySelector<HTMLSelectElement>('[data-testid="organization-filter"]') as HTMLSelectElement
     expect(select).not.toBeNull()
     await act(async () => {
@@ -1653,21 +1617,17 @@ describe("tickets", () => {
     expect(box.dir).toBe("auto")
     expect(box.maxLength).toBe(SEARCH_MAX_LENGTH)
     expect(box.closest("search")).not.toBeNull()
-    // Typing alone asks nothing (SR-9); the button runs the search, trimmed.
     await act(async () => type(box, ` ${SHALOM} `))
     expect(requests.some((r) => r.url.includes("q="))).toBe(false)
     await act(async () => button(he("tickets.searchSubmit"))?.click())
     const encoded = new URLSearchParams({ q: SHALOM }).toString()
     await vi.waitFor(() => expect(where()).toBe(`/?${encoded}`))
     expect(requests.some((r) => r.url === `/api/v1/tickets?${encoded}`)).toBe(true)
-    // Without a chosen status the search covers every status, and the filter shows it.
     const statusFilter = document.querySelector<HTMLSelectElement>('[data-testid="status-filter"]') as HTMLSelectElement
     await vi.waitFor(() => expect(statusFilter.value).toBe("all"))
-    // Nothing found: the term and a hint, which no status limits.
     await vi.waitFor(() => expect(text()).toContain(he("tickets.searchEmptyHint")))
     expect(text()).toContain(SHALOM)
     expect(text()).not.toContain(he("tickets.searchEmptyStatusHint"))
-    // A chosen status narrows the search, open work too, and the hint says so.
     await act(async () => {
       statusFilter.value = "open_work"
       statusFilter.dispatchEvent(new Event("change", { bubbles: true }))
@@ -1675,7 +1635,6 @@ describe("tickets", () => {
     await vi.waitFor(() => expect(where()).toBe(`/?${encoded}&status=open_work`))
     expect(requests.some((r) => r.url === `/api/v1/tickets?status=open_work&${encoded}`)).toBe(true)
     await vi.waitFor(() => expect(text()).toContain(he("tickets.searchEmptyStatusHint")))
-    // Emptying the box ends the search at once.
     await act(async () => type(box, ""))
     await vi.waitFor(() => expect(where()).toBe("/?status=open_work"))
     await vi.waitFor(() => expect(document.querySelector('a[data-number="9"]')).not.toBeNull())
@@ -1707,7 +1666,6 @@ describe("tickets", () => {
       expect(found).not.toBeNull()
       return found as HTMLSelectElement
     })
-    // No status in the address is open work, and the request names none: the server's default is the same.
     expect(statusFilter.value).toBe("open_work")
     expect(statusFilter.selectedOptions[0]?.textContent).toBe(he("tickets.statusFilter.open_work"))
     expect(requests.some((r) => r.url === "/api/v1/tickets")).toBe(true)
@@ -1717,7 +1675,6 @@ describe("tickets", () => {
     })
     await vi.waitFor(() => expect(where()).toBe("/?status=all"))
     expect(requests.some((r) => r.url === "/api/v1/tickets?status=all")).toBe(true)
-    // The empty list of a chosen status is a filtered one, which can be cleared back to open work.
     const category = document.querySelector<HTMLSelectElement>('[data-testid="category-filter"]') as HTMLSelectElement
     expect(Array.from(category.options).map((option) => option.textContent)).toEqual([
       he("tickets.allCategories"),
@@ -1733,7 +1690,6 @@ describe("tickets", () => {
       statusFilter.value = "open_work"
       statusFilter.dispatchEvent(new Event("change", { bubbles: true }))
     })
-    // Open work chosen by hand stays chosen, so a search started now keeps it instead of covering every status.
     await vi.waitFor(() => expect(where()).toBe(`/?status=open_work&category=${CATEGORY}`))
     const box = document.querySelector<HTMLInputElement>('[data-testid="ticket-search"]') as HTMLInputElement
     await act(async () => type(box, "#9"))
@@ -1786,12 +1742,10 @@ describe("tickets", () => {
       ),
     })
     await vi.waitFor(() => expect(text()).toContain(he("ticket.imported.readOnly")))
-    // A file of an imported comment the scanner refused (plan 5.2): its original is in the Zendesk archive.
     const virus = document.querySelector('[data-file="virus.txt"]')
     expect(virus?.textContent).toContain(he("scan.hintImported.infected"))
     expect(virus?.textContent).not.toContain(he("scan.hint.infected"))
     expect(document.querySelector('[data-file="invoice.pdf"]')?.textContent).toContain(he("scan.hint.infected"))
-    // No control changes it: status, snooze, categories, move, and the composer are not offered.
     expect(document.querySelector('[data-testid="ticket-status"]')).toBeNull()
     expect(button(he("ticket.categories.edit"))).toBeUndefined()
     expect(button(he("ticket.move.open"))).toBeUndefined()
@@ -1820,7 +1774,6 @@ describe("tickets", () => {
       return found as HTMLSelectElement
     })
     expect(select.value).toBe("open")
-    // An admin may close: every status is offered as itself.
     expect(Array.from(select.options).map((option) => [option.value, option.disabled])).toEqual([
       ["new", false],
       ["open", false],
@@ -1880,7 +1833,6 @@ describe("tickets", () => {
     expect(closed?.disabled).toBe(true)
     expect(closed?.textContent).toBe(he("ticket.statusAdminOnly", { status: he("ticket.status.closed") }))
     expect(select.disabled).toBe(false)
-    // No organization to move to: no Move button.
     expect(button(he("ticket.move.open"))).toBeUndefined()
     expect(document.querySelector('[data-testid="composer-send-only"]')).not.toBeNull()
     if (mounted) {
@@ -1897,7 +1849,6 @@ describe("tickets", () => {
     })
     await vi.waitFor(() => expect(text()).toContain(he("ticket.statusClosedHint")))
     expect(document.querySelector<HTMLSelectElement>('[data-testid="ticket-status"]')?.disabled).toBe(true)
-    // On a closed ticket an agent only sends; the status stays closed.
     expect(document.querySelector('[data-testid="composer-send-only"]')).toBeNull()
     expect(document.querySelector('[data-testid="composer-send"]')?.textContent).toBe(he("compose.sendReply"))
   })
@@ -1916,7 +1867,6 @@ describe("tickets", () => {
     })
     expect(primary.textContent).toBe(he("compose.sendPending"))
     expect(document.querySelector('[data-testid="composer-send-only"]')?.textContent).toBe(he("compose.sendOnly"))
-    // A file of the ticket makes the reply something to send without typing (the editor is TipTap's).
     const attach = () =>
       act(async () =>
         document.querySelector<HTMLInputElement>('.ui-composer-ticket-files input[type="checkbox"]')?.click(),
@@ -1948,7 +1898,6 @@ describe("tickets", () => {
       ticket: { ...(view().body as { ticket: object }).ticket, organization: { id: ORG_B, name: "Beta" } },
       moveTargets: [{ id: ORG_A, name: "Alpha" }],
       compose: {
-        // The new default is not the first address: a stale From would show the first and send the old one.
         from: ["zeta@example.com", "beta@example.com"],
         defaultFrom: "beta@example.com",
         to: [{ address: "dana@example.com", name: "Dana Customer" }],
@@ -1970,7 +1919,6 @@ describe("tickets", () => {
     const box = () =>
       document.querySelector<HTMLInputElement>('.ui-composer-ticket-files input[type="checkbox"]') ?? null
     await vi.waitFor(() => expect(box()).not.toBeNull())
-    // The draft: a file of the ticket, picked before the move.
     await act(async () => box()?.click())
     expect(box()?.checked).toBe(true)
     await act(async () => button(he("ticket.move.open"))?.click())
@@ -2002,7 +1950,6 @@ describe("tickets", () => {
       return found as HTMLButtonElement
     })
     expect(later.textContent).toBe(he("compose.sendLater"))
-    // Nothing to send yet: the composer says so before asking for a time.
     await act(async () => later.click())
     expect(text()).toContain(he("compose.empty"))
     expect(document.querySelector('[data-testid="composer-when"]')).toBeNull()
@@ -2019,14 +1966,12 @@ describe("tickets", () => {
     const date = form.querySelector<HTMLInputElement>('input[type="date"]') as HTMLInputElement
     const time = form.querySelector<HTMLInputElement>('input[data-field="time"]') as HTMLInputElement
     const submit = () => document.querySelector<HTMLButtonElement>('[data-testid="composer-when-submit"]')?.click()
-    // 27 March 2099: Israel's clock skips from 02:00 to 03:00.
     await act(async () => {
       type(date, "2099-03-27")
       type(time, "02:30")
     })
     await act(async () => submit())
     expect(text()).toContain(he("when.missingHour"))
-    // "Send" leaves the status: the status action is chosen here and applies when the reply goes.
     await act(async () => form.querySelector<HTMLInputElement>('input[data-pending="false"]')?.click())
     await act(async () => {
       type(date, "2099-01-10")
@@ -2082,7 +2027,6 @@ describe("tickets", () => {
       return found as HTMLElement
     })
     expect(card.textContent).toContain(he("scheduled.state.scheduled"))
-    // 07:30 UTC on 10 January is 09:30 in Israel.
     expect(card.textContent).toContain("10/01/2099 09:30")
     expect(card.querySelector('p[dir="auto"]')?.textContent).toBe(SHALOM)
     expect(text()).toContain(he("scheduled.reason.customer_reply"))
@@ -2108,7 +2052,6 @@ describe("tickets", () => {
       return found as HTMLElement
     })
     expect(composer.textContent).toContain(he("compose.editingHint"))
-    // While it is being changed the composer only saves it (with its time) or stops.
     expect(composer.querySelector('[data-testid="composer-send"]')).toBeNull()
     await act(async () => composer.querySelector<HTMLButtonElement>('[data-testid="composer-later"]')?.click())
     const form = await vi.waitFor(() => {
@@ -2160,7 +2103,6 @@ describe("tickets", () => {
       "/api/v1/tickets/7": () =>
         view("v1", [], {}, [{ id: ORG_B, name: "Beta" }], [edited, entry(OTHER, { editable: false })]),
       [`/api/v1/scheduled/${OTHER}/cancel`]: () => {
-        // Meanwhile another tab saved a newer version of the reply being changed here.
         edited = entry(EDITED, { version: 4, text: "Newer", html: "<p>Newer</p>" })
         return ok({ ok: true })
       },
@@ -2193,7 +2135,6 @@ describe("tickets", () => {
     }
     const puts = () => requests.filter((r) => r.method === "PUT" && r.url === `/api/v1/scheduled/${EDITED}`)
 
-    // A newer version arrived in the view: saving still names the version the composer loaded, and the server refuses.
     await cancel(OTHER)
     await save()
     await vi.waitFor(() => expect(puts()).toHaveLength(1))
@@ -2206,7 +2147,6 @@ describe("tickets", () => {
     )
     await vi.waitFor(() => expect(document.querySelector('[data-testid="composer-when"]')).toBeNull())
 
-    // The reply was cancelled meanwhile: the change stays on it, the server's refusal shows, and nothing new is sent.
     answer = { status: 409, body: { error: "scheduled_not_open" } }
     await cancel(EDITED)
     expect(document.querySelector(`.ui-composer[data-editing="${EDITED}"]`)).not.toBeNull()
@@ -2275,7 +2215,6 @@ describe("tickets", () => {
       await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).toBeNull())
     }
 
-    // Nothing changed in the first: the second loads at once.
     await change(FIRST)
     await vi.waitFor(() => expect(editingId()).toBe(FIRST))
     await change(SECOND)
@@ -2283,14 +2222,12 @@ describe("tickets", () => {
     expect(document.querySelector("[role=alertdialog]")).toBeNull()
     expect(toField().value).toBe("lee@example.com")
 
-    // An unsaved edit: the switch asks; keeping it stays on the reply being changed, with the edit.
     await act(async () => type(toField(), "kim@example.com"))
     await change(FIRST)
     await answer(he("unsaved.keepEditing"))
     await vi.waitFor(() => expect(editingId()).toBe(SECOND))
     expect(toField().value).toBe("kim@example.com")
 
-    // Discarding it loads the other reply.
     await change(FIRST)
     await answer(he("unsaved.discard"))
     await vi.waitFor(() => expect(editingId()).toBe(FIRST))
@@ -2320,12 +2257,10 @@ describe("tickets", () => {
       await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="composer-send"]')?.click())
       await vi.waitFor(() => expect(posts()).toHaveLength(count))
     }
-    // The server failed without saying whether it wrote: the retry is the same submission.
     await send(1)
     await vi.waitFor(() => expect(text()).toContain(he("errors.server")))
     await send(2)
     expect(posts()[1]).toBe(posts()[0])
-    // A refusal wrote nothing: the next click is a new submission.
     await vi.waitFor(() => expect(text()).toContain(he("errors.code.submissionReused")))
     await send(3)
     expect(posts()[2]).not.toBe(posts()[1])
@@ -2397,12 +2332,10 @@ describe("tickets", () => {
       expect(found).not.toBeNull()
       return found as HTMLElement
     })
-    // When it goes, in Israel time, and what stops it.
     expect(card.textContent).toContain(he("reminder.title"))
     expect(card.textContent).toContain(he("reminder.goesAt"))
     expect(card.querySelector("time")?.getAttribute("datetime")).toBe(due)
     expect(card.textContent).toContain(he("reminder.hint"))
-    // The sent one: marked, under the organization's name, and without Send again (Mark as sent stays).
     const message = document.querySelector<HTMLElement>(`[data-message="${SENT}"]`) as HTMLElement
     expect(message.textContent).toContain(he("ticket.reminder"))
     expect(message.textContent).toContain("Alpha")
@@ -2488,15 +2421,12 @@ describe("tickets", () => {
         expect(found).not.toBeNull()
         return found as HTMLElement
       })
-    // 45 minutes past its time and still scheduled (its job and the worker's retries did not send it): the view says so
-    // and offers the way out.
     const late = await card(LATE)
     expect(late.getAttribute("data-late")).toBe("true")
     expect(late.textContent).toContain(he("scheduled.state.late"))
     expect(late.textContent).toContain(he("scheduled.wasAt"))
     expect(late.querySelector('[data-testid="scheduled-late"]')?.textContent).toBe(he("scheduled.late"))
     expect(late.querySelector('[data-testid="scheduled-cancel"]')).not.toBeNull()
-    // Ten minutes past its time is within the worker's retries: still scheduled, nothing said.
     const recent = await card(RECENT)
     expect(recent.hasAttribute("data-late")).toBe(false)
     expect(recent.textContent).toContain(he("scheduled.state.scheduled"))
@@ -2534,7 +2464,6 @@ describe("tickets", () => {
     await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="snooze-when-submit"]')?.click())
     await vi.waitFor(() => {
       const put = requests.find((r) => r.method === "PUT" && r.url === "/api/v1/tickets/7/snooze")
-      // Summer time: 08:00 in Israel is 05:00 UTC.
       expect(JSON.parse(put?.body ?? "null")).toEqual({ until: "2099-07-01T05:00:00.000Z" })
     })
     await vi.waitFor(() => expect(control.getAttribute("data-snoozed")).toBe(""))
@@ -2567,7 +2496,6 @@ describe("tickets", () => {
       return found as HTMLIFrameElement
     })
     expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?v=v1`)
-    // Links open in a new tab that leaves the sandbox; nothing in the frame runs or reaches Maane.
     expect(frame.getAttribute("sandbox")).toBe("allow-popups allow-popups-to-escape-sandbox")
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer")
     expect(frame.style.height).toBe("140px")
@@ -2576,12 +2504,10 @@ describe("tickets", () => {
     expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?v=v1&images=1`)
     expect(text()).toContain(he("ticket.imagesShown"))
 
-    // The message's own review flag, and the blocked text: its words and its signature, never its content.
     expect(document.querySelector(".ui-message-head")?.textContent).toContain(he("flag.blocked_content"))
     const notice = document.querySelector('[data-field="text"]')
     expect(notice?.textContent).toContain(he("scan.status.infected"))
     expect(notice?.querySelector('bdi[dir="ltr"]')?.textContent).toBe("Eicar-Signature")
-    // Files: a clean image previews and downloads, a blocked one does neither, a drawing only downloads.
     const photo = document.querySelector('[data-file="photo.png"]') as HTMLElement
     expect(photo.textContent).toContain(he("scan.status.clean"))
     expect(photo.querySelector("a[download]")?.getAttribute("href")).toBe("/api/v1/files/f1")
@@ -2593,7 +2519,6 @@ describe("tickets", () => {
     const drawing = document.querySelector('[data-file="drawing.svg"]') as HTMLElement
     expect(drawing.querySelector("a[download]")).not.toBeNull()
     expect(drawing.querySelector("button")).toBeNull()
-    // The ticket's facts: the address left to right, the linked ticket, the flags.
     expect(document.querySelector('.ui-facts bdi[dir="ltr"]')?.textContent).toBe("help@example.com")
     expect(document.querySelector('.ui-facts a[href="/tickets/3"]')).not.toBeNull()
     expect(text()).toContain(he("flag.sender_not_participant"))
@@ -2628,7 +2553,6 @@ describe("tickets", () => {
     })
     await act(async () => button(he("ticket.showImages"))?.click())
     expect(frame.getAttribute("src")).toBe(`/api/v1/messages/${MESSAGE}/body?v=v1&images=1`)
-    // A waiting inline image or HTML body was decided: the next read of the ticket carries a new version.
     version = "v2"
     await act(async () => {
       focusManager.setFocused(false)
@@ -2692,7 +2616,6 @@ describe("tickets", () => {
     expect(composer.textContent).toContain("Agent Name (Alpha)")
     expect(composer.textContent).toContain("Alpha support")
     expect(composer.querySelector(".ui-editor-text")?.getAttribute("dir")).toBe("auto")
-    // Each line of the signature takes its own direction, as the email gives it.
     expect(
       Array.from(composer.querySelectorAll(".ui-composer-signature [dir]")).map((line) => [
         line.getAttribute("dir"),
@@ -2703,7 +2626,6 @@ describe("tickets", () => {
       ["auto", `${SHALOM},`],
       ["auto", "The Alpha team."],
     ])
-    // No listening mode: a reply is always possible.
     expect(composer.querySelector<HTMLButtonElement>('button[data-kind="reply"]')?.disabled).toBe(false)
   })
 
@@ -2715,7 +2637,6 @@ describe("tickets", () => {
       ticket: { ...body.ticket, number: 8 },
       compose: { ...body.compose, to: [{ address: "eight@example.com", name: null }], cc: [] },
     })
-    // Ticket 8 first, so it is in the cache and shows at once when the agent comes back to it from ticket 7.
     await renderAt("/tickets/8", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
@@ -2761,7 +2682,6 @@ describe("tickets", () => {
       outboxState: null,
     }
     const body = view().body as { ticket: { number: number } }
-    // Ticket 8 first, so it is in the cache and shows at once when the agent goes back to it: the page stays mounted.
     await renderAt("/tickets/8", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
@@ -2779,7 +2699,6 @@ describe("tickets", () => {
       await act(async () => {
         void router?.navigate(`/tickets/${number}`)
       })
-      // Leaving the ticket with the reply loaded in the composer asks first (its text counts as unsaved).
       if (number === 8) {
         const question = await vi.waitFor(() => {
           const found = document.querySelector<HTMLElement>("[role=alertdialog]")
@@ -2812,9 +2731,7 @@ describe("tickets", () => {
     expect(card.querySelector('[data-recipient="ron@example.com"]')?.textContent).toContain(
       he("delivery.provider.failover"),
     )
-    // The recipients show once, in the sending list, not again in the header.
     expect(card.querySelector(".ui-message-to")).toBeNull()
-    // Mark as sent is per recipient, and only for one whose fate is unknown.
     expect(card.querySelector('[data-mark="ron@example.com"]')).toBeNull()
     await act(async () => card.querySelector<HTMLButtonElement>('[data-mark="dana@example.com"]')?.click())
     await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).not.toBeNull())
@@ -2888,7 +2805,6 @@ describe("tickets", () => {
       "/api/v1/tickets/7": view("v1", [delivered]),
     })
     await vi.waitFor(() => expect(text()).toContain(he("delivery.unmatched")))
-    // What the unmatched event said is shown: its status, time, recipient, and Message-ID.
     const unmatched = document.querySelector('[data-unmatched="webhook"]') as HTMLElement
     expect(unmatched.textContent).toContain(he("delivery.status.soft_bounce"))
     expect(unmatched.textContent).toContain("lea@example.com")
@@ -2928,7 +2844,6 @@ describe("tickets", () => {
       {
         id: "link-1",
         kind: "url",
-        // A scanner kept clicking: the server sent only the newest clicks, with the total.
         total: 120,
         target: "https://www.example.com/guide",
         clicks: [
@@ -2952,7 +2867,6 @@ describe("tickets", () => {
         total: 1,
         clicks: [click({ id: 3, device: "bot", scanner: ["agent"] })],
       },
-      // Two history files of one name (image001.png is common in mail): each its own row.
       { id: "link-3", kind: "file", target: "invoice.pdf", total: 1, clicks: [click({ id: 4 })] },
     ]
     await renderAt("/tickets/7", {
@@ -2976,21 +2890,18 @@ describe("tickets", () => {
     expect(guide?.querySelector(".ui-clicks-shown")?.textContent).toBe(he("links.shown", { shown: "2", total: "120" }))
     expect(file?.querySelector(".ui-clicks-shown")).toBeNull()
     const rows = Array.from(guide?.querySelectorAll<HTMLElement>(".ui-clicks-list > li") ?? [])
-    // The newest first, as the server orders them: a scanner's click with no country, then the customer's.
     expect(rows[0]?.getAttribute("data-scanner")).toBe("yes")
     expect(rows[0]?.textContent).toContain(he("links.scanner"))
     expect(rows[0]?.textContent).toContain(he("links.scannerReason.early"))
     expect(rows[0]?.querySelector(".ui-click-flag-none")).not.toBeNull()
     const customer = rows[1] as HTMLElement
     expect(customer.getAttribute("data-scanner")).toBe("no")
-    // The flag is the first thing in reading order, then the address isolated left to right.
     const [first, second] = Array.from(customer.children)
     expect(first?.className).toContain("fi fi-il")
     expect(first?.getAttribute("aria-label")).toBe(he("links.country", { code: "IL" }))
     expect(second?.tagName).toBe("BDI")
     expect(second?.getAttribute("dir")).toBe("ltr")
     expect(second?.textContent).toBe("192.0.2.10")
-    // The city, region, and ISP: the address's tooltip, and written under it for a phone.
     const place = [
       he("links.city", { value: "Tel Aviv" }),
       he("links.region", { value: "Tel Aviv District" }),
@@ -3002,7 +2913,6 @@ describe("tickets", () => {
     expect(file?.getAttribute("data-kind")).toBe("file")
     expect(file?.textContent).toContain("invoice.pdf")
     expect(file?.textContent).toContain(he("links.scannerReason.agent"))
-    // A reply nobody clicked shows no section.
     expect(document.querySelectorAll(".ui-clicks")).toHaveLength(1)
   })
 
@@ -3038,13 +2948,11 @@ describe("tickets", () => {
         })
       }
 
-      // Closed while the file still downloads: pdf.js never starts.
       await act(async () => (row.querySelector("button") as HTMLButtonElement).click())
       await closeDialog()
       await finishDownload()
       expect(pdf.openPdf).not.toHaveBeenCalled()
 
-      // Closed while pdf.js loads: no document is ever started.
       let loaded: ((pdfjs: unknown) => void) | null = null
       pdf.loadPdfJs.mockImplementation(
         () =>
@@ -3062,7 +2970,6 @@ describe("tickets", () => {
       })
       expect(pdf.openPdf).not.toHaveBeenCalled()
 
-      // Closed while the document opens: its loading task is destroyed.
       const opening = { destroy: vi.fn(async () => {}), promise: new Promise(() => {}) }
       pdf.loadPdfJs.mockResolvedValue({})
       pdf.openPdf.mockReturnValue(opening)
@@ -3190,7 +3097,6 @@ describe("the intake log", () => {
     expect(heard.hasAttribute("data-mode")).toBe(false)
     const live = document.querySelector('[data-message="m1"]') as HTMLElement
     expect(live.textContent).toContain(he("intake.outcome.automated"))
-    // Every reason in words, never its code; a code the UI does not know yet shows as it is, left to right.
     expect(heard.querySelector('[data-reason="sender_not_participant"]')?.textContent).toBe(
       he("intake.reason.sender_not_participant"),
     )
@@ -3218,7 +3124,6 @@ describe("browser notifications on this device", () => {
   const button = (label: string) =>
     [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === label) ?? null
 
-  /** A browser with push: what it did, in order, next to the requests the transport answered. */
   function fakeDevice(subscribed: boolean, fails: { current?: boolean; unsubscribe?: boolean } = {}) {
     const events: string[] = []
     const subscription = (): DeviceSubscription => ({
@@ -3281,7 +3186,6 @@ describe("browser notifications on this device", () => {
     expect(events.slice(2)).toEqual([`DELETE ${JSON.stringify({ endpoint: ENDPOINT })}`, "unsubscribe"])
   })
 
-  /** Lets the requests and the browser calls already started finish. */
   const settle = () => act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
 
   it("ends a subscription this browser holds for someone else once a user is signed in, on any page", async () => {
@@ -3326,7 +3230,6 @@ describe("browser notifications on this device", () => {
     await act(async () => window.dispatchEvent(new Event("focus")))
     await vi.waitFor(() => expect(events).toEqual(["unsubscribe"]))
     expect(asked).toBe(2)
-    // Answered: the checks stop.
     await act(async () => window.dispatchEvent(new Event("focus")))
     await settle()
     expect(asked).toBe(2)
@@ -3342,7 +3245,6 @@ describe("browser notifications on this device", () => {
       "/api/v1/me": admin,
       "/api/v1/notifications/state": () =>
         failing ? { status: 500, body: { error: "internal" } } : ok({ publicKey: PUBLIC_KEY, on }),
-      // Saving the new subscription takes a while: the check below runs in between.
       "/api/v1/notifications/subscription": (request) => {
         events.push(request.method)
         return new Promise((resolve) => {
@@ -3362,7 +3264,6 @@ describe("browser notifications on this device", () => {
     await act(async () => button(he("notifications.turnOn"))?.click())
     await vi.waitFor(() => expect(events).toContain("PUT"))
     expect(events).toEqual(["unsubscribe", `subscribe ${PUBLIC_KEY}`, "PUT"])
-    // The server does not count the new subscription yet; the check must not end it.
     await act(async () => window.dispatchEvent(new Event("focus")))
     await settle()
     expect(events).toEqual(["unsubscribe", `subscribe ${PUBLIC_KEY}`, "PUT"])
@@ -3386,7 +3287,6 @@ describe("browser notifications on this device", () => {
     }
     await renderAt("/account", answers)
     await vi.waitFor(() => expect(text()).toContain(he("notifications.off")))
-    // The check on signing in ends it first; turning on then makes a new one.
     await vi.waitFor(() => expect(events).toEqual(["unsubscribe"]))
     await act(async () => button(he("notifications.turnOn"))?.click())
     await vi.waitFor(() => expect(events).toContain("PUT"))
@@ -3401,7 +3301,6 @@ describe("browser notifications on this device", () => {
     })
     const answers: Answers = {
       "/api/setup/status": status(),
-      // Once signed out, the session is gone, as Better Auth's signOut leaves it.
       "/api/v1/me": () => (events.includes("signOut") ? signedOut : totpRequired),
       "/api/v1/notifications/subscription": (request) => {
         events.push(`${request.method} ${request.body}`)
@@ -3426,7 +3325,6 @@ describe("browser notifications on this device", () => {
     })
     const answers: Answers = {
       "/api/setup/status": status(),
-      // Once signed out, the session is gone, as Better Auth's signOut leaves it.
       "/api/v1/me": () => (events.includes("signOut") ? signedOut : totpRequired),
       "/api/v1/notifications/subscription": deleted,
     }
@@ -3538,7 +3436,6 @@ describe("import from Zendesk", () => {
       agent.value = "u1"
       agent.dispatchEvent(new Event("change", { bubbles: true }))
     })
-    // A changed mapping is saved before a run starts.
     expect(start()?.disabled).toBe(true)
     expect(text()).toContain(he("import.mapping.unsaved"))
     await act(async () => button(he("import.mapping.save"))?.click())
@@ -3745,7 +3642,6 @@ describe("import from Zendesk", () => {
       },
       [`/api/v1/admin/import/runs/${RUN}/report`]: ok({ rows: [], next: null }),
     })
-    // While a run is open, Finish import waits for it.
     await vi.waitFor(() => expect(button(he("import.finish.button"))?.disabled).toBe(true))
     expect(text()).toContain(he("import.finish.runOpen"))
     open = false
@@ -3756,7 +3652,6 @@ describe("import from Zendesk", () => {
     await vi.waitFor(() => expect(button(he("import.finish.button"))?.disabled).toBe(false))
     focusManager.setFocused(undefined)
     expect(text()).toContain(he("import.finish.hint"))
-    // It asks once more; "Not yet" sends nothing.
     await act(async () => button(he("import.finish.button"))?.click())
     const question = await vi.waitFor(() => {
       const found = document.querySelector<HTMLElement>("[role=alertdialog]")
@@ -3778,8 +3673,6 @@ describe("import from Zendesk", () => {
       expect(document.querySelector(".ui-toast-success")?.textContent).toContain(he("import.finish.done")),
     )
     expect(requests.filter((r) => r.method === "POST" && r.url === "/api/v1/admin/import/finish")).toHaveLength(1)
-    // Finished: the page says when, nothing more can start, and Finish import is gone. It waits for the date's label,
-    // which only the page shows: the toast's words hold those of import.closed.
     await vi.waitFor(() => expect(text()).toContain(he("import.finishedOn")))
     expect(text()).toContain(he("import.closed"))
     expect(button(he("import.finish.button"))).toBeUndefined()
