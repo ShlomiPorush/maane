@@ -361,12 +361,10 @@ export const ticket = pgTable(
     createdAt: createdAt(),
     lastActivityAt: at("last_activity_at").notNull().defaultNow(),
     /**
-     * Snoozed until this instant (plan 4.2): the ticket leaves the default list until then. Its `snooze-end` job names
-     * `snooze_version`, which every new snooze and every end of one moves on, so an older job finds a newer version
-     * and does nothing.
+     * Snoozed until this instant (plan 4.2): the ticket leaves the default list until then. Its `snooze-end` job ends
+     * the snooze only once this time has come, so the job of a replaced snooze does nothing early.
      */
     snoozedUntil: at("snoozed_until"),
-    snoozeVersion: integer("snooze_version").notNull().default(0),
     /**
      * An imported ticket (plan 5.1): its Zendesk ticket ID, which is also its Maane number (owner's decision,
      * 2026-11-16). Null for a ticket Maane opened. An imported ticket is read-only for agents until an

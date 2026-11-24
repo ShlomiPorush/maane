@@ -41,7 +41,7 @@ export type ReadyMessage = {
 /**
  * Writes the message and, for a reply, what sends it, and queues the send through `queueSend` (in the same
  * transaction). Returns the message's ID, or null when the same submission was written already (nothing more is written
- * then); throws ActionWritten when the same timed action's version made its outbox row already.
+ * then).
  */
 export async function writeMessage(
   tx: Pick<Tx, "insert">,
@@ -101,20 +101,14 @@ export async function writeMessage(
       })),
     )
   if (!isReply || !ready.built || !ready.from) return row.id
-  const [made] = await tx
-    .insert(outbox)
-    .values({
-      messageId: row.id,
-      mime: ready.built.mime,
-      messageIdHeader: ready.built.messageId,
-      fromAddress: ready.from,
-      actionId: input.action?.id ?? null,
-      actionVersion: input.action?.version ?? null,
-    })
-    .onConflictDoNothing({ target: [outbox.actionId, outbox.actionVersion] })
-    .returning({ messageId: outbox.messageId })
-  // This action's version made its row already: the whole write is undone by the caller (it throws).
-  if (!made) throw new ActionWritten()
+  await tx.insert(outbox).values({
+    messageId: row.id,
+    mime: ready.built.mime,
+    messageIdHeader: ready.built.messageId,
+    fromAddress: ready.from,
+    actionId: input.action?.id ?? null,
+    actionVersion: input.action?.version ?? null,
+  })
   await tx.insert(outboxRecipient).values([
     ...ready.to.map((entry, position) => ({ messageId: row.id, ...entry, kind: "to", position })),
     ...ready.cc.map((entry, position) => ({
@@ -136,11 +130,4 @@ export async function writeMessage(
       )
   await queueSend({ messageId: row.id })
   return row.id
-}
-
-/** A timed action's version already has its outbox row: a rerun makes no second message. */
-export class ActionWritten extends Error {
-  constructor() {
-    super("this timed action's version already made its reply")
-  }
 }

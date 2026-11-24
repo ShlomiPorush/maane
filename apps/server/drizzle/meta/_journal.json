@@ -225,6 +225,13 @@
       "when": 1794874390632,
       "tag": "0031_drop_listening_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1795539900274,
+      "tag": "0032_drop_snooze_version",
+      "breakpoints": true
     }
   ]
 }

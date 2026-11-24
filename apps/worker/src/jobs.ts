@@ -143,7 +143,8 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
       if ((PROVIDERS as readonly unknown[]).includes(provider))
         return smtpTest(send.settings, provider as Provider, send.timeouts)
     })
-    // Timed actions and snoozes (plan 4.2): each job carries the version it was queued for; an older one does nothing.
+    // Timed actions and snoozes (plan 4.2): an action's job carries the version it was queued for, and an older one does
+    // nothing; a snooze's job ends the ticket's snooze only once its time has come.
     const actions = new TimedActions({
       db: send.db,
       settings: send.settings,
@@ -156,10 +157,9 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
       if (typeof actionId === "string" && Number.isSafeInteger(version))
         return { result: await timedActionJob(actions, actionId, version as number) }
     })
-    await boss.work<{ ticketId?: unknown; version?: unknown }>(SNOOZE_END, async ([job]) => {
-      const { ticketId, version } = job?.data ?? {}
-      if (typeof ticketId === "string" && Number.isSafeInteger(version))
-        return { ended: await snoozeEnded(send.db, ticketId, version as number) }
+    await boss.work<{ ticketId?: unknown }>(SNOOZE_END, async ([job]) => {
+      const ticketId = job?.data.ticketId
+      if (typeof ticketId === "string") return { ended: await snoozeEnded(send.db, ticketId) }
     })
     // What a failed or lost job left waiting past its time is queued again (pg-boss's documented schedule).
     await boss.createQueue(TIMED_RECOVER, { policy: "exclusive", expireInSeconds: 5 * 60 })

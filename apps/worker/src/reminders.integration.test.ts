@@ -703,14 +703,10 @@ describe("the period ending between the reminder's outbox row and the send point
 })
 
 describe("a crash and a rerun", () => {
-  it("find the reminder's outbox row and never make a second reminder", async () => {
+  it("a crash after the claim sends nothing and never makes a second reminder", async () => {
     const { agent, t } = await waiting()
     const due = await onlyReminder(t.id)
     expect(await actions().run(due.id, 1)).toBe("handed")
-    // A rerun that finds the action as if its state had not been saved finds the reminder its version made.
-    await db().update(timedAction).set({ state: "scheduled" }).where(eq(timedAction.id, due.id))
-    expect(await actions().run(due.id, 1)).toBe("stale")
-    await db().update(timedAction).set({ state: "handed" }).where(eq(timedAction.id, due.id))
     expect(await repliesOf(t.id)).toBe(2)
     // The send point stops after its claim (a crash): its rerun turns the recipients unknown and sends nothing.
     const [made] = await outboxOfAction(due.id)

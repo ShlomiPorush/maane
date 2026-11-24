@@ -1,0 +1,1 @@
+ALTER TABLE "ticket" DROP COLUMN "snooze_version";

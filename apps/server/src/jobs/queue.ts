@@ -33,7 +33,7 @@ export const SMTP_TEST = "smtp-test"
 export const DELIVERY_POLL = "delivery-poll"
 /** A timed action at its time (plan 4.2): `{ actionId, version }`, queued with `startAfter` at the action's time. */
 export const TIMED_ACTION = "timed-action"
-/** The end of a snooze at its time (plan 4.2): `{ ticketId, version }`, queued with `startAfter` at that time. */
+/** The end of a snooze at its time (plan 4.2): `{ ticketId }`, queued with `startAfter` at that time. */
 export const SNOOZE_END = "snooze-end"
 /**
  * Every five minutes (plan 4.2): queues again the job of each scheduled reply and each snooze whose time passed a while

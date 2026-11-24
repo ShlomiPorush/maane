@@ -573,16 +573,12 @@ describe("a customer reply before a scheduled reply's time", () => {
 })
 
 describe("a crash and a rerun", () => {
-  it("find the existing outbox row and never make a second message", async () => {
+  it("a crash after the claim sends nothing and never makes a second message", async () => {
     const admin = await firstAdmin()
     const { b: agent } = await newAgent(admin, "an.agent", [org])
     const t = await customerTicket()
     const id = await schedule(agent, t.number)
     expect(await actions().run(id, 1)).toBe("handed")
-    // A rerun that finds the action as if its state had not been saved finds the reply its version made.
-    await db().update(timedAction).set({ state: "scheduled" }).where(eq(timedAction.id, id))
-    expect(await actions().run(id, 1)).toBe("stale")
-    await db().update(timedAction).set({ state: "handed" }).where(eq(timedAction.id, id))
     expect(await repliesOf(t.id)).toBe(1)
     // The send point stops after its claim (a crash): its rerun turns the recipients unknown and sends nothing.
     const [made] = await outboxOfAction(id)
@@ -639,7 +635,7 @@ describe("a move and a lost permission before the time", () => {
 describe("the queue", () => {
   it("keeps a job due in more than pg-boss's 14 days of retention until its time", async () => {
     const at = new Date(Date.now() + 40 * 24 * HOUR)
-    const far = await boss.send(SNOOZE_END, { ticketId: randomUUID(), version: 1 }, { startAfter: at })
+    const far = await boss.send(SNOOZE_END, { ticketId: randomUUID() }, { startAfter: at })
     const job = await boss.getJobById(SNOOZE_END, far ?? "")
     expect(job?.startAfter.getTime()).toBe(at.getTime())
     expect(job?.keepUntil.getTime()).toBeGreaterThan(at.getTime())
@@ -666,13 +662,13 @@ describe("the queue", () => {
     expect(await requeueOverdue(db(), send)).toEqual({ actions: 1, snoozes: 1 })
     expect((await timedJobs(overdue)).map((job) => job.version)).toEqual([1])
     expect(await timedJobs(ahead)).toEqual([])
-    const snoozes = await db().execute<{ data: { version: number } }>(
+    const snoozes = await db().execute<{ data: { ticketId: string } }>(
       sql`select data from pgboss.job where name = ${SNOOZE_END} and data->>'ticketId' = ${u.id}`,
     )
     expect(snoozes.rows).toHaveLength(1)
     // The jobs it queued do what the lost ones would have.
     expect(await actions().run(overdue, 1)).toBe("handed")
-    expect(await snoozeEnded(db(), u.id, snoozes.rows[0]?.data.version ?? 0)).toBe(true)
+    expect(await snoozeEnded(db(), snoozes.rows[0]?.data.ticketId ?? "")).toBe(true)
     expect(await statusOf(u.id)).toBe("open")
     expect((await view(agent, u.number)).ticket.snoozeOverdue).toBe(false)
     expect(await requeueOverdue(db(), send)).toEqual({ actions: 0, snoozes: 0 })
@@ -688,11 +684,14 @@ describe("snooze", () => {
     return (answer.json as TicketList).tickets.map((entry) => entry.number)
   }
   async function snoozeJobs(ticketId: string) {
-    const rows = await db().execute<{ data: { version: number } }>(
+    const rows = await db().execute<{ data: { ticketId: string } }>(
       sql`select data from pgboss.job where name = ${SNOOZE_END} and data->>'ticketId' = ${ticketId} order by created_on`,
     )
-    return rows.rows.map((row) => row.data.version)
+    return rows.rows.map((row) => row.data.ticketId)
   }
+  /** Moves the ticket's snooze into the past, as when its job runs at its time. */
+  const timeHasCome = (ticketId: string) =>
+    db().update(ticket).set({ snoozedUntil: sql`now() - interval '1 minute'` }).where(eq(ticket.id, ticketId))
 
   it("takes a ticket out of the default list until its time; a pending ticket then becomes open, audited", async () => {
     const admin = await firstAdmin()
@@ -709,8 +708,14 @@ describe("snooze", () => {
     expect(summary.tickets.find((entry) => entry.number === t.number)?.snoozedUntil).toBe(until)
 
     await agent.call("PUT", `/api/v1/tickets/${t.number}/status`, { status: "pending" })
-    const [version] = await snoozeJobs(t.id)
-    expect(await snoozeEnded(db(), t.id, version ?? 0)).toBe(true)
+    const [queued] = await snoozeJobs(t.id)
+    // Run before its time, the job leaves the ticket snoozed.
+    expect(await snoozeEnded(db(), queued ?? "")).toBe(false)
+    expect(await statusOf(t.id)).toBe("pending")
+    expect(await list(agent, "snoozed")).toEqual([t.number])
+    expect((await view(agent, t.number)).ticket.snoozedUntil).toBe(until)
+    await timeHasCome(t.id)
+    expect(await snoozeEnded(db(), queued ?? "")).toBe(true)
     expect(await statusOf(t.id)).toBe("open")
     expect(await list(agent)).toContain(t.number)
     expect((await view(agent, t.number)).ticket.snoozedUntil).toBeNull()
@@ -729,7 +734,7 @@ describe("snooze", () => {
       { action: "ticket.unsnooze", actor: "system", details: { ticket: t.number, via: "time" } },
     ])
     // Its job again finds no snooze and does nothing.
-    expect(await snoozeEnded(db(), t.id, version ?? 0)).toBe(false)
+    expect(await snoozeEnded(db(), queued ?? "")).toBe(false)
   })
 
   it("leaves a ticket solved meanwhile as it is", async () => {
@@ -738,8 +743,9 @@ describe("snooze", () => {
     const t = await customerTicket()
     expect((await snooze(agent, t.number, inHours(2))).status).toBe(200)
     await agent.call("PUT", `/api/v1/tickets/${t.number}/status`, { status: "solved" })
-    const [version] = await snoozeJobs(t.id)
-    expect(await snoozeEnded(db(), t.id, version ?? 0)).toBe(true)
+    const [queued] = await snoozeJobs(t.id)
+    await timeHasCome(t.id)
+    expect(await snoozeEnded(db(), queued ?? "")).toBe(true)
     expect(await statusOf(t.id)).toBe("solved")
   })
 
@@ -751,13 +757,13 @@ describe("snooze", () => {
     const later = inHours(6)
     expect((await snooze(agent, t.number, later)).status).toBe(200)
     const [first, second] = await snoozeJobs(t.id)
-    expect(await snoozeEnded(db(), t.id, first ?? 0)).toBe(false)
+    expect(await snoozeEnded(db(), first ?? "")).toBe(false)
     expect((await view(agent, t.number)).ticket.snoozedUntil).toBe(later)
     await agent.call("PUT", `/api/v1/tickets/${t.number}/status`, { status: "pending" })
     expect((await agent.call("DELETE", `/api/v1/tickets/${t.number}/snooze`)).status).toBe(200)
     expect((await view(agent, t.number)).ticket.snoozedUntil).toBeNull()
     expect(await statusOf(t.id)).toBe("open")
-    expect(await snoozeEnded(db(), t.id, second ?? 0)).toBe(false)
+    expect(await snoozeEnded(db(), second ?? "")).toBe(false)
   })
 
   it("ends at once when the customer replies", async () => {
@@ -770,8 +776,8 @@ describe("snooze", () => {
     expect((await view(agent, t.number)).ticket.snoozedUntil).toBeNull()
     expect(await statusOf(t.id)).toBe("open")
     expect(await list(agent)).toContain(t.number)
-    const [version] = await snoozeJobs(t.id)
-    expect(await snoozeEnded(db(), t.id, version ?? 0)).toBe(false)
+    const [queued] = await snoozeJobs(t.id)
+    expect(await snoozeEnded(db(), queued ?? "")).toBe(false)
     const [ended] = await db()
       .select({ actor: auditLog.actorLabel, details: auditLog.details })
       .from(auditLog)
