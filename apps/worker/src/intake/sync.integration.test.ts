@@ -350,7 +350,7 @@ describe("waiting and the raw MIME (review G6, G7)", () => {
     await h.settings.update({ "scanner.address": clamd.address }, SYSTEM)
     expect(await h.retry.run()).toMatchObject({ messages: MAX_RETRIES_PER_RUN, stillWaiting: MAX_RETRIES_PER_RUN })
     expect((await h.messageOf(last)).subject).toBeNull()
-    // The second run took the 51st first, then the failing ones again, tried longest ago first.
+    // The second run took the 51st and the failing ones again.
     expect(await h.retry.run()).toMatchObject({
       messages: MAX_RETRIES_PER_RUN,
       decided: 1,

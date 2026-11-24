@@ -13,7 +13,7 @@ Not released yet: the first version is being prepared.
 - Tickets from email, threaded and matched to the right organization by its support addresses, including wildcard patterns.
 - Replies laid out per paragraph in the right direction, with the conversation's history, sent with delivery status and bounce tracking.
 - Scheduled replies, snooze, statuses, categories, search, and an automatic reminder while a ticket waits for the customer.
-- Every file scanned by ClamAV before it is kept, with previews in the browser.
+- Every file scanned by ClamAV, with a policy for when the scanner cannot answer, and previews in the browser.
 - Tracked links and download links in customer email.
 - Sign-in with mandatory two-factor authentication, agents scoped to their organizations, and an audit log.
 - Browser notifications, as an installable web app.

@@ -42,8 +42,9 @@
 // archive: a part whose file the archive no longer holds for its comment is deleted.
 //
 // An admin can cancel an open run (`Imports.cancel`, which sets its row to `stopped`/`cancelled`). Every transaction
-// of a run that writes locks the run's row first and goes on only while it is still `running` (`stillRunning`), so a
-// cancel waits for a ticket being written, and once it returned no handler of that run writes again.
+// of a run that writes locks the run's row first and goes on only while it is still `running` (`stillRunning`), and
+// the run's end updates the row only while it is `running`, so a cancel waits for a ticket being written, and once it
+// returned no handler of that run writes again.
 
 import { constants } from "node:fs"
 import { open, realpath } from "node:fs/promises"
@@ -976,8 +977,8 @@ function sameRecorded(run: { archiveRuns: number | null; coveredUntil: Date | nu
 }
 
 /**
- * Locks a run's row and says whether it is still running. Every transaction of a run that writes calls it first, so a
- * cancel, which updates that row, waits for it, and a transaction after a cancel writes nothing.
+ * Locks a run's row and says whether it is still running. Every transaction of a run that writes tickets or counts
+ * calls it first, so a cancel, which updates that row, waits for it, and a transaction after a cancel writes nothing.
  */
 async function stillRunning(tx: Tx, runId: string): Promise<boolean> {
   const [row] = await tx.select({ state: importRun.state }).from(importRun).where(eq(importRun.id, runId)).for("update")
