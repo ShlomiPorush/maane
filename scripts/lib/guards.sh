@@ -192,6 +192,29 @@ for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.
   fi
 done
 
+echo "--- Compose interpolates only the plain \${VAR} form"
+# No default, no error message, no unbraced $VAR: a value is either literal or set by .env or the scripts. Every
+# string is read as YAML, so quoting cannot hide one; $$ is a literal dollar for the container.
+for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.example.yml; do
+  [ -f "$file" ] || continue
+  if ! values="$(yq -r '.. | strings' "$file" 2>/dev/null)"; then
+    echo "  $file: not valid YAML"
+    fail=1
+    continue
+  fi
+  # Names only, as for secrets: a default or an error message may hold a value that must not reach CI logs.
+  # shellcheck disable=SC2016 # regular expressions, not shell expansions
+  if grep -qP '\$(?!\{[A-Za-z_][A-Za-z0-9_]*\})' <<<"${values//\$\$/}"; then
+    # shellcheck disable=SC2016
+    names="$(grep -oP '\$(?!\{[A-Za-z_][A-Za-z0-9_]*\})\{?\K[A-Za-z_][A-Za-z0-9_]*' <<<"${values//\$\$/}" |
+      sort -u | tr '\n' ' ' || true)"
+    echo "  $file: write a variable as \${VAR} or a literal value: ${names:-a dollar sign without a name}"
+    [ "$file" != docker-compose-dev.yml ] ||
+      echo "  Write its variables as docker/docker-compose-dev.example.yml does; keep your own changes."
+    fail=1
+  fi
+done
+
 echo "--- Secrets reach containers only through env_file"
 # A secret set under environment: or interpolated by Compose shows in `docker compose config`, even with
 # --no-env-resolution. Names only: the names under environment: (map or list form), and every name Compose would

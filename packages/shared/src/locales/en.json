@@ -1404,6 +1404,7 @@
   "when": {
     "date": "Date",
     "time": "Time",
+    "timePlaceholder": "HH:MM",
     "zone": "Israel time (Asia/Jerusalem).",
     "required": "Choose a date and a time.",
     "missingHour": "This time does not exist in Israel: the clock skips that hour when summer time starts. Choose another time.",

@@ -335,7 +335,8 @@ DEV_DEFAULT_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/maane-dev"
 dev_compose() {
   [ -f "$DEV_COMPOSE_FILE" ] || die "docker-compose-dev.yml is missing. Create it with:
   cp docker/docker-compose-dev.example.yml docker-compose-dev.yml"
-  local data_dir="${MAANE_DATA_DIR:-$DEV_DEFAULT_DATA_DIR}"
-  env -u COMPOSE_ENV_FILES MAANE_DATA_DIR="$data_dir" MAANE_IMAGE_TAG=dev \
+  local data_dir="${MAANE_DATA_DIR:-$DEV_DEFAULT_DATA_DIR}" port="${MAANE_PORT:-8095}"
+  env -u COMPOSE_ENV_FILES MAANE_DATA_DIR="$data_dir" MAANE_IMAGE_TAG=dev MAANE_PORT="$port" \
+    MAANE_PUBLIC_URL="${MAANE_PUBLIC_URL:-http://127.0.0.1:$port}" \
     docker compose --env-file /dev/null -p "$DEV_PROJECT" --project-directory "$REPO_ROOT" -f "$DEV_COMPOSE_FILE" "$@"
 }

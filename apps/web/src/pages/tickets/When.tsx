@@ -125,7 +125,7 @@ export function WhenDialog(props: {
               autoComplete="off"
               spellCheck={false}
               maxLength={5}
-              placeholder="HH:MM"
+              placeholder={t("when.timePlaceholder")}
               data-field="time"
               className="ui-input ui-mono"
               dir="ltr"

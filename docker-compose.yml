@@ -1,22 +1,23 @@
 # Production deployment. Runs the image the release workflow publishes to GHCR and ClamAV's published image; nothing is
 # built here. Behind Traefik on the external "traefik" network, so no port is published. Three files sit next to this
 # one, as docs/deployment.md describes; none is ever committed:
-#   .env          VERSION, DOMAIN, LINK_DOMAIN, GEOIP_DIR, and ZENDESK_ARCHIVE_DIR, the only values Compose
-#                 interpolates; none is a secret
+#   .env          VERSION, DOMAIN, and LINK_DOMAIN, the only values Compose interpolates; none is a secret
 #                 (contract: .env.example).
 #   postgres.env  PostgreSQL's own variables, read only by postgres (contract: docker/env/postgres.env.example).
 #   app.env       the server's and the worker's secrets and overrides (contract: docker/env/app.env.example).
 # The secrets reach the containers only through env_file, so `docker compose config --no-env-resolution` shows none.
-# Beside them: ./data (attachments, owned by UID 1000), ./clamav (ClamAV's signatures, owned by UID 100), and
-# ClamAV's configuration in ./docker/clamav/, which holds no secret.
+# Beside them: ./data (attachments, owned by UID 1000), ./clamav (ClamAV's signatures, owned by UID 100), ./geoip and
+# ./zendesk-archive (read only, each a folder or a link to one), and ClamAV's configuration in ./docker/clamav/, which
+# holds no secret.
 name: maane
 
 x-app: &app
-  image: ghcr.io/shlomiporush/maane:${VERSION:?Set VERSION in .env to the release to run}
+  image: ghcr.io/shlomiporush/maane:${VERSION}
   env_file:
     - path: app.env
   environment:
-    MAANE_PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in .env}
+    # From DOMAIN, so the domain is written once: the one variable set here rather than in app.env.
+    MAANE_PUBLIC_URL: https://${DOMAIN}
   # Runs as node (set in the image) with no capability and no way to gain privileges, on a read-only root.
   security_opt:
     - no-new-privileges:true
@@ -38,16 +39,13 @@ x-app: &app
 services:
   server:
     <<: *app
-    environment:
-      MAANE_PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in .env}
-      # The GeoLite2 City and ASN files that locate a click (plan 3.4), read only; each file is optional.
-      MAANE_GEOIP_DIR: /geoip
     volumes:
       - ./data:/data
-      # Your updater's folder of GeoLite2-City.mmdb and GeoLite2-ASN.mmdb (GEOIP_DIR in .env), never written by Maane.
-      - ${GEOIP_DIR:-./geoip}:/geoip:ro
-      # The Zendesk backup archive (ZENDESK_ARCHIVE_DIR in .env), read only: the import page shows it (plan 5.1).
-      - ${ZENDESK_ARCHIVE_DIR:-./zendesk-archive}:/zendesk-archive:ro
+      # GeoLite2-City.mmdb and GeoLite2-ASN.mmdb, which locate a click (plan 3.4); your updater keeps them, and each
+      # file is optional.
+      - ./geoip:/geoip:ro
+      # The Zendesk backup archive: the import page shows it (plan 5.1).
+      - ./zendesk-archive:/zendesk-archive:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,13 +58,13 @@ services:
       - "traefik.docker.network=traefik"
       - "traefik.http.services.maane.loadbalancer.server.port=8080"
       - "traefik.http.routers.maane.entrypoints=https"
-      - "traefik.http.routers.maane.rule=Host(`${DOMAIN:?Set DOMAIN in .env}`)"
+      - "traefik.http.routers.maane.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.maane.tls=true"
       - "traefik.http.routers.maane.service=maane"
       - "traefik.http.routers.maane.middlewares=default@file"
-      # Tracked links and download links on the link domain (LINK_DOMAIN in .env, by default DOMAIN): only /l/ and /f/.
+      # Tracked links and download links on the link domain (LINK_DOMAIN in .env): only /l/ and /f/.
       - "traefik.http.routers.maane-links.entrypoints=https"
-      - "traefik.http.routers.maane-links.rule=Host(`${LINK_DOMAIN:-${DOMAIN}}`) && (PathPrefix(`/l/`) || PathPrefix(`/f/`))"
+      - "traefik.http.routers.maane-links.rule=Host(`${LINK_DOMAIN}`) && (PathPrefix(`/l/`) || PathPrefix(`/f/`))"
       - "traefik.http.routers.maane-links.tls=true"
       - "traefik.http.routers.maane-links.service=maane"
       - "traefik.http.routers.maane-links.middlewares=default@file"
@@ -82,8 +80,8 @@ services:
     command: ["node", "dist/worker/index.js"]
     volumes:
       - ./data:/data
-      # The Zendesk backup archive, read only: the import reads it (plan 5.1); nothing writes it.
-      - ${ZENDESK_ARCHIVE_DIR:-./zendesk-archive}:/zendesk-archive:ro
+      # The Zendesk backup archive: the import reads it (plan 5.1).
+      - ./zendesk-archive:/zendesk-archive:ro
     # The server runs the migrations; the worker starts once the server is healthy.
     depends_on:
       server:

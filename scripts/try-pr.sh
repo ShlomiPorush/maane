@@ -70,14 +70,16 @@ save_state() {
 # The development template of the pull request itself, with this stack's image, port, and data directory, and the
 # configuration files it mounts from the pull request's worktree: the stack runs as the pull request defines it.
 write_compose() {
-  sed -e "s|maane:\${MAANE_IMAGE_TAG:-dev}|$IMAGE|g" \
+  sed -e "s|maane:\${MAANE_IMAGE_TAG}|$IMAGE|g" \
     -e "s|\./docker/|$WORKTREE/docker/|g" \
-    -e "s|\${MAANE_DATA_DIR:?MAANE_DATA_DIR is set by the scripts}|$DATA_DIR|g" \
-    -e "s|\${MAANE_PUBLIC_URL:-http://127.0.0.1:\${MAANE_PORT:-8095}}|http://127.0.0.1:$PORT|g" \
-    -e "s|\${MAANE_PORT:-8095}|$PORT|g" \
+    -e "s|\${MAANE_DATA_DIR}|$DATA_DIR|g" \
+    -e "s|\${MAANE_PUBLIC_URL}|http://127.0.0.1:$PORT|g" \
+    -e "s|\${MAANE_PORT}|$PORT|g" \
     "$WORKTREE/docker/docker-compose-dev.example.yml" >"$COMPOSE_FILE"
   if grep -qF "\${MAANE_" "$COMPOSE_FILE"; then
-    die "the pull request's docker/docker-compose-dev.example.yml uses variables this script does not set"
+    # restore runs Compose on this file when it exists, and a variable left in it can stop restore too.
+    rm -f "$COMPOSE_FILE"
+    die "the pull request's docker/docker-compose-dev.example.yml uses variables this script does not set (a pull request from before the plain \${VAR} form). Clean up with: scripts/try-pr.sh restore"
   fi
 }
 

@@ -61,7 +61,7 @@ export interface AppContext {
   jobs: JobQueue
   /** MAANE_TRUSTED_PROXIES: only a request from one of these may name its client in X-Forwarded-For (the link routes). */
   trustedProxies: string[]
-  /** MAANE_GEOIP_DIR: the read-only directory of the GeoLite2 City and ASN files, or null for no location. */
+  /** The read-only directory of the GeoLite2 City and ASN files, or null for no location. */
   geoipDir: string | null
   /** MAANE_VAPID_PUBLIC_KEY: the key a browser subscribes to notifications with (plan 4.5). */
   vapidPublicKey: string

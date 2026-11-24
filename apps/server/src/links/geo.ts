@@ -1,9 +1,9 @@
 // Where a click's address is (plan 3.4, requirements 3.4): read from the owner's local MaxMind GeoLite2 City and ASN
-// files with the `maxmind` library, never from an outside service. The directory is mounted read-only
-// (MAANE_GEOIP_DIR, deployment wiring) and the owner's own updater keeps the files current. Each file is optional and
-// fails alone: without it, its part of the location stays empty and the click is still recorded. A file is opened on
-// first use and opened again when its modification time changes (checked at most once a minute); a file that cannot be
-// read keeps the last good copy, and a missing one is looked for again on the next check.
+// files with the `maxmind` library, never from an outside service. The directory is mounted read-only at /geoip and
+// the owner's own updater keeps the files current. Each file is optional and fails alone: without it, its part of the
+// location stays empty and the click is still recorded. A file is opened on first use and opened again when its
+// modification time changes (checked at most once a minute); a file that cannot be read keeps the last good copy, and
+// a missing one is looked for again on the next check.
 
 import { stat } from "node:fs/promises"
 import { join } from "node:path"
