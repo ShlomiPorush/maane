@@ -6,8 +6,8 @@
 // the ticket's organization's, the author still allowed on it). A failed check ends the action without
 // sending, with its reason. Otherwise the reply is written from the version the server built, with its outbox row
 // (at most one per action and version) and its `send-reply` job, and the action becomes `handed`; the send point checks
-// it once more in the transaction that takes the row to `sending`. A rerun after a crash finds the action `handed` (or
-// the version's outbox row) and makes no second message. The message gets a submission ID of its own on each run: the
+// it once more in the transaction that takes the row to `sending`. A rerun after a crash finds the action `handed` and
+// makes no second message. The message gets a submission ID of its own on each run: the
 // composer's belongs to the scheduling, and a later version must never meet an earlier version's message.
 //
 // "Send and set pending" is not applied here: the send point's claim applies it, in the transaction that hands the
@@ -89,7 +89,7 @@ export class TimedActions {
         {
           ticketId: locked.id,
           authorUserId: action.authorUserId,
-          // Its own on each run: the outbox row's unique (action, version) keeps a rerun from writing twice.
+          // Its own on each run, so a later version never meets this version's message.
           submissionId: randomUUID(),
           at,
           ready: {
@@ -164,7 +164,7 @@ export class TimedActions {
       {
         ticketId: locked.id,
         authorUserId: null,
-        // Its own on each run: the outbox row's unique (action, version) keeps a rerun from writing twice.
+        // Its own on each run, so a later version never meets this version's message.
         submissionId: randomUUID(),
         at,
         ready,
