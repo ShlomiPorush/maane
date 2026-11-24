@@ -35,7 +35,6 @@ function validDomain(domain: string): boolean {
   return labels.length >= 2 && labels.every((label) => LABEL.test(label))
 }
 
-/** Splits an address at its one `@`, or returns null. */
 function split(value: string): { local: string; domain: string } | null {
   const at = value.indexOf("@")
   if (at <= 0 || at !== value.lastIndexOf("@")) return null

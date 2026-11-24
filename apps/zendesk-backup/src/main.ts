@@ -22,7 +22,6 @@ export interface Io {
   stderr: { write(text: string): unknown }
 }
 
-/** Runs the command line. Returns the exit code. */
 export async function main(argv: string[], io: Io): Promise<number> {
   const say = (line: string) => io.stderr.write(`${line}\n`)
   let parsed: ReturnType<typeof parse>

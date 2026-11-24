@@ -55,7 +55,6 @@ export function tokenAuthorization(email: string, token: string): string {
   return `Basic ${Buffer.from(`${email}/token:${token}`).toString("base64")}`
 }
 
-/** Zendesk's own hosts. */
 export function isZendeskFileHost(host: string): boolean {
   const name = host.toLowerCase()
   return name.endsWith(".zendesk.com") || name.endsWith(".zdusercontent.com")
@@ -205,7 +204,6 @@ export class ZendeskClient {
   }
 }
 
-/** A download failure that may pass on a later attempt. */
 class RetryableError extends Error {
   constructor(
     message: string,

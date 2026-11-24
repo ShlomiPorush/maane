@@ -105,7 +105,6 @@ export const emptyImportCounts = (): ImportCounts => ({
   skipped: 0,
 })
 
-/** Rows per page of a run's report. */
 export const IMPORT_REPORT_PAGE_SIZE = 50
 
 export interface ImportRunView {

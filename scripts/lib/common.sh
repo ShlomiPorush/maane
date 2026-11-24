@@ -50,7 +50,6 @@ random_hex() {
   od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
 }
 
-# Installs dependencies from the lockfile.
 install_deps() {
   in_toolchain "pnpm install --frozen-lockfile --reporter=append-only"
 }
@@ -304,7 +303,6 @@ save_clamav_cache() {
   exec {lock}>&-
 }
 
-# --- Development stack ---
 DEV_PROJECT="maane-dev"
 DEV_COMPOSE_FILE="$REPO_ROOT/docker-compose-dev.yml"
 DEV_DEFAULT_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/maane-dev"

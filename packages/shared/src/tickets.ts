@@ -31,7 +31,6 @@ export const PREVIEW_TYPES: Readonly<Record<string, PreviewKind>> = {
   "text/plain": "text",
 }
 
-/** The preview of a stored file: only a clean one, and only of a type in PREVIEW_TYPES. */
 export function previewKind(status: string, detectedType: string | null): PreviewKind | null {
   if (status !== "clean" || detectedType === null) return null
   return Object.hasOwn(PREVIEW_TYPES, detectedType) ? (PREVIEW_TYPES[detectedType] ?? null) : null
@@ -40,7 +39,6 @@ export function previewKind(status: string, detectedType: string | null): Previe
 /** The size of a text file the UI previews; a larger one downloads only. */
 export const TEXT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024
 
-/** Rows per page of the ticket list and the intake log. */
 export const TICKETS_PAGE_SIZE = 50
 export const INTAKE_PAGE_SIZE = 50
 

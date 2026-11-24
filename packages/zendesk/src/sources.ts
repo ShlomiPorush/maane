@@ -87,7 +87,6 @@ export function commentsPath(ticketId: string): string {
   return `/api/v2/tickets/${ticketId}/comments.json?include_inline_images=true&page[size]=${PAGE_SIZE}`
 }
 
-/** The audit history of one ticket. */
 export function auditsPath(ticketId: string): string {
   return `/api/v2/tickets/${ticketId}/audits.json?page[size]=${PAGE_SIZE}`
 }

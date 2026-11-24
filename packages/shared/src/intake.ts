@@ -188,9 +188,9 @@ export interface GraphTestView {
 }
 
 /**
- * The text fields stage one stores and scans like files before it stores them (plan 2.3, review G1): the text body,
- * the sanitized HTML, and the header values Maane keeps (subject, names, every header line, part file names), as one
- * block. A field the scanner flags is not stored; one that cannot be scanned follows the unavailable policy.
+ * The text fields stage one stores and scans like files before it stores them (plan 2.3): the text body, the sanitized
+ * HTML, and the header values Maane keeps (subject, names, every header line, part file names), as one block. A field
+ * the scanner flags is not stored; one that cannot be scanned follows the unavailable policy.
  */
 export const TEXT_FIELDS = ["text", "html", "headers"] as const
 export type TextField = (typeof TEXT_FIELDS)[number]

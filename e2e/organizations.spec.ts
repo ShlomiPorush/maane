@@ -63,7 +63,6 @@ test.describe("desktop", () => {
     await page.getByRole("menuitem", { name: he("organization.addresses.setDefault"), exact: true }).click()
     await expect(row.getByText(he("organization.addresses.default"), { exact: true })).toBeVisible()
 
-    // The agent.
     await page.getByRole("button", { name: he("organization.members.add"), exact: true }).click()
     const member = page.getByRole("dialog")
     await member.getByRole("radio", { name: new RegExp(AGENT) }).check()

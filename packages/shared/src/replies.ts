@@ -90,7 +90,6 @@ export const ATTACHABLE_UPLOAD_STATUSES = ["clean", "not_fully_scanned", "not_sc
 export const SIGNATURE_MAX = 2000
 /** The most recipients one reply may have (To and Cc together). */
 export const RECIPIENTS_MAX = 50
-/** The most files one reply may carry. */
 export const ATTACHMENTS_MAX = 20
 /** The longest reply text the composer sends, in characters of HTML. */
 export const REPLY_HTML_MAX = 500_000

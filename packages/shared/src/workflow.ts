@@ -25,7 +25,6 @@ export const STATUS_FILTERS = [
 export type StatusFilter = (typeof STATUS_FILTERS)[number]
 export const DEFAULT_STATUS_FILTER: StatusFilter = "open_work"
 
-/** The status filter when none is chosen: open work, or every status while searching (plan 4.4). */
 export function defaultStatusFilter(searching: boolean): StatusFilter {
   return searching ? "all" : DEFAULT_STATUS_FILTER
 }

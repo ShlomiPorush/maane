@@ -156,7 +156,6 @@ export function isHostName(text: string): boolean {
 /** An SMTP setting's text: empty while it is not set, else what `valid` accepts. */
 const smtpText = (valid: (text: string) => boolean) => z.string().refine((text) => text === "" || valid(text))
 const smtpPort = z.number().int().min(1).max(65535)
-/** An SMTP user name: one line of at most 255 characters, or empty. */
 const smtpUser = z
   .string()
   .max(255)
