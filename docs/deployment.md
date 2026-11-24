@@ -350,7 +350,7 @@ While Settings, Link tracking, Track links is on (the default), the links an age
 
 Change the link domain only while the old name still reaches Maane: replies already sent keep their old links.
 
-**Location (GeoLite2).** Maane reads the location of a click from MaxMind GeoLite2 files on the host, never from an outside service. Your existing updater keeps them current; Maane only reads them. `docker-compose.yml` mounts the folder `./geoip` next to it read only at `/geoip` in `server`, and reads `GeoLite2-City.mmdb` (country, city, region) and `GeoLite2-ASN.mmdb` (ISP and AS number) from it. Each file is optional and fails alone: without one, its part of the location stays empty and clicks are still recorded. Maane looks at the files at most once a minute and reads a file again when its modification time changes, so an update needs no restart; a file that cannot be read (for example one your updater is still writing) leaves the last good copy in use until the next look. Point `./geoip` at your updater's folder with a link (here `/srv/geoip`, where `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb` sit), or have your updater write into `./geoip` itself. Docker creates an empty `./geoip` on the first start; the block replaces it only while it is empty, stops when the target is not a folder or `./geoip` holds files, and can run again after it stopped halfway. It recreates `server`, which sees a new link only then:
+**Location (GeoLite2).** Maane reads the location of a click from MaxMind GeoLite2 files on the host, never from an outside service. Your existing updater keeps them current; Maane only reads them. `docker-compose.yml` mounts the folder `./geoip` next to it read only at `/geoip` in `server`, and reads `GeoLite2-City.mmdb` (country, city, region) and `GeoLite2-ASN.mmdb` (ISP and AS number) from it. Each file is optional and fails alone: without one, its part of the location stays empty and clicks are still recorded. Maane looks at the files at most once a minute and reads a file again when its modification time changes, so an update needs no restart; a file that cannot be read (for example one your updater is still writing) leaves the last good copy in use until the next look. Point `./geoip` at your updater's folder with a link (here `/srv/geoip`, where `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb` sit), or have your updater write into `./geoip` itself. Docker creates an empty `./geoip` on the first start; the block replaces it only while it is empty, stops when the target is not a folder or `./geoip` holds files or links elsewhere, and can run again after it stopped halfway. It recreates `server`, which sees a new link only then:
 
 ```bash
 (
@@ -358,6 +358,7 @@ Change the link domain only while the old name still reaches Maane: replies alre
   target=/srv/geoip
   cd "$HOME/maane"
   [ -d "$target" ] || { echo "error: $target is not a folder; nothing was changed" >&2; exit 1; }
+  [ ! -L geoip ] || [ "$(readlink geoip)" = "$target" ] || { echo "error: ./geoip points elsewhere; nothing was changed" >&2; exit 1; }
   [ -L geoip ] || [ ! -e geoip ] || rmdir geoip
   ln -sfnT "$target" geoip
   docker compose up -d --force-recreate server
@@ -374,7 +375,7 @@ cd "$HOME/maane" && docker compose exec -T server ls -l /geoip
 
 ### Import from Zendesk
 
-Admin, Import brings the history of the phase 0 archive ([zendesk-backup.md](zendesk-backup.md)) into Maane, on [setup day](#setup-day-from-zendesk-to-maane). It reads the archive and never calls Zendesk, so it needs no token. `docker-compose.yml` mounts the folder `./zendesk-archive` next to it read only at `/zendesk-archive` in `server` (the page shows the archive's brands, tags, and state) and in `worker` (the import reads it). Maane never writes to it. Point `./zendesk-archive` at the archive's folder with a link (here `/srv/zendesk-archive`, the folder that holds `archive.json`). Docker creates an empty `./zendesk-archive` on the first start; the block replaces it only while it is empty, stops when the target holds no `archive.json` or `./zendesk-archive` holds files, and can run again after it stopped halfway. It recreates `server` and `worker`, which see a new link only then:
+Admin, Import brings the history of the phase 0 archive ([zendesk-backup.md](zendesk-backup.md)) into Maane, on [setup day](#setup-day-from-zendesk-to-maane). It reads the archive and never calls Zendesk, so it needs no token. `docker-compose.yml` mounts the folder `./zendesk-archive` next to it read only at `/zendesk-archive` in `server` (the page shows the archive's brands, tags, and state) and in `worker` (the import reads it). Maane never writes to it. Point `./zendesk-archive` at the archive's folder with a link (here `/srv/zendesk-archive`, the folder that holds `archive.json`). Docker creates an empty `./zendesk-archive` on the first start; the block replaces it only while it is empty, stops when the target holds no `archive.json` or `./zendesk-archive` holds files or links elsewhere, and can run again after it stopped halfway. It recreates `server` and `worker`, which see a new link only then:
 
 ```bash
 (
@@ -382,6 +383,8 @@ Admin, Import brings the history of the phase 0 archive ([zendesk-backup.md](zen
   target=/srv/zendesk-archive
   cd "$HOME/maane"
   [ -f "$target/archive.json" ] || { echo "error: $target holds no archive.json; nothing was changed" >&2; exit 1; }
+  [ ! -L zendesk-archive ] || [ "$(readlink zendesk-archive)" = "$target" ] ||
+    { echo "error: ./zendesk-archive points elsewhere; nothing was changed" >&2; exit 1; }
   [ -L zendesk-archive ] || [ ! -e zendesk-archive ] || rmdir zendesk-archive
   ln -sfnT "$target" zendesk-archive
   docker compose up -d --force-recreate server worker
@@ -529,7 +532,7 @@ Copy the dump, the data archive, `postgres.env`, `app.env`, and `.env` off the h
 
 Test a restore before setup day, and again from time to time. Run it on another Docker host or virtual machine with its own Traefik, never beside production: `docker-compose.yml` names its project `maane` and its Traefik router `maane`, so a second copy on the production host would take them over.
 
-1. On the test host, create the folder `~/maane-restore` with the block of section 2, with `dir="$HOME/maane-restore"` and `version` set to the release the backup came from. Copy the backup's `.env`, `postgres.env`, and `app.env` into it (mode 600). Edit two lines of the copies: `DOMAIN` in `.env` to the test host name, for example `maane-restore.example.com`, and `MAANE_TRUSTED_PROXIES` in `app.env` to the subnets of the test host's `traefik` network. Leave every key and the password as they are: the test checks that they open the data.
+1. On the test host, create the folder `~/maane-restore` with the block of section 2, with `dir="$HOME/maane-restore"` and `version` set to the release the backup came from. Copy the backup's `.env`, `postgres.env`, and `app.env` into it (mode 600). Edit three lines of the copies: `DOMAIN` and `LINK_DOMAIN` in `.env` to the test host name, for example `maane-restore.example.com`, so Traefik on the test host claims no production name, and `MAANE_TRUSTED_PROXIES` in `app.env` to the subnets of the test host's `traefik` network. Leave every key and the password as they are: the test checks that they open the data.
 2. Put the database back, before `server` ever starts on this host:
    - From a copy of `./postgres-data`: restore it as `postgres-data` in the folder with owners and modes kept.
    - From a dump: start PostgreSQL alone on the empty folder, then restore into it. Set `dump` to the dump's path:
@@ -629,7 +632,7 @@ To go back to an earlier version, restore the dump the block took (section 6, in
 
 ## What was verified
 
-Compose values (2026-11-24): `scripts/verify.sh` checked `docker-compose.yml` with `.env` made from `.env.example`, valid and with no variable missing. The `.env` block of section 3 and the two link blocks of [Link tracking](#link-tracking) and [Import from Zendesk](#import-from-zendesk) ran against a stand-in `docker`: `.env` got `LINK_DOMAIN` equal to `DOMAIN`, and each link block replaced a missing or empty folder and its own earlier link, and stopped on a folder with files or a target that does not hold the expected files. In Docker, a bind mount of a link to a folder showed the folder's files. Not run against a real deployment.
+Compose values (2026-11-24): `scripts/verify.sh` checked `docker-compose.yml` with `.env` made from `.env.example`, valid and with no variable missing. The `.env` block of section 3 and the two link blocks of [Link tracking](#link-tracking) and [Import from Zendesk](#import-from-zendesk) ran against a stand-in `docker`: `.env` got `LINK_DOMAIN` equal to `DOMAIN`, and each link block replaced a missing or empty folder and its own earlier link, and stopped on a folder with files, a link elsewhere, or a target that does not hold the expected files. In Docker, a bind mount of a link to a folder showed the folder's files. Not run against a real deployment.
 
 Rehearsal (2026-11-24): its three blocks ran as written, as an unprivileged user with `sudo`, in a throwaway Docker-in-Docker container with the real `docker-compose.yml`, an image built from this repository, real PostgreSQL, and secrets made in it by the blocks of section 3 (`server` and `postgres` only; no `worker`, `clamav`, or Traefik). The mark refuses without the files and once the deployment started. The end disables the Compose file, stops the stack, and renames the folder; it changes nothing in a folder that is not marked, and when Docker does not answer or the target name is taken it leaves a rehearsal that section 4 cannot start, and finishes when run again. A deployment made again from sections 2 to 4 had new secrets, no organization, and an unused ticket number sequence. The removal refuses a folder that is not marked, a symbolic link, and a folder with a Zendesk archive, and leaves the running deployment as it was. The rehearsal itself, with a real mailbox and real providers, has not run.
 
@@ -659,6 +662,6 @@ Checked on 2026-11-11, before the first release, with stand-ins and throwaway co
 - Not verified:
   - The `./postgres-data` bind mount, and `server` or `worker` started on a restored database.
   - Traefik routing, the setup screen in a browser, the restore test's sign-in, an upgrade with real migrations, and key rotation.
-  - No Maane release exists yet, nothing has been deployed, and the Release workflow has not run on GitHub.
+  - No Maane release exists yet, and nothing has been deployed. The Release workflow has run on GitHub only with `dry_run`.
   - Pulling `ghcr.io/shlomiporush/maane` on a server without `docker login` after the package is made public.
   - Since sections 5 to 7 were run, the dump and upgrade blocks write to a temporary file of their own and publish it with `ln`. That version ran only with a stand-in `docker`: two dumps in the same second leave one dump and stop the other run, and a failing `pg_dump` leaves no file.

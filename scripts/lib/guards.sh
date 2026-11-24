@@ -209,7 +209,8 @@ for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.
     names="$(grep -oP '\$(?!\{[A-Za-z_][A-Za-z0-9_]*\})\{?\K[A-Za-z_][A-Za-z0-9_]*' <<<"${values//\$\$/}" |
       sort -u | tr '\n' ' ' || true)"
     echo "  $file: write a variable as \${VAR} or a literal value: ${names:-a dollar sign without a name}"
-    [ "$file" != docker-compose-dev.yml ] || echo "  Copy it again: cp docker/docker-compose-dev.example.yml docker-compose-dev.yml"
+    [ "$file" != docker-compose-dev.yml ] ||
+      echo "  Write its variables as docker/docker-compose-dev.example.yml does; keep your own changes."
     fail=1
   fi
 done
