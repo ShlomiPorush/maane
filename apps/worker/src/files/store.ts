@@ -30,11 +30,6 @@ async function syncDir(path: string): Promise<void> {
   }
 }
 
-/** Test seams: a step that runs right after the file is published and synced, before the row is written. */
-export interface WriteHooks {
-  afterPublish?: () => Promise<void>
-}
-
 export class FileStore {
   constructor(readonly dir: string) {}
 
@@ -70,7 +65,7 @@ export class FileStore {
    * sync the shard. A failure before the rename leaves no file; one after it leaves a file no row references, which
    * the sweep removes.
    */
-  async write(sha256: string, bytes: Uint8Array, hooks: WriteHooks = {}): Promise<void> {
+  async write(sha256: string, bytes: Uint8Array): Promise<void> {
     const shard = join(this.dir, shardOf(sha256))
     const temp = join(shard, `.${sha256}.${randomBytes(8).toString("hex")}.tmp`)
     try {
@@ -88,7 +83,6 @@ export class FileStore {
       throw error
     }
     await syncDir(shard)
-    await hooks.afterPublish?.()
   }
 
   /** The names in each shard: stored files and writers' temporary files, with their modification times. */
