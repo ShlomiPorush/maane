@@ -69,6 +69,7 @@ env_file="an environment file; keep only an example"
 env_value="Example environment files must leave secrets"
 secret="A secret-like value is in the repository"
 compose="Compose files must not build"
+forms="write a variable as"
 env_only="Put secrets in an env_file"
 pinned="is not pinned to a full commit SHA"
 token="gh""p_$(repeat a 36)"
@@ -100,6 +101,16 @@ plant "a quoted build key" "$compose" docker-compose.yml $'services:\n  server:\
 plant "build in a flow mapping" "$compose" docker/docker-compose-dev.example.yml \
   $'services: { server: { image: x, build'": . } }"$'\n'
 # shellcheck disable=SC2016 # the Compose variables must stay literal
+plant "a Compose default" "$forms" docker-compose.yml $'services:\n  server:\n    image: x:${TAG:-latest}\n'
+# shellcheck disable=SC2016
+plant "a Compose error form in a quoted label" "$forms" docker-compose.yml \
+  $'services:\n  server:\n    labels:\n      - "rule=Host(`${DOMAIN:?set it}`)"\n'
+# shellcheck disable=SC2016
+plant "a Compose default without a colon" "$forms" docker/docker-compose-dev.example.yml \
+  $'services:\n  server:\n    ports:\n      - "127.0.0.1:${PORT-8095}:8080"\n'
+# shellcheck disable=SC2016
+plant "an unbraced Compose variable" "$forms" docker-compose.yml $'services:\n  server:\n    image: x:$TAG\n'
+# shellcheck disable=SC2016
 plant "a password interpolated into a service" "$env_only" docker-compose.yml \
   $'services:\n  postgres:\n    image: x\n    environment:\n      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it}\n'
 # shellcheck disable=SC2016
@@ -180,7 +191,7 @@ printf 'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@%s # v7\n      -
 # Secrets through env_file, a value that is not secret interpolated, and $$ for the container's own variable.
 # shellcheck disable=SC2016 # the Compose variables must stay literal
 printf '%s\n' 'services:' '  server:' '    image: maane:dev' '    env_file: [app.env]' '    environment:' \
-  '      MAANE_PUBLIC_URL: https://${DOMAIN:?set it}' '  postgres:' '    image: postgres' '    env_file: [postgres.env]' \
+  '      MAANE_PUBLIC_URL: https://${DOMAIN}' '  postgres:' '    image: postgres' '    env_file: [postgres.env]' \
   '    healthcheck:' '      test: ["CMD-SHELL", "test -n \"$$POSTGRES_PASSWORD\""]' \
   >"$scratch/docker/docker-compose-dev.example.yml"
 # shellcheck disable=SC2016 # the placeholders must stay literal

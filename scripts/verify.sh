@@ -147,7 +147,8 @@ run_integration() {
   trap - EXIT
 }
 
-# The production Compose file, with its three files filled in with values new for this check: it must be valid, show
+# The production Compose file, with .env from .env.example and its two secret files filled in with values new for
+# this check: it must be valid with no variable missing, show
 # no secret in `docker compose config --no-env-resolution` (secrets come only through env_file), and give PostgreSQL
 # only its own variables. Runs in a subshell, so the caller removes the directory whatever happens.
 production_compose_checks() {
@@ -156,7 +157,7 @@ production_compose_checks() {
   cp "$REPO_ROOT/docker-compose.yml" "$dir/docker-compose.yml"
   (
     umask 077
-    printf 'VERSION=0.0.0\nDOMAIN=maane.example.com\n' >"$dir/.env"
+    sed 's/^VERSION=$/VERSION=0.0.0/' "$REPO_ROOT/.env.example" >"$dir/.env"
     printf 'POSTGRES_USER=maane\nPOSTGRES_DB=maane\nPOSTGRES_PASSWORD=%s\n' "$password" >"$dir/postgres.env"
     printf 'DATABASE_URL=postgres://maane:%s@postgres:5432/maane\nMAANE_AUTH_SECRETS=1:%s\nMAANE_SETTINGS_KEYS=1:%s\n' \
       "$password" "$auth" "$keys" >"$dir/app.env"
@@ -167,7 +168,14 @@ production_compose_checks() {
     env -u COMPOSE_ENV_FILES -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME \
       docker compose --project-directory "$dir" -f "$dir/docker-compose.yml" "$@"
   }
-  production config --quiet || die "docker-compose.yml is not valid with its .env, postgres.env, and app.env"
+  production config --quiet 2>"$dir/warnings" || {
+    cat "$dir/warnings" >&2
+    die "docker-compose.yml is not valid with its .env, postgres.env, and app.env"
+  }
+  # Compose fills a variable .env lacks with an empty string and only warns.
+  if grep -F "variable is not set" "$dir/warnings" >&2; then
+    die "docker-compose.yml uses a variable that .env.example does not list"
+  fi
   # Never printed: the output holds this check's values when the file is wrong.
   production config --no-env-resolution >"$dir/unresolved.yml" || die "docker compose config failed"
   if grep -qF -e "$password" -e "$auth" -e "$keys" -e "$vapid" -e "${vapid:32}" "$dir/unresolved.yml"; then

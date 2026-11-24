@@ -34,7 +34,7 @@ The shipped labels on `server` ask Traefik for two routers to the same service: 
 | `traefik.http.routers.maane.rule` | ``Host(`${DOMAIN}`)`` | Never: set `DOMAIN` in `.env` instead |
 | `traefik.http.routers.maane.tls` | `true` | Add `traefik.http.routers.maane.tls.certresolver=<resolver>` if your Traefik needs a resolver per router |
 | `traefik.http.routers.maane.middlewares` | `default@file` | Your middleware chain has another name |
-| `traefik.http.routers.maane-links.rule` | ``Host(`${LINK_DOMAIN:-${DOMAIN}}`) && (PathPrefix(`/l/`) \|\| PathPrefix(`/f/`))`` | Never: set `LINK_DOMAIN` in `.env` instead |
+| `traefik.http.routers.maane-links.rule` | ``Host(`${LINK_DOMAIN}`) && (PathPrefix(`/l/`) \|\| PathPrefix(`/f/`))`` | Never: set `LINK_DOMAIN` in `.env` instead |
 | `traefik.http.routers.maane-links.entrypoints`, `.tls`, `.middlewares` | as for `maane` | As for `maane` |
 | `traefik.http.services.maane.loadbalancer.server.port` | `8080` | Never |
 
@@ -97,7 +97,7 @@ Three files sit beside `docker-compose.yml`:
 
 | File | Read by | Holds |
 |---|---|---|
-| `.env` | Compose only, to fill in `docker-compose.yml`; no container receives it | `VERSION`, `DOMAIN`, and optionally `LINK_DOMAIN`, `GEOIP_DIR`, and `ZENDESK_ARCHIVE_DIR`. No secret. |
+| `.env` | Compose only, to fill in `docker-compose.yml`; no container receives it | `VERSION`, `DOMAIN`, and `LINK_DOMAIN`. No secret. |
 | `postgres.env` | The `postgres` service only | The database user, name, and password |
 | `app.env` | `server` and `worker` | `DATABASE_URL` with the same password, `MAANE_AUTH_SECRETS`, `MAANE_SETTINGS_KEYS`, `MAANE_TRUSTED_PROXIES`, and the VAPID key pair of browser notifications ([its own block](#browser-notification-keys-once)) |
 
@@ -107,7 +107,7 @@ The block fills in:
 
 - `POSTGRES_PASSWORD` in `postgres.env`, and the same value in `app.env`'s `DATABASE_URL`: 32 random bytes as hex. Hex keeps the URL valid, and the server refuses a password that is not random hex.
 - `MAANE_AUTH_SECRETS` and `MAANE_SETTINGS_KEYS`: `1:` and 32 random bytes as hex each, different from each other and from the password.
-- `VERSION` and `DOMAIN` in `.env`. `LINK_DOMAIN`, `GEOIP_DIR`, and `ZENDESK_ARCHIVE_DIR` stay empty; set them as [Link tracking](#link-tracking) and [Import from Zendesk](#import-from-zendesk) describe.
+- `VERSION`, `DOMAIN`, and `LINK_DOMAIN` in `.env`, the link domain the same as `DOMAIN`; change it as [Link tracking](#link-tracking) describes.
 - `MAANE_TRUSTED_PROXIES`: the subnets of the `traefik` network.
 
 It refuses, and leaves no file of its own, when any of the three files exists, when a contract is missing or not as expected, when a value cannot be generated or read, or when `DOMAIN` is still the example. The files are readable by you only (mode 600). It prints no secret. It publishes the three files only when none exists; if another run published one meanwhile, it removes the ones it published itself and stops.
@@ -157,6 +157,7 @@ Set `version` and `domain` before you run it:
       awk '
         /^VERSION=$/ { print "VERSION=" ENVIRON["V_VERSION"]; next }
         /^DOMAIN=/ { print "DOMAIN=" ENVIRON["V_DOMAIN"]; next }
+        /^LINK_DOMAIN=/ { print "LINK_DOMAIN=" ENVIRON["V_DOMAIN"]; next }
         /^POSTGRES_PASSWORD=$/ { print "POSTGRES_PASSWORD=" ENVIRON["V_PG"]; next }
         /^DATABASE_URL=$/ { print "DATABASE_URL=postgres://maane:" ENVIRON["V_PG"] "@postgres:5432/maane"; next }
         /^MAANE_AUTH_SECRETS=$/ { print "MAANE_AUTH_SECRETS=" ENVIRON["V_AUTH"]; next }
@@ -178,7 +179,7 @@ Set `version` and `domain` before you run it:
   fill .env
   fill postgres.env
   fill app.env
-  expect .env '^VERSION=[0-9.]+$' '^DOMAIN=[A-Za-z0-9.-]+$'
+  expect .env '^VERSION=[0-9.]+$' '^DOMAIN=[A-Za-z0-9.-]+$' '^LINK_DOMAIN=[A-Za-z0-9.-]+$'
   expect postgres.env '^POSTGRES_USER=maane$' '^POSTGRES_DB=maane$' '^POSTGRES_PASSWORD=[0-9a-f]{64}$'
   # The URL is checked in two parts: its scheme, user, and password, then its host and database.
   expect app.env '^DATABASE_URL=postgres://maane:[0-9a-f]{64}' '^DATABASE_URL=[^ ]*[0-9a-f]@postgres:5432/maane$' \
@@ -340,7 +341,7 @@ Check it with a real send, in the [rehearsal](#rehearsal) and after Finish impor
 
 While Settings, Link tracking, Track links is on (the default), the links an agent writes in a reply lead through Maane as `https://<link domain>/l/<code>`, and each click is recorded with its address, its location, and its browser before the customer is sent on. Files of earlier messages in a reply's history always get a download link, `https://<link domain>/f/<code>`. Turn tracking off there (or with `MAANE_LINK_TRACKING=off` in `app.env`) to send links as written and record nothing; links in replies already sent keep working either way. Keep SMTP2GO's own click tracking off.
 
-**The link domain.** By default links use `DOMAIN`, and nothing more is needed. To use another host name, for example `links.example.com`:
+**The link domain.** Section 3 sets `LINK_DOMAIN` to `DOMAIN`, so links use the agent UI's host name, and nothing more is needed. To use another host name, for example `links.example.com`:
 
 1. Point its DNS record at your Traefik, as for `DOMAIN`, and make sure Traefik has a certificate for it.
 2. Set `LINK_DOMAIN=links.example.com` in `.env`. The `maane-links` router then answers on that name, for `/l/` and `/f/` only; the agent UI stays on `DOMAIN`.
@@ -349,13 +350,14 @@ While Settings, Link tracking, Track links is on (the default), the links an age
 
 Change the link domain only while the old name still reaches Maane: replies already sent keep their old links.
 
-**Location (GeoLite2).** Maane reads the location of a click from MaxMind GeoLite2 files on the host, never from an outside service. Your existing updater keeps them current; Maane only reads them. `docker-compose.yml` mounts the folder `GEOIP_DIR` from `.env` (default `./geoip` next to it) read only at `/geoip` in `server`, and reads `GeoLite2-City.mmdb` (country, city, region) and `GeoLite2-ASN.mmdb` (ISP and AS number) from it. Each file is optional and fails alone: without one, its part of the location stays empty and clicks are still recorded. Maane looks at the files at most once a minute and reads a file again when its modification time changes, so an update needs no restart; a file that cannot be read (for example one your updater is still writing) leaves the last good copy in use until the next look. Set the folder:
+**Location (GeoLite2).** Maane reads the location of a click from MaxMind GeoLite2 files on the host, never from an outside service. Your existing updater keeps them current; Maane only reads them. `docker-compose.yml` mounts the folder `./geoip` next to it read only at `/geoip` in `server`, and reads `GeoLite2-City.mmdb` (country, city, region) and `GeoLite2-ASN.mmdb` (ISP and AS number) from it. Each file is optional and fails alone: without one, its part of the location stays empty and clicks are still recorded. Maane looks at the files at most once a minute and reads a file again when its modification time changes, so an update needs no restart; a file that cannot be read (for example one your updater is still writing) leaves the last good copy in use until the next look. Point `./geoip` at your updater's folder with a link (here `/srv/geoip`, where `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb` sit), or have your updater write into `./geoip` itself. Docker creates an empty `./geoip` on the first start; the block removes it only while it is empty, and stops when `./geoip` holds files or is already a link:
 
 ```bash
-cd "$HOME/maane" && grep -E '^GEOIP_DIR=' .env
+cd "$HOME/maane" && { [ -L geoip ] || [ ! -d geoip ] || rmdir geoip; } && ln -sT /srv/geoip geoip &&
+  docker compose up -d --force-recreate server
 ```
 
-When it prints nothing or `GEOIP_DIR=`, add your updater's folder to `.env` (for example `GEOIP_DIR=/srv/geoip`, where `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb` sit), then `docker compose up -d`. The folder must be readable by UID 1000; the server never writes to it. Check what the server sees:
+The folder must be readable by UID 1000; the server never writes to it. Check what the server sees:
 
 ```bash
 cd "$HOME/maane" && docker compose exec -T server ls -l /geoip
@@ -365,13 +367,14 @@ cd "$HOME/maane" && docker compose exec -T server ls -l /geoip
 
 ### Import from Zendesk
 
-Admin, Import brings the history of the phase 0 archive ([zendesk-backup.md](zendesk-backup.md)) into Maane, on [setup day](#setup-day-from-zendesk-to-maane). It reads the archive and never calls Zendesk, so it needs no token. `docker-compose.yml` mounts the folder `ZENDESK_ARCHIVE_DIR` from `.env` (default `./zendesk-archive` next to it) read only at `/zendesk-archive` in `server` (the page shows the archive's brands, tags, and state) and in `worker` (the import reads it). Maane never writes to it. Set the folder:
+Admin, Import brings the history of the phase 0 archive ([zendesk-backup.md](zendesk-backup.md)) into Maane, on [setup day](#setup-day-from-zendesk-to-maane). It reads the archive and never calls Zendesk, so it needs no token. `docker-compose.yml` mounts the folder `./zendesk-archive` next to it read only at `/zendesk-archive` in `server` (the page shows the archive's brands, tags, and state) and in `worker` (the import reads it). Maane never writes to it. Point `./zendesk-archive` at the archive's folder with a link (here `/srv/zendesk-archive`, the folder that holds `archive.json`). Docker creates an empty `./zendesk-archive` on the first start; the block removes it only while it is empty, and stops when `./zendesk-archive` holds files or is already a link:
 
 ```bash
-cd "$HOME/maane" && grep -E '^ZENDESK_ARCHIVE_DIR=' .env
+cd "$HOME/maane" && { [ -L zendesk-archive ] || [ ! -d zendesk-archive ] || rmdir zendesk-archive; } &&
+  ln -sT /srv/zendesk-archive zendesk-archive && docker compose up -d --force-recreate server worker
 ```
 
-When it prints nothing or `ZENDESK_ARCHIVE_DIR=`, add the archive's folder to `.env` (for example `ZENDESK_ARCHIVE_DIR=/srv/zendesk-archive`, the folder that holds `archive.json`), then `docker compose up -d`. The folder must be readable by UID 1000. Check what the worker sees:
+The folder must be readable by UID 1000. Check what the worker sees:
 
 ```bash
 cd "$HOME/maane" && docker compose exec -T worker ls -l /zendesk-archive/archive.json /zendesk-archive/state.json
@@ -398,7 +401,7 @@ Rehearse on the production server before setup day: the first deployment is a re
    )
    ```
 
-2. **Deploy and configure it** with sections 3 and 4. Provider credentials come from your secret store and go into Settings. Keep the Zendesk archive outside `~/maane`, with an absolute path in `ZENDESK_ARCHIVE_DIR`.
+2. **Deploy and configure it** with sections 3 and 4. Provider credentials come from your secret store and go into Settings. Keep the Zendesk archive outside `~/maane`, with `./zendesk-archive` a link to it.
 3. **Give it a mailbox of its own**, for example `maane-rehearsal@example.com`: a shared mailbox hidden from the address lists, added to the application's management scope while the rehearsal lasts. For mail to the support addresses, add one transport rule above the Zendesk rules that matches only your own test addresses as the sender, redirects to that mailbox (not a copy, so Zendesk opens no ticket), and stops processing more rules. Set the bounce address of the backup server to one that reaches only that mailbox.
 4. **Rehearse.** Run the Zendesk backup and the import, and read the report. Then connect Microsoft Graph to the rehearsal mailbox, send test mail, reply, and check the delivery status, the links, and notifications on your devices. The real transport rules are tested only after setup day's Finish import. Two rules:
    - Write only from and to your own addresses, with nobody else in To or Cc.
@@ -458,7 +461,7 @@ Your backup must hold:
 |---|---|---|
 | The database | `./postgres-data`, copied while the stack is stopped, or a dump (below) | All of Maane's data: users, settings, the audit log, the job queue, and each device's notification subscription |
 | `app.env` and `postgres.env` | `~/maane/app.env`, `~/maane/postgres.env` | `MAANE_AUTH_SECRETS` decrypts every user's two-factor secret and backup codes: without it nobody can sign in after a restore. `MAANE_SETTINGS_KEYS` decrypts the secrets stored in Settings. The database password opens the database. Keep every key version you ever used. |
-| `.env` | `~/maane/.env` | `VERSION`, `DOMAIN`, `LINK_DOMAIN`, `GEOIP_DIR`, and `ZENDESK_ARCHIVE_DIR`; no secret |
+| `.env` | `~/maane/.env` | `VERSION`, `DOMAIN`, and `LINK_DOMAIN`; no secret |
 | `docker-compose.yml` | `~/maane/docker-compose.yml` | Your copy, with any label you changed |
 | Attachments | `./data` | Attachments and inline images are stored as files, named by their SHA-256, not in the database. Copy it after the dump: a dump taken after the copy of `./data` can name a file the copy lacks. |
 | The VAPID key pair | `app.env` (`MAANE_VAPID_PUBLIC_KEY`, `MAANE_VAPID_PRIVATE_KEY`) | Every device subscribed with it. A restore without it starts only with a new pair, and then every user must turn notifications on again on each device. |
@@ -611,6 +614,8 @@ Test a restore before setup day, and again from time to time. Run it on another 
 To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported.
 
 ## What was verified
+
+Compose values (2026-11-24): `scripts/verify.sh` checked `docker-compose.yml` with `.env` made from `.env.example`, valid and with no variable missing. The `.env` block of section 3 and the two link blocks of [Link tracking](#link-tracking) and [Import from Zendesk](#import-from-zendesk) ran against a stand-in `docker`: `.env` got `LINK_DOMAIN` equal to `DOMAIN`, and each link block replaced a missing or empty folder and stopped on a folder with files or an existing link. In Docker, a bind mount of a link to a folder showed the folder's files. Not run against a real deployment.
 
 Rehearsal (2026-11-24): its three blocks ran as written, as an unprivileged user with `sudo`, in a throwaway Docker-in-Docker container with the real `docker-compose.yml`, an image built from this repository, real PostgreSQL, and secrets made in it by the blocks of section 3 (`server` and `postgres` only; no `worker`, `clamav`, or Traefik). The mark refuses without the files and once the deployment started. The end disables the Compose file, stops the stack, and renames the folder; it changes nothing in a folder that is not marked, and when Docker does not answer or the target name is taken it leaves a rehearsal that section 4 cannot start, and finishes when run again. A deployment made again from sections 2 to 4 had new secrets, no organization, and an unused ticket number sequence. The removal refuses a folder that is not marked, a symbolic link, and a folder with a Zendesk archive, and leaves the running deployment as it was. The rehearsal itself, with a real mailbox and real providers, has not run.
 

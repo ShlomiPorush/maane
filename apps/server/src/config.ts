@@ -30,8 +30,8 @@ export type ServerConfig = {
   webDir: string
   /** MAANE_FILES_DIR: the content-addressed store the server and the worker share (default /data/files). */
   filesDir: string
-  /** MAANE_GEOIP_DIR: the read-only directory of the GeoLite2 City and ASN files (deployment wiring), or null. */
-  geoipDir: string | null
+  /** Where docker-compose.yml mounts the GeoLite2 City and ASN files, read only. */
+  geoipDir: string
   /** MAANE_ZENDESK_ARCHIVE_DIR: the phase 0 archive, mounted read-only for the import (default /zendesk-archive). */
   archiveDir: string
   version: string
@@ -241,7 +241,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     migrationsDir: env.MAANE_MIGRATIONS_DIR || "drizzle",
     webDir: env.MAANE_WEB_DIR || "dist/web",
     filesDir: env.MAANE_FILES_DIR || "/data/files",
-    geoipDir: env.MAANE_GEOIP_DIR?.trim() || null,
+    geoipDir: "/geoip",
     archiveDir: env.MAANE_ZENDESK_ARCHIVE_DIR?.trim() || "/zendesk-archive",
     version: env.MAANE_VERSION || "dev",
     overrides,

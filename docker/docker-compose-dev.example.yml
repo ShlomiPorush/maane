@@ -4,23 +4,23 @@
 #
 # The database password and the keys are generated on this machine into <data dir>/postgres.env and
 # <data dir>/app.env (mode 600) by the scripts; the repository holds none. The scripts also create <data dir>/data
-# (attachments, owned by UID 1000) and <data dir>/clamav (ClamAV's signatures, owned by UID 100). MAANE_PORT and
-# MAANE_PUBLIC_URL may be set in the shell; scripts/verify.sh sets its own.
+# (attachments, owned by UID 1000) and <data dir>/clamav (ClamAV's signatures, owned by UID 100). The scripts set
+# its four variables: MAANE_IMAGE_TAG, MAANE_DATA_DIR, MAANE_PORT, and MAANE_PUBLIC_URL.
 
 services:
   server:
-    image: maane:${MAANE_IMAGE_TAG:-dev}
+    image: maane:${MAANE_IMAGE_TAG}
     env_file:
-      - path: ${MAANE_DATA_DIR:?MAANE_DATA_DIR is set by the scripts}/app.env
+      - path: ${MAANE_DATA_DIR}/app.env
     environment:
-      MAANE_PUBLIC_URL: ${MAANE_PUBLIC_URL:-http://127.0.0.1:${MAANE_PORT:-8095}}
+      MAANE_PUBLIC_URL: ${MAANE_PUBLIC_URL}
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - "127.0.0.1:${MAANE_PORT:-8095}:8080"
+      - "127.0.0.1:${MAANE_PORT}:8080"
     volumes:
-      - ${MAANE_DATA_DIR:?MAANE_DATA_DIR is set by the scripts}/data:/data
+      - ${MAANE_DATA_DIR}/data:/data
     networks:
       - default
       - scanner
@@ -33,18 +33,18 @@ services:
       - ALL
 
   worker:
-    image: maane:${MAANE_IMAGE_TAG:-dev}
+    image: maane:${MAANE_IMAGE_TAG}
     command: ["node", "dist/worker/index.js"]
     env_file:
-      - path: ${MAANE_DATA_DIR:?MAANE_DATA_DIR is set by the scripts}/app.env
+      - path: ${MAANE_DATA_DIR}/app.env
     environment:
-      MAANE_PUBLIC_URL: ${MAANE_PUBLIC_URL:-http://127.0.0.1:${MAANE_PORT:-8095}}
+      MAANE_PUBLIC_URL: ${MAANE_PUBLIC_URL}
     # The server runs the migrations; the worker starts once the server is healthy.
     depends_on:
       server:
         condition: service_healthy
     volumes:
-      - ${MAANE_DATA_DIR:?MAANE_DATA_DIR is set by the scripts}/data:/data
+      - ${MAANE_DATA_DIR}/data:/data
     networks:
       - default
       - scanner
@@ -65,10 +65,10 @@ services:
   postgres:
     image: postgres:18.6-bookworm
     env_file:
-      - path: ${MAANE_DATA_DIR:?MAANE_DATA_DIR is set by the scripts}/postgres.env
+      - path: ${MAANE_DATA_DIR}/postgres.env
     volumes:
       # PostgreSQL 18 keeps its data in a versioned directory under /var/lib/postgresql.
-      - ${MAANE_DATA_DIR:?MAANE_DATA_DIR is set by the scripts}/postgres:/var/lib/postgresql
+      - ${MAANE_DATA_DIR}/postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s
@@ -82,7 +82,7 @@ services:
     user: "100:101"
     entrypoint: ["/init-unprivileged"]
     volumes:
-      - ${MAANE_DATA_DIR:?MAANE_DATA_DIR is set by the scripts}/clamav:/var/lib/clamav
+      - ${MAANE_DATA_DIR}/clamav:/var/lib/clamav
       - ./docker/clamav/clamd.conf:/etc/clamav/clamd.conf:ro
       - ./docker/clamav/freshclam.conf:/etc/clamav/freshclam.conf:ro
     networks:

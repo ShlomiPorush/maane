@@ -1,7 +1,6 @@
 {
   "name": "Maane",
   "short_name": "Maane",
-  "description": "Email helpdesk",
   "id": "/",
   "start_url": "/",
   "scope": "/",
