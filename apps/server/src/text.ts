@@ -1,7 +1,7 @@
-// Values PostgreSQL cannot store (plan 2.3, P21, P22): a `text` column refuses U+0000, and `jsonb` refuses U+0000
-// and unpaired surrogates. Every decoded string headed for the database passes through wellFormed() at one place, the
-// row about to be inserted, so no header, address, subject, file name, text, HTML, Graph metadata, or audit detail can
-// carry one. The raw MIME, kept as bytes, is unchanged. The worker's intake and the server's replies (plan 3.1) use it.
+// Values PostgreSQL cannot store (plan 2.3): a `text` column refuses U+0000, and `jsonb` refuses U+0000 and unpaired
+// surrogates. Every decoded string headed for the database passes through wellFormed() at one place, the row about to
+// be inserted, so no header, address, subject, file name, text, HTML, Graph metadata, or audit detail can carry one.
+// The raw MIME, kept as bytes, is unchanged. The worker's intake and the server's replies (plan 3.1) use it.
 
 const NUL = String.fromCharCode(0)
 const REPLACEMENT = String.fromCodePoint(0xfffd)

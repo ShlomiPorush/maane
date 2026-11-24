@@ -21,7 +21,6 @@ export async function visibleOrganizations(
   return { all: false, organizationIds: rows.map((row) => row.organizationId).sort() }
 }
 
-/** Whether a scope includes one organization. */
 export function inScope(scope: OrganizationScope, organizationId: string): boolean {
   return scope.all || scope.organizationIds.includes(organizationId)
 }

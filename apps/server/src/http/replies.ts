@@ -1,6 +1,7 @@
-// Replies, internal notes, scheduled replies (plan 4.2), and the composer's uploads (plan 3.1), mounted under /api/v1 behind its session, two-factor,
-// CSRF, and Origin checks. Every route reads the user's scope (visibleOrganizations) on each request; a ticket or a
-// message outside it answers 404 as if it did not exist. An upload belongs to its uploader alone.
+// Replies, internal notes, scheduled replies (plan 4.2), and the composer's uploads (plan 3.1), mounted under /api/v1
+// behind its session, two-factor, CSRF, and Origin checks. Every route reads the user's scope (visibleOrganizations) on
+// each request; a ticket or a message outside it answers 404 as if it did not exist. An upload belongs to its uploader
+// alone.
 
 import { type Context, Hono } from "hono"
 import { bodyLimit } from "hono/body-limit"

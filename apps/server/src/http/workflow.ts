@@ -1,7 +1,7 @@
 // The workflow of plans 4.1 and 4.2, mounted under /api/v1 behind its session, two-factor, CSRF, and Origin checks: a
 // ticket's status, categories, organization, and snooze (any user, within their scope, read on each request; a ticket
-// outside it answers 404), and the categories themselves at /admin/categories (admins only). A refusal answers {error: code, ...details}
-// with a stable code (apps/web/src/api/errors.ts explains each one).
+// outside it answers 404), and the categories themselves at /admin/categories (admins only). A refusal answers
+// {error: code, ...details} with a stable code (apps/web/src/api/errors.ts explains each one).
 
 import { TICKET_STATUSES } from "@maane/shared"
 import { type Context, Hono } from "hono"

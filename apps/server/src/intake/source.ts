@@ -1,14 +1,13 @@
-// The intake source (plan 2.3, P13, P18): each pair of Entra tenant and intake mailbox is one row of intake_source,
-// and at most one row is current. Cursors, stored messages, and jobs carry the source's ID. A settings change of the
-// tenant or the mailbox, and the worker at start (when variables set them), make the matching row current here, after
-// locking the current row FOR UPDATE, so a store that holds it FOR SHARE finishes first and one that starts later sees
-// the new current row and rolls back.
+// The intake source (plan 2.3): each pair of Entra tenant and intake mailbox is one row of intake_source, and at most
+// one row is current. Cursors, stored messages, and jobs carry the source's ID. A settings change of the tenant or the
+// mailbox, and the worker at start (when variables set them), make the matching row current here, after locking the
+// current row FOR UPDATE, so a store that holds it FOR SHARE finishes first and one that starts later sees the new
+// current row and rolls back.
 
 import { and, eq, sql } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
 import { intakeSource } from "../db/schema.ts"
 
-/** A transaction of Maane's connection. */
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
 export type IntakeSource = typeof intakeSource.$inferSelect

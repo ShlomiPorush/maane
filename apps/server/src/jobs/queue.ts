@@ -14,7 +14,7 @@ import { errorFacts, log } from "../log.ts"
 export const SCANNER_SELF_TEST = "scanner-self-test"
 /** The daily sweep of stored files no row references (a crash between the rename and the commit leaves one). */
 export const FILES_SWEEP = "files-sweep"
-/** The Graph connection test: reads the intake mailbox's Inbox folder metadata, nothing else (plan 2.3, P12). */
+/** The Graph connection test: reads the intake mailbox's Inbox folder metadata, nothing else (plan 2.3). */
 export const GRAPH_TEST = "graph-test"
 /** Stage one of intake: delta queries of the current source's folders, storing new messages (every minute). */
 export const INTAKE_SYNC = "intake-sync"
@@ -93,7 +93,6 @@ export const QUEUE_OPTIONS: Record<string, Omit<Queue, "name">> = {
 export type JobState = "created" | "retry" | "active" | "completed" | "cancelled" | "failed"
 
 export interface JobQueue {
-  /** Queues a job and returns its id. */
   send(name: string, data?: object): Promise<string>
   /**
    * Queues a job inside the caller's transaction (pg-boss's documented `db` option): the job exists exactly when the

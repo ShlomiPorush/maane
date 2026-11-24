@@ -59,7 +59,9 @@ export interface AppContext {
   onSettingsChanged?: () => Promise<void>
   /** The job queue: the server only queues jobs the worker runs, and reads their state. */
   jobs: JobQueue
-  /** MAANE_TRUSTED_PROXIES: only a request from one of these may name its client in X-Forwarded-For (the link routes). */
+  /**
+   * MAANE_TRUSTED_PROXIES: only a request from one of these may name its client in X-Forwarded-For (the link routes).
+   */
   trustedProxies: string[]
   /** The read-only directory of the GeoLite2 City and ASN files, or null for no location. */
   geoipDir: string | null
@@ -71,7 +73,6 @@ export interface AppContext {
 
 type Env = ApiEnv
 
-/** The output the worker's self-test job returns, read back with its shape checked. */
 const selfTestOutput = z.object({
   address: z.string(),
   ok: z.boolean(),
@@ -80,7 +81,6 @@ const selfTestOutput = z.object({
   checkedAt: z.string(),
 })
 
-/** The output the worker's Graph connection test returns, read back with its shape checked. */
 const graphTestOutput = z.object({
   ok: z.boolean(),
   problem: z.enum(GRAPH_PROBLEMS).nullable(),
@@ -90,7 +90,6 @@ const graphTestOutput = z.object({
   checkedAt: z.string(),
 })
 
-/** The output the worker's SMTP connection test returns, read back with its shape checked. */
 const smtpTestOutput = z.object({
   provider: z.enum(PROVIDERS),
   ok: z.boolean(),
@@ -303,8 +302,8 @@ export function createApp(ctx: AppContext) {
     return c.json(view)
   })
 
-  // The Graph connection test (plan 2.3, P12): the worker reads the intake mailbox's Inbox folder metadata with the
-  // saved settings and reports success or Graph's error code. It reads no message and writes nothing.
+  // The Graph connection test (plan 2.3): the worker reads the intake mailbox's Inbox folder metadata with the saved
+  // settings and reports success or Graph's error code. It reads no message and writes nothing.
   api.post("/settings/graph/test", adminOnly, async (c) => {
     const id = await ctx.jobs.send(GRAPH_TEST)
     return c.json({ id }, 202)

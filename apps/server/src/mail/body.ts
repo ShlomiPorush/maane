@@ -1,6 +1,6 @@
 // A message body as its own document, served by GET /api/v1/messages/:id/body into the ticket view's sandboxed frame
-// (plan 2.4, P3). The HTML is the stored, sanitized HTML after the direction pass (direction.ts) and renderMailHtml;
-// a message without HTML shows its text, escaped, line by line, each line with the direction of its first strong
+// (plan 2.4). The HTML is the stored, sanitized HTML after the direction pass (direction.ts) and renderMailHtml; a
+// message without HTML shows its text, escaped, line by line, each line with the direction of its first strong
 // character (requirements 4.2: the server sets the direction per paragraph, never dir="auto"; a line is a paragraph in
 // the Unicode bidirectional algorithm). The document's own direction follows the message's first strong character, so
 // HTML written without `dir` (common in Hebrew mail) still reads right to left, and the direction pass gives each block

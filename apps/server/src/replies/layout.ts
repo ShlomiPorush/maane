@@ -267,8 +267,8 @@ function renderContent(
 }
 
 /**
- * The files line: the names, each isolated in its own direction, a name with a download link as that link (its underline
- * inline with !important, as html-email asks of the links an app makes).
+ * The files line: the names, each isolated in its own direction, a name with a download link as that link (its
+ * underline inline with !important, as html-email asks of the links an app makes).
  */
 const fileLine = (filesWord: string, files: readonly EntryFile[], dir: Direction) => {
   const [before = "", after = ""] = filesWord.split("{names}")
@@ -315,7 +315,6 @@ function blockHtml(
 export interface Built {
   html: string
   text: string
-  /** The images the HTML embeds. */
   images: EntryImage[]
 }
 

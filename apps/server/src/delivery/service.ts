@@ -3,20 +3,20 @@
 // report of the failover server in the intake mailbox (worker). They only change delivery information: nothing here
 // sends, permits, or blocks a send.
 //
-// - SMTP2GO's events find their recipient by SMTP2GO's queue ID (kept from its final 250 when it accepted the reply) and
-//   the recipient's address. When no recipient holds that ID (the connection dropped after the data, or a run stopped
-//   before it stored the ID), a webhook event finds it by Maane's own Message-ID, which the event carries, and the
-//   address, but only while exactly one attempt could have reached that recipient (possible_sends) and no queue ID was
-//   stored for it; otherwise the event is recorded on the reply as unmatched. An event for a reply Maane does not know
-//   is dropped. A status written this way on an `unknown` recipient is shown beside it; the send state stays the
+// - SMTP2GO's events find their recipient by SMTP2GO's queue ID (kept from its final 250 when it accepted the reply)
+//   and the recipient's address. When no recipient holds that ID (the connection dropped after the data, or a run
+//   stopped before it stored the ID), a webhook event finds it by Maane's own Message-ID, which the event carries, and
+//   the address, but only while exactly one attempt could have reached that recipient (possible_sends) and no queue ID
+//   was stored for it; otherwise the event is recorded on the reply as unmatched. An event for a reply Maane does not
+//   know is dropped. A status written this way on an `unknown` recipient is shown beside it; the send state stays the
 //   agent's to decide.
 // - An older event never overwrites a newer one: the UPDATE itself only takes an event whose time is later than the
 //   one the recipient holds (at the same time, only a final status over one that is not), so duplicates, late
 //   retries, and events out of order change nothing. A send's result writes other columns and never these.
-// - The ticket's `delivery_failed` flag follows from the rows (refreshDeliveryFlag): for each address, the recipient row
-//   of the ticket accepted last (by when it was accepted, not when its reply was written) decides; the flag is set while
-//   that row holds a bounce, a rejection, or a spam report written after its acceptance. A later accepted send to the
-//   same address clears it, and an old bounce of an earlier send never sets it again.
+// - The ticket's `delivery_failed` flag follows from the rows (refreshDeliveryFlag): for each address, the recipient
+//   row of the ticket accepted last (by when it was accepted, not when its reply was written) decides; the flag is set
+//   while that row holds a bounce, a rejection, or a spam report written after its acceptance. A later accepted send to
+//   the same address clears it, and an old bounce of an earlier send never sets it again.
 // - A bounce, a rejection, or a spam report on the reply that started the ticket's waiting period ends that period, so
 //   its reminder never goes (plan 4.3), in the same transaction, after the ticket's lock the flag takes.
 
@@ -36,7 +36,6 @@ import { wellFormed, wellFormedText } from "../text.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
-/** One event about one recipient. */
 export interface DeliveryEvent {
   /** In lower case. */
   recipient: string
@@ -129,8 +128,8 @@ export async function applyDeliveryEvent(tx: Tx, target: DeliveryTarget, event: 
         )
       : sql`false`,
   )
-  // The first delivery (plan 3.4, review L1): set once, while empty, whatever status the recipient holds or gets next,
-  // so a later spam report or bounce never moves the reference of a click's "early" mark.
+  // The first delivery (plan 3.4): set once, while empty, whatever status the recipient holds or gets next, so a later
+  // spam report or bounce never moves the reference of a click's "early" mark.
   if (event.status === "delivered")
     await tx
       .update(outboxRecipient)

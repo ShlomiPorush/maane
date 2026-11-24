@@ -30,7 +30,6 @@ export type OrganizationSummary = {
   createdAt: Date
   addresses: number
   members: number
-  /** The organization holds the default address. */
   hasDefault: boolean
 }
 
@@ -390,7 +389,7 @@ export class Organizations {
     }
   }
 
-  /** Refused for the default address: it can only be replaced (P17, phase 6). */
+  /** Refused for the default address: it can only be replaced (phase 6). */
   async removeAddress(id: string, addressId: string, acting: Acting): Promise<void> {
     await this.db.transaction(async (tx) => {
       await lockIntakeConfig(tx)

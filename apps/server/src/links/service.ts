@@ -1,9 +1,9 @@
 // Tracked links and download links (plan 3.4, requirements 3.4 and 4.3). A reply's email carries only random codes:
-// `https://<link domain>/l/<code>` for a link the agent wrote, `https://<link domain>/f/<code>` for a file of an earlier
-// message in its history. The codes and their targets are written with the reply, in its transaction; a code resolves
-// only to what was stored, so nobody can use Maane to redirect elsewhere. A download is served only while its part is
-// still a stored file (clean, or let through by the owner's policy: the rule of the ticket view's download) of an
-// incoming message or a reply, never of an internal note. Each click and download is recorded with its address, the
+// `https://<link domain>/l/<code>` for a link the agent wrote, `https://<link domain>/f/<code>` for a file of an
+// earlier message in its history. The codes and their targets are written with the reply, in its transaction; a code
+// resolves only to what was stored, so nobody can use Maane to redirect elsewhere. A download is served only while its
+// part is still a stored file (clean, or let through by the owner's policy: the rule of the ticket view's download) of
+// an incoming message or a reply, never of an internal note. Each click and download is recorded with its address, the
 // address's location from the local GeoLite2 files, and its parsed user agent, every string bounded.
 
 import { randomBytes } from "node:crypto"
@@ -71,7 +71,6 @@ export class ReplyLinks {
   }
 }
 
-/** What a code resolves to. */
 export type Resolved =
   | { id: string; kind: "url"; url: string }
   | { id: string; kind: "file"; fileName: string | null; sha256: string }

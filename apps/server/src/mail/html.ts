@@ -1,10 +1,10 @@
-// The HTML of incoming mail. Stage one (plan 2.3, P4): sanitize-html runs before anything is stored, and only its
-// output is kept. The sender's HTML exists only inside the raw MIME, which is kept only when the raw message and every
-// part scanned clean. The allow list keeps the structure of ordinary mail and drops every `data:` URL and every scheme
-// but https, http, mailto, tel, and cid: in href and src (the attributes that hold URLs here), and in inline styles,
-// where no value may call a function other than a color (so no url(), image(), or expression()).
+// The HTML of incoming mail. Stage one (plan 2.3): sanitize-html runs before anything is stored, and only its output is
+// kept. The sender's HTML exists only inside the raw MIME, which is kept only when the raw message and every part
+// scanned clean. The allow list keeps the structure of ordinary mail and drops every `data:` URL and every scheme but
+// https, http, mailto, tel, and cid: in href and src (the attributes that hold URLs here), and in inline styles, where
+// no value may call a function other than a color (so no url(), image(), or expression()).
 //
-// The body route (plan 2.4, P3): the stored HTML goes through the same allow list once more, with sanitize-html's
+// The body route (plan 2.4): the stored HTML goes through the same allow list once more, with sanitize-html's
 // documented `transformTags` and `exclusiveFilter`, so an image is kept only as a `data:` URL built here from a part of
 // the same message that scanned clean with an image type (its `cid:` reference), or, once the agent shows remote
 // images, as an https URL. Every other image is removed with its tag, so the document never asks for anything remote
