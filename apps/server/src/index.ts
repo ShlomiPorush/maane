@@ -11,10 +11,8 @@ import { Settings } from "./settings/service.ts"
 
 async function main(): Promise<void> {
   const config = loadConfig()
-  // The window starts with the process, before anything slow, so it is never shorter than it says.
   const setup = new SetupWindow()
   const database = openDatabase(config.databaseUrl)
-  // Audit rows from Better Auth's hooks: a pool of their own (see AuthOptions.auditDb).
   const auditDatabase = openDatabase(config.databaseUrl, 2)
   await migrateDatabase(database.db, config.migrationsDir)
   const settings = new Settings(database.db, createSettingsCipher(config.settingsKeys), config.overrides)
@@ -41,7 +39,6 @@ async function main(): Promise<void> {
     webDir: config.webDir,
     filesDir: config.filesDir,
     version: config.version,
-    // A new session length applies to sessions made from now on; requests in flight finish on the old instance.
     onSettingsChanged: async () => {
       auth = await build()
     },

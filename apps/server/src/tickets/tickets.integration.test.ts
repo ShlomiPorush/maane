@@ -27,9 +27,6 @@ import { createTestDatabase } from "../testing/db.ts"
 import { pdf, png } from "../testing/files.ts"
 import { Tickets } from "./service.ts"
 
-// The ticket routes of plan 2.4 against a migrated database and a file store in a temporary directory. Tickets,
-// messages, parts, and files are written here as intake writes them; the routes only read.
-
 let database: Awaited<ReturnType<typeof createTestDatabase>>
 let app: ReturnType<typeof createTestApp>
 let filesDir: string
@@ -53,7 +50,6 @@ afterEach(async () => {
   await rm(filesDir, { recursive: true, force: true })
 })
 
-// Hebrew from code points: the repository holds no literal Hebrew outside he.json.
 const SHALOM = String.fromCodePoint(0x5e9, 0x5dc, 0x5d5, 0x5dd)
 const browser = () => new TestBrowser(app.fetch, nextIp())
 const db = () => database.db
@@ -126,7 +122,6 @@ async function newMessage(ticketId: string | null, values: Partial<typeof messag
   return row?.id ?? ""
 }
 
-/** A file in the store and its row, as FileService writes them. */
 async function storeFile(bytes: Buffer, detectedType: string, scanStatus = "clean"): Promise<string> {
   const sha256 = createHash("sha256").update(bytes).digest("hex")
   const path = storedFilePath(filesDir, sha256)
@@ -157,7 +152,6 @@ async function newPart(messageId: string, values: Partial<typeof messagePart.$in
   return row?.id ?? ""
 }
 
-/** A clean PNG attachment of a message. */
 async function pngPart(messageId: string, values: Partial<typeof messagePart.$inferInsert> = {}) {
   const bytes = png()
   return newPart(messageId, {
@@ -193,14 +187,12 @@ describe("scope", () => {
     expect(await numbers(admin)).toEqual([ticketB.number, ticketA.number])
     expect(await numbers(agent.b)).toEqual([ticketA.number])
     expect((await agent.b.call("GET", "/api/v1/tickets")).json.organizations).toEqual([{ id: a, name: "Alpha" }])
-    // An agent of no organization sees an empty list, not an error.
     expect((await lonely.b.call("GET", "/api/v1/tickets")).json).toEqual({
       tickets: [],
       next: null,
       organizations: [],
       categories: [],
     })
-    // Filtering by an organization outside the scope shows nothing of it.
     expect((await agent.b.call("GET", `/api/v1/tickets?organization=${b}`)).json.tickets).toEqual([])
 
     const routes = (t: number, m: string, p: string) => [
@@ -221,11 +213,9 @@ describe("scope", () => {
       expect((await lonely.b.get(path)).status, path).toBe(404)
     }
 
-    // Removed from Alpha: the very next request of the same session is refused, on every route.
     expect((await admin.call("DELETE", `/api/v1/admin/organizations/${a}/members/${agent.id}`)).status).toBe(200)
     expect(await numbers(agent.b)).toEqual([])
     for (const path of routes(ticketA.number, messageA, partA)) expect((await agent.b.get(path)).status, path).toBe(404)
-    // Signed out: nothing.
     for (const path of routes(ticketA.number, messageA, partA))
       expect((await browser().get(path)).status, path).toBe(401)
   })
@@ -284,7 +274,6 @@ describe("files", () => {
       }
       expect(download.status, status).toBe(stored ? 200 : 404)
     }
-    // A part that says clean whose stored file does not (a not-scanned file of the same content) is no preview.
     const mixed = await newPart(m, {
       storedSha256: await storeFile(Buffer.from("other content"), "image/png", "not_scanned"),
     })
@@ -309,7 +298,6 @@ describe("files", () => {
         storedSha256: await storeFile(Buffer.from(content), type),
       })
       expect((await admin.get(`/api/v1/files/${part}/preview`)).status, type).toBe(403)
-      // Downloaded as bytes, never as its own type.
       const download = await admin.get(`/api/v1/files/${part}`)
       expect(download.headers.get("content-type"), type).toBe("application/octet-stream")
     }
@@ -398,7 +386,6 @@ describe("file names", () => {
     const admin = await firstAdmin()
     const t = await newTicket(await newOrganization("Alpha"))
     const m = await newMessage(t.id)
-    // 199 letters, then an emoji (two UTF-16 units), so the 200th character is the whole emoji.
     const emoji = String.fromCodePoint(0x1f4c4)
     const part = await pngPart(m, { fileName: `${"a".repeat(199)}${emoji}.pdf` })
     const download = await admin.get(`/api/v1/files/${part}`)
@@ -456,7 +443,6 @@ describe("message bodies", () => {
       storedSha256: await storeFile(logo, "image/png"),
     })
     await newPart(m, { kind: "inline", contentId: "bad@example.com", status: "infected", signature: "Eicar-Signature" })
-    // An image of another message is never embedded here, nor a part whose content is not an image.
     await pngPart(other, { kind: "inline", contentId: "elsewhere@example.com" })
     await newPart(m, {
       kind: "inline",
@@ -498,7 +484,6 @@ describe("message bodies", () => {
     expect(body).toContain('<p dir="ltr">An English line.</p>')
     expect(body).not.toContain('dir="auto"')
     expect(body).not.toContain("unicode-bidi")
-    // Stored content is not changed: it is a render pass.
     const [stored] = await db().select({ htmlBody: message.htmlBody }).from(message).where(eq(message.id, m))
     expect(stored?.htmlBody).toBe(html)
   })
@@ -530,7 +515,6 @@ describe("message bodies", () => {
     expect(body).toContain(`<div dir="rtl">${SHALOM}</div>`)
     expect(body).toContain('<div dir="ltr">hello &lt;script&gt;x()&lt;/script&gt;</div>')
     expect(body).not.toContain("<script>")
-    // Nothing to show: no HTML and no text (both blocked).
     const empty = await newMessage(t.id, { htmlBody: null, textBody: null })
     expect((await admin.get(`/api/v1/messages/${empty}/body`)).status).toBe(404)
   })
@@ -597,7 +581,6 @@ describe("the ticket view and list", () => {
       .values([one, pending].map((t) => ({ ticketId: t.id, categoryId: billing?.id ?? "" })))
     const numbers = async (query: string) =>
       (await admin.call("GET", `/api/v1/tickets${query}`)).json.tickets.map((t: { number: number }) => t.number)
-    // The default view is open work: new, open, and on hold (plan 4.1).
     expect(await numbers("")).toEqual([onHold.number, two.number, three.number, one.number, four.number])
     expect(await numbers("?status=open_work")).toEqual(await numbers(""))
     expect(await numbers("?status=all")).toEqual([
@@ -638,12 +621,10 @@ describe("the ticket view and list", () => {
 })
 
 describe("search (plan 4.4)", () => {
-  // Hebrew from code points: a stem of three letters, a longer word that holds it in its middle, and filler.
   const STEM = String.fromCodePoint(0x5d7, 0x5e9, 0x5d1)
   const WORD = String.fromCodePoint(0x5d1, 0x5d7, 0x5e9, 0x5d1, 0x5d5, 0x5e0, 0x5d9, 0x5d5, 0x5ea)
   const LAMED = String.fromCodePoint(0x5dc)
 
-  /** An internal note, as the composer writes it: by an agent, with a submission ID. */
   const note = async (ticketId: string, textBody: string) => {
     const [author] = await db().select({ id: authUser.id }).from(authUser).limit(1)
     return newMessage(ticketId, {
@@ -679,12 +660,10 @@ describe("search (plan 4.4)", () => {
     expect(filler.length).toBeGreaterThanOrEqual(30_000)
     expect(await found(admin, STEM)).toEqual([newer.number, deep.number])
     expect(await found(admin, ` ${STEM}  `)).toEqual([newer.number, deep.number])
-    // One and two characters are below the trigram index and still match by substring.
     expect(await found(admin, LAMED)).toEqual([other.number, deep.number])
     expect(await found(admin, STEM.slice(0, 2))).toEqual([newer.number, deep.number])
     expect(await found(admin, `${STEM}x`)).toEqual([])
 
-    // Paged like the list: the cursor keeps the search.
     const tickets = new Tickets(db(), filesDir)
     const first = await tickets.list({ all: true }, { status: "all", search: STEM, limit: 1 })
     expect(first.tickets.map((t) => t.number)).toEqual([newer.number])
@@ -758,11 +737,9 @@ describe("search (plan 4.4)", () => {
       expect(await found(agent.b, term), term).toEqual([])
       expect(await found(admin, term), term).toEqual([theirs.number])
     }
-    // The organization filter does not widen the scope, and the answer names only the agent's organizations.
     expect(await found(agent.b, STEM, `&status=all&organization=${b}`)).toEqual([])
     const answer = await agent.b.call("GET", `/api/v1/tickets?q=${encodeURIComponent(STEM)}`)
     expect(answer.json.organizations).toEqual([{ id: a, name: "Alpha" }])
-    // Removed from Alpha: the next search finds nothing.
     expect((await admin.call("DELETE", `/api/v1/admin/organizations/${a}/members/${agent.id}`)).status).toBe(200)
     expect(await found(agent.b, STEM)).toEqual([])
   })
@@ -778,7 +755,6 @@ describe("search (plan 4.4)", () => {
     await db()
       .insert(ticketCategory)
       .values({ ticketId: solved.id, categoryId: billing?.id ?? "" })
-    // Without a chosen status a search covers every status, a solved ticket too; a chosen status narrows it.
     expect(await found(admin, STEM, "")).toEqual([solved.number, open.number])
     expect(await found(admin, STEM)).toEqual([solved.number, open.number])
     expect(await found(admin, STEM, "&status=open")).toEqual([open.number])
@@ -786,12 +762,10 @@ describe("search (plan 4.4)", () => {
     expect(await found(admin, STEM, "&status=solved")).toEqual([solved.number])
     expect(await found(admin, STEM, "&status=pending")).toEqual([])
     expect(await found(admin, STEM, `&status=all&category=${billing?.id}`)).toEqual([solved.number])
-    // An empty or blank term is no search.
     expect((await found(admin, "   ")).length).toBe(3)
     expect((await found(admin, "   ", "")).length).toBe(2)
     expect((await admin.call("GET", `/api/v1/tickets?q=${"x".repeat(SEARCH_MAX_LENGTH)}`)).status).toBe(200)
     expect((await admin.call("GET", `/api/v1/tickets?q=${"x".repeat(SEARCH_MAX_LENGTH + 1)}`)).status).toBe(400)
-    // A NUL, which PostgreSQL refuses in a parameter, is searched as U+FFFD, not an error.
     expect(await found(admin, `a${String.fromCharCode(0)}b`)).toEqual([])
   })
 
@@ -800,7 +774,6 @@ describe("search (plan 4.4)", () => {
     const a = await newOrganization("Alpha")
     const at = (minutes: number) => new Date(Date.UTC(2026, 10, 15, 9, minutes))
     const awake = await newTicket(a, { subject: `Invoice ${WORD}`, status: "open", lastActivityAt: at(1) })
-    // A snooze is its time still ahead on the ticket row, which the list compares with now().
     const snoozed = await newTicket(a, {
       subject: `Invoice ${WORD}`,
       status: "open",
@@ -812,12 +785,9 @@ describe("search (plan 4.4)", () => {
       expect(answer.status, query).toBe(200)
       return answer.json.tickets.map((t: { number: number }) => t.number)
     }
-    // Without a term the default view (open work) leaves the snoozed ticket out; the Snoozed filter shows it.
     expect(await listed("")).toEqual([awake.number])
     expect(await listed("?status=snoozed")).toEqual([snoozed.number])
-    // A search with no status chosen covers every status, the snoozed ticket too.
     expect(await found(admin, STEM, "")).toEqual([snoozed.number, awake.number])
-    // The Snoozed filter and a chosen open work combine with the search.
     expect(await found(admin, STEM, "&status=snoozed")).toEqual([snoozed.number])
     expect(await found(admin, STEM, "&status=open_work")).toEqual([awake.number])
     expect(await found(admin, "nothing like it", "&status=snoozed")).toEqual([])
@@ -827,8 +797,6 @@ describe("search (plan 4.4)", () => {
     const a = await newOrganization("Alpha")
     const t = await newTicket(a)
     await newMessage(t.id, { textBody: `${SHALOM} ${WORD}` })
-    // An organization with some history, so that reading every ticket of the scope and then its messages is not the
-    // cheaper plan; VACUUM ANALYZE takes the statistics and merges GIN's pending entries, as autovacuum would.
     const many = await db()
       .insert(ticket)
       .values(
@@ -865,11 +833,8 @@ describe("search (plan 4.4)", () => {
     const client = await database.pool.connect()
     try {
       await client.query("vacuum analyze ticket, message, ticket_participant")
-      // Hebrew letters are word characters in this database's locale, so a Hebrew term gives trigrams to look up.
       const trigrams = await client.query("select show_trgm($1) as t", [STEM])
       expect(trigrams.rows[0].t.length).toBeGreaterThan(0)
-      // The whole list query as the service runs it, for an admin and for an agent of one organization (the scope in
-      // each branch), with a status and a cursor; sequential scans are switched off to ask whether the index is usable.
       const tickets = new Tickets(db(), filesDir)
       const cursor = Buffer.from(JSON.stringify(["2999-01-01T00:00:00.000000Z", 1])).toString("base64url")
       const scopes = [{ all: true as const }, { all: false as const, organizationIds: [a] }]

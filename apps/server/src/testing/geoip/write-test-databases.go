@@ -1,13 +1,3 @@
-// The GeoLite2 test databases next to this file, GeoLite2-City.mmdb and GeoLite2-ASN.mmdb, were written once by this
-// program with MaxMind's own writer, github.com/maxmind/mmdbwriter v1.2.0 (Apache-2.0 or MIT), because the toolchain
-// has no Go. They hold only documentation networks (RFC 5737, RFC 3849) and documentation AS numbers (RFC 5398), in
-// the layouts of GeoLite2 City and GeoLite2 ASN; 203.0.113.0/25 holds 1,200-character strings for the bounds. MaxMind's
-// own published test databases may be committed (Apache-2.0 or MIT), but they hold only networks outside the
-// documentation ranges, which this repository never names. Never commit the real GeoLite2 files.
-//
-// To write them again (Docker, in an empty directory with this file as main.go):
-//   docker run --rm -v "$PWD:/w" -w /w golang:1.25-bookworm sh -c \
-//     'go mod init example.com/geowriter && go get github.com/maxmind/mmdbwriter@v1.2.0 && go run .'
 package main
 
 import (

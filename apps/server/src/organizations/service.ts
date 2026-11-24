@@ -1,8 +1,3 @@
-// Organizations, their support addresses, and agent membership: the admin's writes and reads (plan 2.1). Every write
-// runs in one transaction with its audit row. The database holds the invariants as well (unique names and values, one
-// default that is exact, foreign keys that keep an organization in use from being deleted), so a race between two
-// admins ends in a refusal, never in a broken state; this service turns those refusals into stable codes.
-
 import {
   type AddressKind,
   ORGANIZATION_NAME_MAX,
@@ -43,11 +38,8 @@ export type AddressCheck = {
   rule: { id: string; kind: AddressKind; value: string } | null
 }
 
-/** Who acted and from where, for the audit row. */
 export type Acting = { actor: Actor; ipAddress: string | null }
 
-// Control characters, and the characters that reorder text (bidirectional marks and isolates): a name shows in
-// lists, sender names, and audit rows, where either could hide or disguise what it says.
 export function hidden(code: number): boolean {
   return (
     code < 0x20 ||
@@ -60,7 +52,6 @@ export function hidden(code: number): boolean {
   )
 }
 
-/** A name as stored (trimmed), or a refusal: 1 to 80 characters, no control or direction characters. */
 export function parseName(text: unknown): string {
   const name = typeof text === "string" ? text.trim() : ""
   const length = [...name].length
@@ -103,7 +94,6 @@ export class Organizations {
     return rows
   }
 
-  /** One organization with its addresses (the default first, then exact, then patterns) and its members. */
   async get(id: string): Promise<{
     organization: {
       id: string
@@ -202,10 +192,6 @@ export class Organizations {
     }
   }
 
-  /**
-   * The signature at the end of the organization's replies (plan 3.1): plain text of at most SIGNATURE_MAX characters,
-   * kept as written (only line breaks normalized), empty for none.
-   */
   async setSignature(id: string, text: unknown, acting: Acting): Promise<void> {
     const signature = typeof text === "string" ? wellFormedText(text.replace(/\r\n?/g, "\n")).value.trimEnd() : null
     if (signature === null || [...signature].length > SIGNATURE_MAX)
@@ -228,12 +214,6 @@ export class Organizations {
     })
   }
 
-  /**
-   * The automatic reminder (plan 4.3): its template, plain text as the signature (at most REMINDER_TEMPLATE_MAX
-   * characters, empty for no reminders), and the days a ticket waits for the customer before it goes (a whole number
-   * from REMINDER_DAYS_MIN to REMINDER_DAYS_MAX). A change applies to the waiting periods that start after it; a
-   * reminder already waiting keeps its time and is written from the template as it is when it goes.
-   */
   async setReminder(id: string, input: { template: unknown; days: unknown }, acting: Acting): Promise<void> {
     const template =
       typeof input.template === "string" ? wellFormedText(input.template.replace(/\r\n?/g, "\n")).value.trimEnd() : null
@@ -264,11 +244,6 @@ export class Organizations {
     })
   }
 
-  /**
-   * Refused while the organization has an address or a member (`organization_in_use`), and for good once it has mail
-   * history (`organization_has_mail`): tickets or intake records keep it, so history is never lost. Their foreign keys
-   * restrict too.
-   */
   async delete(id: string, acting: Acting): Promise<void> {
     try {
       await this.db.transaction(async (tx) => {
@@ -299,23 +274,17 @@ export class Organizations {
         })
       })
     } catch (error) {
-      // Mail history that arrived after the check above (its foreign key restricts).
       if (databaseError(error)?.code === "23503") throw new Refusal("organization_has_mail", 409)
       throw error
     }
   }
 
-  /** Adds an agent. Admins need no membership: they see every organization by their role. */
   async addMember(id: string, userId: unknown, acting: Acting): Promise<void> {
     if (typeof userId !== "string" || userId.length === 0 || userId.length > 200)
       throw new Refusal("member_not_agent", 400)
     try {
       await this.db.transaction(async (tx) => {
         const name = await organizationName(tx, id)
-        // FOR SHARE on the user's row: a role change (an UPDATE of that row) waits for this transaction, and this read
-        // waits for a role change in flight and then sees the new role. So a membership is added either before a
-        // promotion, which then clears it, or not at all. (The foreign key's own KEY SHARE lock does not block an
-        // update of the role.)
         const [user] = await tx
           .select({ username: authUser.username, name: authUser.name, role: authUser.role })
           .from(authUser)
@@ -389,7 +358,6 @@ export class Organizations {
     }
   }
 
-  /** Refused for the default address: it can only be replaced (phase 6). */
   async removeAddress(id: string, addressId: string, acting: Acting): Promise<void> {
     await this.db.transaction(async (tx) => {
       await lockIntakeConfig(tx)
@@ -407,7 +375,6 @@ export class Organizations {
     })
   }
 
-  /** Makes an exact address the default, replacing the previous default in the same transaction. */
   async setDefault(id: string, addressId: string, acting: Acting): Promise<void> {
     await this.db.transaction(async (tx) => {
       await lockIntakeConfig(tx)
@@ -415,7 +382,6 @@ export class Organizations {
       const row = await addressOf(tx, id, addressId)
       if (row.kind !== "exact") throw new Refusal("address_default_not_exact", 400)
       if (row.isDefault) return
-      // Two statements, in this order: the partial unique index allows one default at any moment.
       const previous = await tx
         .update(supportAddress)
         .set({ isDefault: false })
@@ -432,7 +398,6 @@ export class Organizations {
     })
   }
 
-  /** "Which organization gets this address?": the same function the intake uses, over every stored address. */
   async checkAddress(text: unknown): Promise<AddressCheck> {
     const parsed = parseExactAddress(typeof text === "string" ? text : "")
     if (!parsed.ok) throw new Refusal("address_invalid", 400, { field: "address" })
@@ -459,12 +424,6 @@ export class Organizations {
   }
 }
 
-/**
- * Removes every membership of a user whose role changed, in either direction (owner's decision, 2026-11-12): an admin
- * needs none, and an agent made from an admin starts with none, so old rows never come back into force. Called from
- * Better Auth's documented after hook of /admin/set-role, once the new role is stored; one audit row when rows went.
- * Clearing on both directions also repairs a promotion whose clearing failed, at the next role change.
- */
 export async function clearMemberships(db: Db, userId: string, role: unknown, acting: Acting): Promise<number> {
   return db.transaction(async (tx) => {
     const removed = await tx
@@ -493,7 +452,6 @@ export async function clearMemberships(db: Db, userId: string, role: unknown, ac
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
-/** The organization's name, read with a key-share lock so it cannot be deleted before the transaction ends. */
 async function organizationName(tx: Tx, id: string): Promise<string> {
   const [row] = await tx
     .select({ name: organization.name })
@@ -518,7 +476,6 @@ function nameTaken(error: unknown): Refusal | null {
   return databaseError(error)?.code === "23505" ? new Refusal("organization_name_taken", 409, { field: "name" }) : null
 }
 
-/** Whether anything of the mail history refers to the organization: a ticket, an intake record, a conversation. */
 async function hasMail(tx: Pick<Db, "select">, id: string): Promise<boolean> {
   for (const [table, column] of [
     [ticket, ticket.organizationId],

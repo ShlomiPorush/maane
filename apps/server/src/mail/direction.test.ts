@@ -2,15 +2,12 @@ import { describe, expect, it } from "vitest"
 import { directBlocks, messageDirection } from "./direction.ts"
 import { renderMailHtml, sanitizeMailHtml } from "./html.ts"
 
-// Hebrew and controls from code points: the repository holds no literal Hebrew outside he.json and no literal
-// bidirectional control.
 const cp = (...points: number[]) => String.fromCodePoint(...points)
 const SHALOM = cp(0x5e9, 0x5dc, 0x5d5, 0x5dd)
 const TODA = cp(0x5ea, 0x5d5, 0x5d3, 0x5d4)
 const RLM = cp(0x200f)
 const IMAGE = '<img src="cid:logo@example.com" alt="logo" width="120" height="40" />'
 
-/** Every `dir` the HTML holds, in document order. */
 const dirs = (html: string) => [...html.matchAll(/<(\w+)[^>]*?\sdir="([^"]*)"/g)].map((m) => `${m[1]}:${m[2]}`)
 
 describe("directBlocks", () => {
@@ -26,7 +23,6 @@ describe("directBlocks", () => {
       "p:rtl",
     ])
     expect(dirs(directBlocks(`<p>hello</p><div>${IMAGE}</div>`, "ltr"))).toEqual(["p:ltr", "div:ltr"])
-    // Nested: a block inside an English block keeps the English block's direction when it has no letter.
     expect(dirs(directBlocks(`<div>hello<div>${IMAGE}</div></div>`, "rtl"))).toEqual(["div:ltr", "div:ltr"])
   })
 
@@ -59,7 +55,6 @@ describe("directBlocks", () => {
       "p:rtl",
       "span:ltr",
     ])
-    // A right-to-left mark is strong.
     expect(dirs(directBlocks(`<p>${RLM}2026-11-13</p>`, "ltr"))).toEqual(["p:rtl"])
   })
 

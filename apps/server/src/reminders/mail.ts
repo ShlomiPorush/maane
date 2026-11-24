@@ -1,10 +1,3 @@
-// A reminder's email (plan 4.3), built by the worker at the reminder's time with 3.2's builder (replies/mail.ts): the
-// organization's template as the message, from the ticket's From address (the one the composer offers first) with the
-// organization's name alone as the display name, to the ticket's customers (the composer's recipients), with the
-// reference code, the ticket's subject with its number, its place in the thread, and `Auto-Submitted:
-// auto-generated` (requirements 2.3: only automatic reminders carry it). It quotes no history and attaches nothing,
-// so it needs no image and no sharp.
-
 import { type ActionReason, type Locale, type MailAddress, MESSAGES } from "@maane/shared"
 import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
@@ -16,13 +9,8 @@ import type { ReadyMessage } from "../replies/write.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
-/** The header that marks Maane's automatic mail (RFC 3834); a reply an agent writes never has it. */
 export const AUTO_SUBMITTED = { "Auto-Submitted": "auto-generated" } as const
 
-/**
- * The reminder of a ticket, ready to write, dated `at`; or why there is none now: the organization has no template,
- * no From address of the ticket belongs to it, or the ticket has no customer to write to.
- */
 export async function reminderMessage(
   tx: Pick<Tx, "select">,
   ticketId: string,
@@ -45,7 +33,6 @@ export async function reminderMessage(
   if (!row || row.template.trim() === "") return "no_template"
   const from = fromAddresses(await supportRules(tx), row.organizationId, row.supportAddress).defaultFrom
   if (!from) return "from_not_allowed"
-  // As the composer starts a reply: the first participant in To, the others in Cc.
   const participants = await tx
     .select({ address: ticketParticipant.address, name: ticketParticipant.name })
     .from(ticketParticipant)
@@ -53,7 +40,6 @@ export async function reminderMessage(
     .orderBy(asc(ticketParticipant.createdAt), asc(ticketParticipant.address))
   const [first, ...others] = participants as MailAddress[]
   if (!first) return "no_recipients"
-  // Its place in the thread: after the ticket's latest message with a Message-ID, as a reply's.
   const [parent] = await tx
     .select({ id: message.messageIdHeader, references: message.references })
     .from(message)

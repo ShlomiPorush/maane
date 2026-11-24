@@ -1,10 +1,3 @@
-// Where a click's address is (plan 3.4, requirements 3.4): read from the owner's local MaxMind GeoLite2 City and ASN
-// files with the `maxmind` library, never from an outside service. The directory is mounted read-only at /geoip and
-// the owner's own updater keeps the files current. Each file is optional and fails alone: without it, its part of the
-// location stays empty and the click is still recorded. A file is opened on first use and opened again when its
-// modification time changes (checked at most once a minute); a file that cannot be read keeps the last good copy, and
-// a missing one is looked for again on the next check.
-
 import { stat } from "node:fs/promises"
 import { join } from "node:path"
 import { CLICK_BOUNDS } from "@maane/shared"
@@ -15,7 +8,6 @@ import { bounded } from "./bounds.ts"
 export const CITY_FILE = "GeoLite2-City.mmdb"
 export const ASN_FILE = "GeoLite2-ASN.mmdb"
 
-/** How often a file is looked at again for a change or for its first appearance. */
 const CHECK_MS = 60_000
 
 export interface Location {
@@ -63,7 +55,6 @@ class GeoFile<T extends Response> {
     try {
       this.#state = { reader: await open<T>(this.path), mtimeMs: found.mtimeMs, checkedAt }
     } catch (error) {
-      // A file being replaced or damaged: the last good copy stays (or none), and the next check tries again.
       log.warn("a GeoLite2 file could not be read", { file: this.path, ...errorFacts(error) })
       this.#state = { ...this.#state, checkedAt }
     }
@@ -74,13 +65,11 @@ export class Geo {
   readonly #city: GeoFile<CityResponse> | null
   readonly #asn: GeoFile<AsnResponse> | null
 
-  /** `dir` null: no directory is configured, and every location stays empty. */
   constructor(dir: string | null, now: () => number = Date.now) {
     this.#city = dir ? new GeoFile(join(dir, CITY_FILE), now) : null
     this.#asn = dir ? new GeoFile(join(dir, ASN_FILE), now) : null
   }
 
-  /** The location of an address, each part bounded; a part whose file is missing or that fails stays empty. */
   async locate(ip: string | null): Promise<Location> {
     if (!ip || !validate(ip)) return NO_LOCATION
     const [city, asn] = await Promise.all([lookup(this.#city, ip), lookup(this.#asn, ip)])

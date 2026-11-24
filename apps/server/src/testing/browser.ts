@@ -2,13 +2,8 @@ import { randomBytes } from "node:crypto"
 import { userEmail } from "@maane/shared"
 import { secretOf, totp } from "./totp.ts"
 
-// A browser for HTTP integration tests: a cookie jar, the Origin and X-Maane-Request headers of the Maane page, and
-// the flows (setup, enrollment, sign-in) on Better Auth's routes against an app's fetch. Better Auth keys its rate
-// limits on the client address: give each browser its own (the `ip` option).
-
 export const TEST_ORIGIN = "http://127.0.0.1:8090"
 
-/** A password for one test run. */
 export const testPassword = () => randomBytes(18).toString("base64url")
 
 type Fetch = (request: Request) => Response | Promise<Response>
@@ -57,7 +52,6 @@ export class TestBrowser {
     return { status: response.status, json }
   }
 
-  /** A GET with the cookies, answered as the Response itself: for headers and bodies that are not JSON. */
   get(path: string): Promise<Response> {
     const headers: Record<string, string> = { "x-forwarded-for": this.ip }
     if (this.cookies.size > 0) headers.cookie = [...this.cookies].map(([n, v]) => `${n}=${v}`).join("; ")
@@ -83,7 +77,6 @@ export class TestBrowser {
     return this.call("POST", "/api/auth/two-factor/verify-totp", { code })
   }
 
-  /** Enrollment of the signed-in user: returns the TOTP secret. */
   async enroll(password: string): Promise<string> {
     const { secret } = await this.enable(password)
     const verified = await this.verify(totp(secret))
@@ -95,7 +88,6 @@ export class TestBrowser {
     return this.call("POST", "/api/auth/sign-in/username", { username, password })
   }
 
-  /** A full sign-in of an enrolled user: password, then the code. */
   async signIn(username: string, password: string, secret: string): Promise<void> {
     const first = await this.passwordSignIn(username, password)
     if (first.status !== 200 || !first.json?.twoFactorRedirect) {
@@ -107,7 +99,6 @@ export class TestBrowser {
 }
 
 let address = 0
-/** A distinct documentation-range client address for each browser, so rate limits do not collide. */
 export const nextIp = () => {
   address++
   return `198.51.100.${(address % 250) + 1}`

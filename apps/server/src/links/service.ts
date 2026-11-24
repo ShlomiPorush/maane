@@ -1,11 +1,3 @@
-// Tracked links and download links (plan 3.4, requirements 3.4 and 4.3). A reply's email carries only random codes:
-// `https://<link domain>/l/<code>` for a link the agent wrote, `https://<link domain>/f/<code>` for a file of an
-// earlier message in its history. The codes and their targets are written with the reply, in its transaction; a code
-// resolves only to what was stored, so nobody can use Maane to redirect elsewhere. A download is served only while its
-// part is still a stored file (clean, or let through by the owner's policy: the rule of the ticket view's download) of
-// an incoming message or a reply, never of an internal note. Each click and download is recorded with its address, the
-// address's location from the local GeoLite2 files, and its parsed user agent, every string bounded.
-
 import { randomBytes } from "node:crypto"
 import {
   CLICKS_SHOWN,
@@ -23,23 +15,16 @@ import { parseAgent } from "./agent.ts"
 import type { Geo } from "./geo.ts"
 import { scannerReasons } from "./scanner.ts"
 
-/** A code: 16 random bytes as base64url, 22 characters. */
 export const CODE = /^[A-Za-z0-9_-]{22}$/
 
 export const newCode = () => randomBytes(16).toString("base64url")
 
-/** Where tracked links and download links point: https://<link domain>, or the public URL's own origin. */
 export function linkBase(domain: string, publicUrl: URL): string {
   return domain ? `https://${domain}` : publicUrl.origin
 }
 
-/** A link row a reply writes with itself. */
 export type NewLink = { code: string; kind: "url"; url: string } | { code: string; kind: "file"; partId: string }
 
-/**
- * The links of one reply while its email is built: each distinct link the agent wrote gets one code (only while
- * tracking is on, and only an http or https URL within TRACKED_URL_MAX), and each history file one code.
- */
 export class ReplyLinks {
   readonly rows: NewLink[] = []
   readonly #urls = new Map<string, string>()
@@ -49,7 +34,6 @@ export class ReplyLinks {
     private readonly tracking: boolean,
   ) {}
 
-  /** The address the email gives a link the agent wrote: its tracked link, or the link unchanged. */
   readonly url = (href: string): string => {
     if (!this.tracking || href.length > TRACKED_URL_MAX || !URL.canParse(href)) return href
     const parsed = new URL(href)
@@ -63,7 +47,6 @@ export class ReplyLinks {
     return tracked
   }
 
-  /** The download link of a history file's part. */
   file(partId: string): string {
     const code = newCode()
     this.rows.push({ code, kind: "file", partId })
@@ -87,7 +70,6 @@ export class Links {
     private readonly geo: Geo,
   ) {}
 
-  /** The target of a code, or null: an unknown code, or a file link whose file may no longer be served. */
   async resolve(kind: "url" | "file", code: string): Promise<Resolved | null> {
     if (!CODE.test(code)) return null
     if (kind === "url") {
@@ -108,7 +90,6 @@ export class Links {
         and(
           eq(trackedLink.code, code),
           eq(trackedLink.kind, "file"),
-          // Never a file of an internal note; only a stored file, as the ticket view's download.
           inArray(message.direction, ["in", "out"]),
           inArray(messagePart.status, [...STORED_STATUSES]),
           isNotNull(messagePart.storedSha256),
@@ -117,7 +98,6 @@ export class Links {
     return row ? { id: row.id, kind: "file", fileName: row.fileName, sha256: row.sha256 } : null
   }
 
-  /** Records one click or download, unless tracking is off. A failure never stops the redirect or the download. */
   async record(linkId: string, input: ClickInput): Promise<void> {
     if ((await this.settings.get("links.tracking")) === "off") return
     const [location, agent] = await Promise.all([this.geo.locate(input.ip), parseAgent(input.userAgent)])
@@ -128,12 +108,6 @@ export class Links {
 const isDevice = (value: string | null): value is DeviceType =>
   value !== null && (DEVICE_TYPES as readonly string[]).includes(value)
 
-/**
- * The clicked links and downloaded files of replies, for the ticket view: per reply, each link with at least one click,
- * how many clicks it has, and its newest CLICKS_SHOWN clicks, newest first, each with its scanner reasons against
- * `since` (the delivery or acceptance time of the reply). Every click stays recorded; only the read is bounded, so a
- * scanner that keeps clicking cannot make the view grow without end.
- */
 export async function linkViews(
   db: Pick<Db, "select">,
   replies: readonly { id: string; since: Date | null }[],
@@ -152,7 +126,6 @@ export async function linkViews(
       ),
     )
     .groupBy(trackedLink.id, messagePart.fileName)
-    // Links first, then files; each in the order the reply wrote them, then by target (a reply writes all at once).
     .orderBy(
       desc(trackedLink.kind),
       asc(trackedLink.createdAt),

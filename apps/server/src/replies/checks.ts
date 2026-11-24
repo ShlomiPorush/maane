@@ -1,8 +1,3 @@
-// The send point's checks of a reply (plan 3.1), shared by the sender's claim and a timed action at its time (plan 4.2):
-// the From address still belongs to the ticket's organization, and the author may still answer the ticket (not banned,
-// and the organization still in their scope, read again now). Kept apart from the reply service so
-// the worker never loads sharp.
-
 import type { SendProblem } from "@maane/shared"
 import { eq } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
@@ -12,10 +7,6 @@ import { belongsTo, supportRules } from "./rules.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
-/**
- * Why the send point refuses this reply now, or null: a From address or an author no longer allowed. An
- * automatic reminder (plan 4.3, `automated`) has no author: Maane sends it as the organization.
- */
 export async function sendProblem(
   tx: Pick<Tx, "select">,
   row: { from: string; organizationId: string; authorUserId: string | null; automated?: boolean },

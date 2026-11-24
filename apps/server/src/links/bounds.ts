@@ -1,9 +1,5 @@
 import { wellFormedText } from "../text.ts"
 
-/**
- * A string a click records: well formed, without control characters, trimmed, and at most `max` characters (cut
- * between code points); null when nothing is left.
- */
 export function bounded(text: string | null | undefined, max: number): string | null {
   if (text === null || text === undefined) return null
   const clean = [...wellFormedText(text).value]

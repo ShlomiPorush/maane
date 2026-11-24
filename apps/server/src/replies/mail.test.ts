@@ -7,8 +7,6 @@ import { COLUMN_WIDTH, IMAGE_MAX_WIDTH, imagesToRead, prepareImage } from "./ima
 import { type Entry, type EntryImage, israelTime, LRI, layout, PDI } from "./layout.ts"
 import { BUDGET, buildReply, MessageTooLarge, type ReplyMail, ReplyTooLong, storedBody } from "./mail.ts"
 
-// Structural tests of the customer's email (plan 3.2). Hebrew from code points: the repository holds no literal
-// Hebrew outside he.json.
 const cp = (...points: number[]) => String.fromCodePoint(...points)
 const SHALOM = cp(0x5e9, 0x5dc, 0x5d5, 0x5dd)
 const TODA = cp(0x5ea, 0x5d5, 0x5d3, 0x5d4)
@@ -52,10 +50,8 @@ function mail(values: Partial<ReplyMail> = {}, locale: "he" | "en" = "he"): Repl
   }
 }
 
-// skipImageLinks: the HTML as sent, its cid: links not turned into data: URLs.
 const parse = async (mime: Buffer) => simpleParser(mime, { skipImageLinks: true })
 
-/** The tags of the HTML with the given name, as written. */
 const tags = (html: string, name: string) => html.match(new RegExp(`<${name}\\b[^>]*>`, "g")) ?? []
 
 describe("the customer's email", () => {
@@ -66,7 +62,6 @@ describe("the customer's email", () => {
     const reference = `${words.reference}: <span dir="ltr">${CODE}</span>`
     expect(html.indexOf(words.header)).toBeGreaterThan(-1)
     expect(html.indexOf(words.header)).toBeLessThan(html.indexOf(reference))
-    // Before any conversation block.
     expect(html.indexOf(reference)).toBeLessThan(html.indexOf('class="email-avatar"'))
     const text = (parsed.text ?? "").split("\n")
     expect(text[0]).toBe(words.header)
@@ -87,7 +82,6 @@ describe("the customer's email", () => {
     expect(tables.length).toBeGreaterThanOrEqual(5)
     for (const table of tables) expect(table).toMatch(/ dir="(rtl|ltr)"/)
     expect(html).not.toMatch(/dir="auto"/i)
-    // The reply's paragraphs by their first strong character, the history's too.
     expect(html).toContain(`<p dir="rtl">${SHALOM}, ${TODA}</p>`)
     expect(html).toContain('<p dir="ltr">An English paragraph.</p>')
     expect(html).toContain('<div dir="ltr">An English line</div>')
@@ -113,7 +107,6 @@ describe("the customer's email", () => {
     expect(html).toMatch(/<html dir="rtl"/)
     expect(html).toContain('<p dir="ltr">The order did not arrive.</p>')
     expect(html).toContain(`<span dir="rtl">${DANA}</span>`)
-    // The initials of a Hebrew name, in a table cell, not an image.
     expect(html).toMatch(
       new RegExp(`<td class="email-avatar" dir="rtl"[^>]*bgcolor="#EEEEEE"[^>]*>${cp(0x5d3)}${cp(0x5db)}</td>`),
     )
@@ -135,7 +128,6 @@ describe("the customer's email", () => {
     expect(quote).toBeGreaterThan(html.indexOf(MESSAGES.he.mail.reference))
     expect(html.indexOf("Second.")).toBeGreaterThan(quote)
     expect(html.indexOf("Second.")).toBeLessThan(html.indexOf("First."))
-    // The attribution names the newest message of the history, in Israel time.
     const attribution = MESSAGES.he.mail.attribution
       .replace("{date}", '<span dir="ltr">12/11/2026 12:00</span>')
       .replace("{name}", '<span dir="ltr">Agent Smith (Example Support)</span>')
@@ -185,7 +177,6 @@ describe("the customer's email", () => {
     for (const colour of colours) expect(colour.slice(0, 2).repeat(3)).toBe(colour)
     expect(html).toContain("@media (prefers-color-scheme:dark)")
     expect(html).toContain("[data-ogsb] .email-bg{background-color:#FFFFFF !important}")
-    // A message's own colours give way in dark mode, and its tables stay inside the column.
     expect(html).toContain(
       ".email-content *{color:inherit !important;background-color:transparent !important;border-color:#333333 !important}",
     )
@@ -228,7 +219,6 @@ describe("images", () => {
       `<img alt="shot" src="cid:img-1@example.com" width="${width}" height="${height}" ` +
         `style="width:${width}px;max-width:100%;height:auto;border:0" />`,
     )
-    // A remote image never goes into the email; an image alone keeps the Hebrew message's direction.
     expect(html).not.toContain("img.example.com")
     expect(html).toMatch(/<p dir="rtl"><img alt="shot"/)
     const embedded = parsed.attachments.find((file) => file.cid === "img-1@example.com")
@@ -247,7 +237,6 @@ describe("the size budget", () => {
     await expect(buildReply(mail({ html: long, history }), { ...BUDGET, html: 2_000 })).rejects.toBeInstanceOf(
       ReplyTooLong,
     )
-    // The same reply within the budget is built, its history left out first if it must be.
     expect(await buildReply(mail({ html: long, history }), { ...BUDGET, html: 20_000 })).toBeInstanceOf(Buffer)
   })
 
@@ -263,10 +252,8 @@ describe("the size budget", () => {
     const token = "Y".repeat(200)
     const history = [entry({ html: `<p>${token} and then ${"more words of the message ".repeat(20)}</p>`, text: null })]
     const conversation = { dir: "ltr" as const, lang: "en", words: MESSAGES.en.mail, referenceCode: CODE }
-    // Level 1: the oldest (and only) history message in short form.
     const { html } = layout({ ...conversation, current: entry(), history }, { level: 1, imageNames: false })
     expect(html).toContain(`<!--[if mso]>${"Y".repeat(50)}<br>`)
-    // What every other client shows: the short text once, unchanged, in its own block.
     const visible = withoutComments(html)
     expect(visible, html).toMatch(/<div dir="ltr">Y{200} and then [^<]*\.\.\.<\/div>/)
     expect(visible.split(token).length).toBe(2)
@@ -284,7 +271,6 @@ describe("the size budget", () => {
       ],
       10 * mb,
     )
-    // Over one image's limit, then over the budget: shown by name, never read; a smaller one still fits.
     expect(plan).toEqual([true, true, false, false, true])
   })
 
@@ -301,7 +287,6 @@ describe("the size budget", () => {
     const html = parsed.html || ""
     expect(Buffer.byteLength(html, "utf8")).toBeLessThanOrEqual(60_000)
     expect(html.indexOf(CODE)).toBeLessThan(2_000)
-    // The newest in full, the oldest in short form.
     expect(html).toContain(`Message 29. ${"Some words of an earlier message, written at length. ".repeat(10)}`)
     expect(html).not.toContain(`Message 0. ${"Some words of an earlier message, written at length. ".repeat(10)}`)
     expect(html).toMatch(/Message 0\. Some words[^<]*\.\.\.<\/div>/)
@@ -349,7 +334,6 @@ describe("links in the customer's email (plan 3.4)", () => {
     const history = [entry({ html: '<p>Earlier: <a href="https://example.com/history">a link</a></p>' })]
     const parsed = await parse(await buildReply(mail({ html, text, link, history }, "en")))
     const out = parsed.html || ""
-    // The agent's own links, a blockquote it wrote included; never mailto or tel; never the quoted history.
     expect(seen.sort()).toEqual(
       ["https://www.example.com/guide?a=1&b=2", "http://example.com/x", "https://example.com/quoted"].sort(),
     )
@@ -361,7 +345,6 @@ describe("links in the customer's email (plan 3.4)", () => {
     expect(out).toContain(
       '<a href="https://example.com/history" style="text-decoration:underline !important">a link</a>',
     )
-    // The text part keeps the links as written.
     expect(parsed.text).toContain(text)
     expect(parsed.text).not.toContain("links.example.com")
   })

@@ -10,7 +10,6 @@ describe("Word's copy of a long run (html-email, long values without spaces)", (
     const html = wordCopies(`<p>Track: ${token.replaceAll("&", "&amp;")} today</p>`)
     const word = /<!--\[if mso\]>([\s\S]*?)<!\[endif\]-->/.exec(html)?.[1] ?? ""
     expect(word.split("<br>").length).toBe(Math.ceil([...token].length / LONG_RUN))
-    // Cut before escaping: the pieces joined again are the token, and no entity is split.
     expect(word.replaceAll("<br>", "").replace("Track: ", "").replace(" today", "")).toBe(
       token.replaceAll("&", "&amp;"),
     )

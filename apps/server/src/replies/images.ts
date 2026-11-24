@@ -1,18 +1,10 @@
-// The images a customer's email embeds (requirements 4.2 and 4.3, plan 3.2), read and downscaled with sharp through
-// its documented API: metadata() for the size as shown (autoOrient, so a photo turned by its EXIF orientation has the
-// width and height it is seen at), and autoOrient, resize, and the image's own output format for an image wider than
-// the email needs. The email shows an image at most the column wide; the bytes keep twice that, for sharp screens.
-// An animated image (more than one page) is sent as it is, only sized. An image sharp cannot read is not embedded.
-
 import sharp from "sharp"
 import { COLUMN_WIDTH, type ImageType, type PreparedImage } from "./sizes.ts"
 
 export { COLUMN_WIDTH, type ImageType, type PreparedImage, shownSize } from "./sizes.ts"
 
-/** The widest an embedded image is kept, in pixels: twice the column. */
 export const IMAGE_MAX_WIDTH = COLUMN_WIDTH * 2
 
-/** The most pixels sharp reads from one image (a guard against decompression bombs): 50 megapixels. */
 const INPUT_PIXELS_MAX = 50_000_000
 
 const FORMATS = {
@@ -24,12 +16,10 @@ const FORMATS = {
 
 export const EMBEDDABLE_TYPES = Object.keys(FORMATS) as ImageType[]
 
-/** An image ready to embed: downscaled when wider than IMAGE_MAX_WIDTH; null when sharp cannot read it. */
 export async function prepareImage(bytes: Buffer, contentType: string): Promise<PreparedImage | null> {
   if (!(contentType in FORMATS)) return null
   const type = contentType as ImageType
   try {
-    // failOn "warning": the input is untrusted, as sharp recommends for it.
     const options = { limitInputPixels: INPUT_PIXELS_MAX, failOn: "warning" } as const
     const meta = await sharp(bytes, options).metadata()
     const { width, height } = meta.autoOrient
@@ -46,15 +36,9 @@ export async function prepareImage(bytes: Buffer, contentType: string): Promise<
   }
 }
 
-/** The most one history image and one history message may embed (as the ticket view's frame shows them). */
 export const IMAGE_MAX_BYTES = 5 * 1024 * 1024
 export const MESSAGE_IMAGES_MAX_BYTES = 20 * 1024 * 1024
 
-/**
- * Which history images are read and embedded, decided from their stored sizes before any byte is read: newest first,
- * each within IMAGE_MAX_BYTES, its message within MESSAGE_IMAGES_MAX_BYTES, and all of them within `budget`. The rest
- * are shown by their names. `candidates` are in the history's order (newest message first); true means read it.
- */
 export function imagesToRead(candidates: readonly { message: number; size: number }[], budget: number): boolean[] {
   let total = 0
   const perMessage = new Map<number, number>()

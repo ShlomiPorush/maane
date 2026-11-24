@@ -1,7 +1,3 @@
-// The notification routes of /api/v1 (plan 4.5): a subscription is the signed-in user's own, set by the server; no
-// user sees, changes, or deletes another user's; only push services' endpoints are kept; the CSRF header is needed;
-// and no answer holds an endpoint or a key.
-
 import { createECDH, randomBytes } from "node:crypto"
 import { userEmail } from "@maane/shared"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -49,7 +45,6 @@ async function agent(admin: TestBrowser, name: string) {
   return b
 }
 
-/** A browser's subscription to Firefox's push service, new for each call. */
 function subscription() {
   const curve = createECDH("prime256v1")
   curve.generateKeys()
@@ -76,7 +71,6 @@ describe("notification routes", () => {
     expect(row).toMatchObject({ userId: me.id, endpoint: device.endpoint, ...device.keys, locale: "en" })
     expect(await state(admin, device.endpoint)).toEqual({ status: 200, json: { publicKey, on: true } })
 
-    // Again with new keys and another language: the same row, updated.
     const renewed = { ...subscription(), endpoint: device.endpoint }
     await admin.call("PUT", "/api/v1/notifications/subscription", { ...renewed, locale: "he" })
     expect(await rows()).toEqual([expect.objectContaining({ id: row?.id, ...renewed.keys, locale: "he" })])

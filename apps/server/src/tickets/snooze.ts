@@ -1,11 +1,3 @@
-// Snooze (plan 4.2): the agent picks a time and the ticket leaves the default list until then (the list compares the
-// time itself, so a late job never keeps a ticket hidden). The `snooze-end` job ends the ticket's snooze only once its
-// time has come by the database's clock, so the job of a replaced snooze, or of one that ended already, does nothing
-// before the current snooze's time. When a snooze ends, by its time or by the agent's hand, the ticket returns by its
-// status: a pending ticket is set to open (through the one status writer, audited), and a ticket solved or closed
-// meanwhile stays as it is. A customer reply ends a snooze at once, in the transaction that attaches it
-// (customer-reply.ts). Every change runs on the ticket row locked FOR UPDATE. Kept free of sharp: the worker loads it.
-
 import { and, eq, isNotNull, sql } from "drizzle-orm"
 import { SYSTEM, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
@@ -19,7 +11,6 @@ import type { WorkflowUser } from "./workflow.ts"
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
-/** The ticket's snooze, read from the row the caller locked, and whether its time has come by the database's clock. */
 async function snoozeOf(tx: Pick<Tx, "select">, ticketId: string) {
   const [row] = await tx
     .select({ until: ticket.snoozedUntil, due: sql<boolean>`coalesce(${ticket.snoozedUntil} <= now(), false)` })
@@ -28,10 +19,6 @@ async function snoozeOf(tx: Pick<Tx, "select">, ticketId: string) {
   return row ?? null
 }
 
-/**
- * Ends the snooze of a locked ticket: no snooze any more, and a pending ticket set to open by the one status writer.
- * Audited as `ticket.unsnooze` with how it ended.
- */
 async function endSnooze(tx: Tx, locked: LockedTicket, by: StatusActor, via: "agent" | "time"): Promise<void> {
   await tx.update(ticket).set({ snoozedUntil: null }).where(eq(ticket.id, locked.id))
   if (locked.status === "pending") await changeStatus(tx, locked, "open", by, "snooze")
@@ -44,10 +31,6 @@ async function endSnooze(tx: Tx, locked: LockedTicket, by: StatusActor, via: "ag
   })
 }
 
-/**
- * A customer reply ends the ticket's snooze at once (the reply itself already opened the ticket), in the transaction
- * that attaches it, on the ticket the caller locked. Returns whether there was one.
- */
 export async function customerEndsSnooze(
   tx: Pick<Tx, "update" | "insert">,
   locked: Pick<LockedTicket, "id" | "number">,
@@ -67,10 +50,6 @@ export async function customerEndsSnooze(
   return true
 }
 
-/**
- * The `snooze-end` job: ends the ticket's snooze once its time has come, whichever snooze queued the job. Returns
- * whether it ended one.
- */
 export async function snoozeEnded(db: Db, ticketId: string): Promise<boolean> {
   return db.transaction(async (tx) => {
     const locked = await lockTicket(tx, ticketId)
@@ -92,12 +71,10 @@ export class Snoozes {
     const [row] = await tx.select({ id: ticket.id }).from(ticket).where(eq(ticket.number, number))
     const locked = row ? await lockTicket(tx, row.id) : null
     if (!locked || !inScope(scope, locked.organizationId)) throw new Refusal("not_found", 404)
-    // An imported ticket is read-only until the import is finished (plan 5.1).
     await refuseImported(tx, locked.id)
     return locked
   }
 
-  /** Snoozes the ticket until this instant (in the future), replacing any snooze it has. */
   async snooze(scope: OrganizationScope, user: WorkflowUser, number: number, until: Date): Promise<void> {
     if (until.getTime() <= Date.now()) throw new Refusal("time_past", 400)
     await transactionWithJobs(this.db, async (tx, jobs) => {
@@ -114,7 +91,6 @@ export class Snoozes {
     })
   }
 
-  /** Ends the ticket's snooze by hand, as its time would: a pending ticket becomes open. Nothing when not snoozed. */
   async wake(scope: OrganizationScope, user: WorkflowUser, number: number): Promise<void> {
     await this.db.transaction(async (tx) => {
       const locked = await this.#locked(tx, scope, number)

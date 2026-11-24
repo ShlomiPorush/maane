@@ -1,8 +1,3 @@
-// Replies, internal notes, scheduled replies (plan 4.2), and the composer's uploads (plan 3.1), mounted under /api/v1
-// behind its session, two-factor, CSRF, and Origin checks. Every route reads the user's scope (visibleOrganizations) on
-// each request; a ticket or a message outside it answers 404 as if it did not exist. An upload belongs to its uploader
-// alone.
-
 import { type Context, Hono } from "hono"
 import { bodyLimit } from "hono/body-limit"
 import { z } from "zod"
@@ -15,9 +10,7 @@ import { type ApiEnv, clientIp } from "./request.ts"
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const NUMBER = /^[1-9][0-9]{0,15}$/
-/** Room for the multipart framing around a file of files.maxBytes. */
 const MULTIPART_OVERHEAD = 64 * 1024
-/** Mark as sent names the one recipient it marks. */
 const MarkSentBody = z.object({ address: z.string().min(1).max(254) })
 
 export function replyRoutes(db: Db, settings: Settings, replies: Replies): Hono<ApiEnv> {
@@ -45,7 +38,6 @@ export function replyRoutes(db: Db, settings: Settings, replies: Replies): Hono<
     return c.json(written, 201)
   })
 
-  // A scheduled reply (plan 4.2): a change (a new version) and a cancellation, while it is still scheduled.
   routes.put("/scheduled/:id", async (c) => {
     const parsed = ScheduledBody.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) throw new Refusal("request_invalid", 400)
@@ -70,8 +62,6 @@ export function replyRoutes(db: Db, settings: Settings, replies: Replies): Hono<
     return c.json({ ok: true })
   })
 
-  // One file per request, as multipart form data with the field `file`, at most files.maxBytes (Hono's body limit,
-  // read for each request, refuses a larger body before it is read whole).
   routes.post("/uploads", async (c, next) => {
     const limit = await settings.get("files.maxBytes")
     return bodyLimit({

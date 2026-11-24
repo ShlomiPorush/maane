@@ -1,6 +1,3 @@
-// Categories (plan 4.1): one shared list, managed by admins on their own page. Every write runs in one transaction with
-// its audit row. Deleting a category removes it from every ticket (ticket_category cascades with it).
-
 import { CATEGORY_NAME_MAX, type CategoryRef, type CategoryView } from "@maane/shared"
 import { asc, count, eq, sql } from "drizzle-orm"
 import { writeAudit } from "../audit.ts"
@@ -10,7 +7,6 @@ import { refuseImportedCategory } from "../imports/window.ts"
 import { databaseError, Refusal } from "../organizations/refusal.ts"
 import { type Acting, hidden } from "../organizations/service.ts"
 
-/** A name as stored (trimmed), or a refusal: 1 to 80 characters, no control or direction characters. */
 export function parseCategoryName(text: unknown): string {
   const name = typeof text === "string" ? text.trim() : ""
   const length = [...name].length
@@ -25,7 +21,6 @@ const nameTaken = (error: unknown) =>
 export class Categories {
   constructor(private readonly db: Db) {}
 
-  /** Every category by name, for a picker or a filter. */
   async refs(db: Pick<Db, "select"> = this.db): Promise<CategoryRef[]> {
     return db
       .select({ id: category.id, name: category.name })
@@ -33,7 +28,6 @@ export class Categories {
       .orderBy(sql`lower(${category.name})`, asc(category.id))
   }
 
-  /** The admin list: every category with how many tickets carry it. */
   async list(): Promise<CategoryView[]> {
     const used = this.db
       .select({ categoryId: ticketCategory.categoryId, n: count().as("n") })
@@ -98,15 +92,10 @@ export class Categories {
     }
   }
 
-  /**
-   * Deletes a category; every ticket that carried it loses it in the same transaction. Refused while an imported
-   * ticket carries it and the import is not finished.
-   */
   async delete(id: string, acting: Acting): Promise<void> {
     await this.db.transaction(async (tx) => {
       const [current] = await tx.select({ name: category.name }).from(category).where(eq(category.id, id)).for("update")
       if (!current) throw new Refusal("category_not_found", 404)
-      // It would change an imported ticket, which is read-only for agents until the import is finished (plan 5.1).
       await refuseImportedCategory(tx, id)
       await tx.delete(category).where(eq(category.id, id))
       await writeAudit(tx, acting.actor, {

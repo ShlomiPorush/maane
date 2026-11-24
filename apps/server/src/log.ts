@@ -1,7 +1,3 @@
-// One JSON line per event on stdout (errors on stderr). Never a secret, token, cookie, password, or message
-// content: callers pass facts, and errorFacts keeps only the class, the code, and the PostgreSQL SQLSTATE of an
-// error, never its message, which can hold a failed query with its parameters.
-
 type Fields = Record<string, string | number | boolean | null | undefined>
 
 function write(level: "info" | "warn" | "error", message: string, fields: Fields = {}): void {
@@ -16,7 +12,6 @@ export const log = {
   error: (message: string, fields?: Fields) => write("error", message, fields),
 }
 
-/** What may be logged about an error: its class, its code, and a PostgreSQL SQLSTATE. Never its message. */
 export function errorFacts(error: unknown): Fields {
   if (!(error instanceof Error)) return { errorClass: typeof error }
   const e = error as Error & { code?: unknown; status?: unknown }
@@ -27,15 +22,11 @@ export function errorFacts(error: unknown): Fields {
   }
 }
 
-/** A request's path as a log line may name it: nothing under /hooks/, whose path holds a secret (plan 3.3). */
 export function loggedPath(pathname: string): string {
   let decoded = pathname
   try {
-    // The router reads a percent-encoded path decoded: "/%68ooks/..." reaches the webhook too.
     decoded = decodeURIComponent(pathname)
-  } catch {
-    // Not decodable: judged as it is.
-  }
+  } catch {}
   const hidden = (path: string) => /^\/+hooks(?:\/|$)/i.test(path)
   return hidden(pathname) || hidden(decoded) ? "/hooks/[hidden]" : pathname
 }

@@ -1,7 +1,3 @@
-/**
- * What a client other than Word shows: the HTML without its comments (Word's copy lives in one), read left to right,
- * a comment ending at the first `-->` after its `<!--`. A loop, not a regular expression, so no input can make it slow.
- */
 export function withoutComments(html: string): string {
   let out = ""
   let at = 0

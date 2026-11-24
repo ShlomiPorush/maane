@@ -7,9 +7,6 @@ import { createTestApp } from "../testing/app.ts"
 import { nextIp, TestBrowser, testPassword } from "../testing/browser.ts"
 import { createTestDatabase } from "../testing/db.ts"
 
-// The scanner on the Settings page: the latest self-test, and a connection test the server only queues. The worker
-// runs it (apps/worker); here a pg-boss client plays the worker through pg-boss's documented fetch and complete.
-
 let database: Awaited<ReturnType<typeof createTestDatabase>>
 let queue: JobQueue
 let app: ReturnType<typeof createTestApp>

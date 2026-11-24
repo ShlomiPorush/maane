@@ -15,19 +15,11 @@ import { errorFacts, log } from "../log.ts"
 import { clearMemberships } from "../organizations/service.ts"
 import type { SetupWindow } from "./setup-window.ts"
 
-// Better Auth as it documents itself: its routes, its plugins (username, twoFactor, admin), its options, and its
-// documented hooks. Maane does not wrap its handler. The hooks below only refuse (a closed route, a session without
-// two-factor, setup outside its window, a role change that would leave no admin) and write audit rows; Better Auth
-// makes every decision about passwords, sessions, and codes. "Foundation 1b design" in docs/project-foundation.md
-// lists what this leaves open.
-
-/** How long a two-factor challenge (after the password, before the code) lives: 3 minutes. */
 export const TWO_FACTOR_CHALLENGE_S = 180
 
 const DAY_S = 86_400
 const HOUR_S = 3_600
 
-/** Routes a browser may call without a full session. The two verify routes also answer the sign-in challenge. */
 export const PUBLIC_PATHS = [
   "/ok",
   "/get-session",
@@ -38,10 +30,8 @@ export const PUBLIC_PATHS = [
   "/two-factor/verify-backup-code",
 ] as const
 
-/** Routes for a signed-in user whose two-factor is still off: setting it up. */
 export const ENROLLMENT_PATHS = ["/two-factor/enable"] as const
 
-/** Routes for a signed-in user whose two-factor is on. */
 export const PROTECTED_PATHS = [
   "/change-password",
   "/list-sessions",
@@ -59,13 +49,10 @@ export const PROTECTED_PATHS = [
   "/admin/set-user-password",
 ] as const
 
-/** Every route a browser may reach. Anything else answers 404 over HTTP, including routes a later version adds. */
 export const ALLOWED_PATHS = [...PUBLIC_PATHS, ...ENROLLMENT_PATHS, ...PROTECTED_PATHS] as const
 
-/** Every route whose body accepts `trustDevice` (a cookie that skips the code). Maane asks at every sign-in. */
 const TRUST_DEVICE_PATHS = new Set(["/two-factor/verify-totp", "/two-factor/verify-backup-code"])
 
-/** Credential routes: 5 attempts per 5 minutes per address and route. */
 const CREDENTIAL_PATHS = [
   "/sign-up/email",
   "/sign-in/username",
@@ -78,7 +65,6 @@ const CREDENTIAL_PATHS = [
   "/admin/set-user-password",
 ]
 
-/** Admin actions whose audit row is written before the action (a failed row refuses it). */
 const ADMIN_AUDIT: Record<string, string> = {
   "/admin/set-role": "user.set_role",
   "/admin/ban-user": "user.ban",
@@ -87,7 +73,6 @@ const ADMIN_AUDIT: Record<string, string> = {
   "/admin/set-user-password": "user.set_password",
 }
 
-/** A user's actions on their own account whose audit row is written before the action. */
 const ACCOUNT_AUDIT: Record<string, string> = {
   "/revoke-session": "session.revoke",
   "/revoke-sessions": "session.revoke_all",
@@ -95,14 +80,10 @@ const ACCOUNT_AUDIT: Record<string, string> = {
   "/two-factor/generate-backup-codes": "account.backup_codes_new",
 }
 
-/** Admin routes whose body names a target user. */
 const TARGET_PATHS = new Set(Object.keys(ADMIN_AUDIT))
 
-/** Admin actions after which every session of the target user ends. */
 const END_SESSIONS_AFTER = new Set(["/admin/set-role", "/admin/set-user-password"])
 
-// The two roles, as the admin plugin documents custom access control: an admin has the plugin admin permissions,
-// an agent none of them.
 const ac = createAccessControl({ ...defaultStatements } as const)
 const roles = { admin: ac.newRole({ ...adminAc.statements }), agent: ac.newRole({ user: [], session: [] }) }
 
@@ -114,32 +95,22 @@ const groupOf = new Map<string, "public" | "enrollment" | "protected">([
 
 export interface AuthOptions {
   db: Db
-  /**
-   * A separate small pool for the audit rows Better Auth's hooks write. Some hooks run while Better Auth holds a
-   * connection of `db` for its transaction; with their own pool, many requests at once cannot use up `db` waiting
-   * for each other.
-   */
   auditDb: Db
-  /** MAANE_AUTH_SECRETS: Better Auth's versioned `secrets`. */
   secrets: VersionedKey[]
   publicUrl: URL
-  /** MAANE_TRUSTED_PROXIES: the proxies whose X-Forwarded-For hop Better Auth trusts. */
   trustedProxies: string[]
   setup: SetupWindow
-  /** Settings: sign out after this many days. */
   sessionDays: number
 }
 
 const refuse = (status: "NOT_FOUND" | "FORBIDDEN" | "BAD_REQUEST" | "UNAUTHORIZED", code: string, message: string) =>
   new APIError(status, { code, message })
 
-/** Whether any user exists, read on Maane's own connection. */
 async function anyUser(db: Db): Promise<boolean> {
   const [row] = await db.select({ id: authUser.id }).from(authUser).limit(1)
   return row !== undefined
 }
 
-/** Whether the user is the admin the setup screen created. */
 async function isSetupAdmin(db: Db, userId: string): Promise<boolean> {
   const [row] = await db.select({ setupAdmin: authUser.setupAdmin }).from(authUser).where(eq(authUser.id, userId))
   return row?.setupAdmin === true
@@ -151,30 +122,24 @@ type HookContext = {
   context?: { session?: { user?: { id?: string; username?: string | null; name?: string } } | null }
 } | null
 
-/** The signed-in user behind a database hook's request, if any. */
 function actorOf(context: HookContext): Actor | null {
   const user = context?.context?.session?.user
   if (!user?.id) return null
   return { userId: user.id, label: String(user.username ?? user.name ?? user.id) }
 }
 
-/** The client address of the request behind a hook, for the audit row: the one rule of http/client.ts. */
 const ipOf = (request: Request | undefined): string | null => clientIp(request)
 
-/** A password within Better Auth's configured limits. */
 function validPassword(value: unknown): boolean {
   return typeof value === "string" && value.length >= PASSWORD_MIN && value.length <= PASSWORD_MAX
 }
 
 export function createAuth(options: AuthOptions) {
   const { db, auditDb, publicUrl, setup } = options
-  /** The user behind each sign-out request, from the before hook to the after hook. */
   const signingOut = new WeakMap<Request, Actor>()
-  /** The admin behind each role change, from the before hook to the after hook that clears memberships. */
   const changingRole = new WeakMap<Request, Actor>()
 
   const beforeRoute = createAuthMiddleware(async (c) => {
-    // Server calls (auth.api.*) are not HTTP requests: the closed list limits browsers only.
     if (!c.request) return
     const path = c.path
     const group = groupOf.get(path)
@@ -186,8 +151,6 @@ export function createAuth(options: AuthOptions) {
     }
     if (path === "/sign-up/email") {
       if (!setup.isOpen() || (await anyUser(db))) throw refuse("FORBIDDEN", "SETUP_CLOSED", "Setup is closed.")
-      // The username plugin treats a missing username as optional; Maane signs in by username only, so the first
-      // admin must have one, or nobody could sign in again once the setup session ends.
       if (typeof body.username !== "string" || !isValidUsername(body.username)) {
         throw refuse("BAD_REQUEST", "INVALID_USERNAME", "Choose a valid username.")
       }
@@ -197,8 +160,6 @@ export function createAuth(options: AuthOptions) {
       return
     }
     if (path === "/sign-out") {
-      // Who signs out, read before Better Auth ends the session, for the row written after it. A failed read never
-      // blocks signing out.
       const leaving = await getAuthoritativeSessionFromCtx(c).catch(() => null)
       if (leaving?.user) {
         signingOut.set(c.request, {
@@ -218,8 +179,6 @@ export function createAuth(options: AuthOptions) {
       return
     }
     if (!enabled) throw refuse("FORBIDDEN", "TOTP_REQUIRED", "Set up two-factor authentication first.")
-    // Better Auth's session read does not refuse a banned user: a ban whose session cleanup failed would otherwise
-    // leave the user signed in.
     if ((session.user as { banned?: boolean | null }).banned)
       throw refuse("FORBIDDEN", "BANNED", "This account is disabled.")
 
@@ -232,7 +191,6 @@ export function createAuth(options: AuthOptions) {
         throw refuse("BAD_REQUEST", "INVALID_ROLE", "The role must be admin or agent.")
       }
     }
-    // The admin plugin checks a password's maximum length on these routes, not its minimum.
     const newPassword = path === "/admin/create-user" ? body.password : body.newPassword
     if ((path === "/admin/create-user" || path === "/admin/set-user-password") && !validPassword(newPassword)) {
       throw refuse(
@@ -247,14 +205,11 @@ export function createAuth(options: AuthOptions) {
       if (typeof name !== "string" || !isValidUsername(name) || body.email !== userEmail(name)) {
         throw refuse("BAD_REQUEST", "INVALID_USERNAME", "Choose a valid username.")
       }
-      // create-user passes `data` straight to the new row: only the username may come through it.
       if (Object.keys(data).some((key) => key !== "username")) {
         throw refuse("BAD_REQUEST", "INVALID_FIELDS", "Only a username may be set this way.")
       }
-      return // audited when the user row is created
+      return
     }
-    // The plugin turns a non-string userId into a string after this hook; only a plain string passes here, so the
-    // checks below always see the user the plugin will act on.
     if (TARGET_PATHS.has(path) && (typeof body.userId !== "string" || body.userId.length === 0)) {
       throw refuse("BAD_REQUEST", "INVALID_USER", "Choose a user.")
     }
@@ -269,9 +224,6 @@ export function createAuth(options: AuthOptions) {
       })
       return
     }
-    // The acting admin never changes their own role, and the plugin refuses banning oneself. The setup admin can be
-    // neither demoted nor banned (owner's decision, 2026-11-11), so Maane always keeps one admin, also when two
-    // admins act against each other at the same moment.
     if (path === "/admin/set-role" && target === actor.userId) {
       throw refuse("FORBIDDEN", "OWN_ROLE", "An admin cannot change their own role.")
     }
@@ -291,15 +243,6 @@ export function createAuth(options: AuthOptions) {
     }
   })
 
-  /**
-   * After a role change or an admin's password reset, every session of that user ends, through the plugin's
-   * documented action. After a role change, in either direction, the user's organization memberships are removed
-   * first (owner's decision, 2026-11-12). The change is already stored here: a failure leaves the old sessions alive
-   * (with the new role in force on their next request) or the memberships in place (without effect while the user is
-   * an admin; the next role change removes them), owner gaps recorded in the foundation plan. Sign-out is recorded
-   * here too, because Better Auth swallows a throwing sign-out hook and leaves the session valid. This hook never
-   * throws.
-   */
   const afterRoute = createAuthMiddleware(async (c) => {
     if (!c.request) return
     const returned = (c.context as { returned?: unknown }).returned
@@ -357,7 +300,6 @@ export function createAuth(options: AuthOptions) {
     }),
     user: {
       additionalFields: {
-        // The first admin, made by the setup screen. A partial unique index allows one such user, ever.
         setupAdmin: { type: "boolean", required: false, defaultValue: false, input: false },
       },
     },
@@ -382,7 +324,6 @@ export function createAuth(options: AuthOptions) {
       customRules: Object.fromEntries(CREDENTIAL_PATHS.map((p) => [p, { window: 300, max: 5 }])),
     },
     advanced: {
-      // Better Auth skips its origin check under NODE_ENV=test; Maane keeps it on everywhere.
       disableOriginCheck: false,
       disableCSRFCheck: false,
       useSecureCookies: publicUrl.protocol === "https:",
@@ -395,7 +336,6 @@ export function createAuth(options: AuthOptions) {
           before: async (user, context) => {
             const ctx = context as HookContext
             if (ctx?.path === "/sign-up/email") {
-              // Checked again at creation: a request that started just before the window closed is refused here.
               if (!setup.isOpen()) throw refuse("FORBIDDEN", "SETUP_CLOSED", "Setup is closed.")
               const name = String((user as { username?: string }).username ?? user.name)
               await writeAudit(
@@ -495,7 +435,6 @@ export function createAuth(options: AuthOptions) {
 
 export type Auth = ReturnType<typeof createAuth>
 
-/** Better Auth's own log lines: the level and the facts of any error passed along, never the message itself. */
 export function logBetterAuth(level: string, _message: string, ...args: unknown[]): void {
   const error = args.find((arg) => arg instanceof Error)
   const facts = error ? errorFacts(error) : {}

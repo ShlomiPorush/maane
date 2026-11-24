@@ -1,12 +1,3 @@
-// The import window (plan 5.1, phase 6): imports happen until an admin presses Finish import, which records
-// `zendesk_import.finished_at` and closes the window for good; it is refused while a run is open. Until then an
-// imported ticket is read-only for agents: every action on it, and the deletion of a category one carries, is refused
-// here. Live intake may still attach mail to an imported ticket meanwhile (Maane is live from the first moment).
-//
-// Lock order: the import's row, then the run's row. Finish, a start, and the mappings lock the import's row FOR UPDATE
-// before they read the window and the open run, so they serialize. A run never reads the window: it opens only while
-// the window is open, and Finish is refused while it is open.
-
 import { and, eq, isNotNull, sql } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
 import { importRun, ticket, ticketCategory, zendeskImport } from "../db/schema.ts"
@@ -19,16 +10,11 @@ export interface ImportWindow {
   finishedAt: Date | null
 }
 
-/** When an admin pressed Finish import, or null. */
 export async function finishedAt(tx: Pick<Tx, "select">): Promise<Date | null> {
   const [row] = await tx.select({ at: zendeskImport.finishedAt }).from(zendeskImport).where(eq(zendeskImport.id, 1))
   return row?.at ?? null
 }
 
-/**
- * The window as this transaction sees it. With `lock`, the import's row is held FOR UPDATE until the transaction ends
- * (a change of the window, a start, or the mappings).
- */
 export async function importWindow(tx: Pick<Tx, "select">, lock?: "update"): Promise<ImportWindow> {
   const query = tx.select({ at: zendeskImport.finishedAt }).from(zendeskImport).where(eq(zendeskImport.id, 1))
   const [row] = lock ? await query.for(lock) : await query
@@ -36,10 +22,6 @@ export async function importWindow(tx: Pick<Tx, "select">, lock?: "update"): Pro
   return { open: at === null, finishedAt: at }
 }
 
-/**
- * Finish import (an admin's action, final): under the import's row, refused while a run is open; records when. Returns
- * false when the import was already finished.
- */
 export async function finishImport(tx: Pick<Tx, "select" | "update">): Promise<boolean> {
   const window = await importWindow(tx, "update")
   if (!window.open) return false
@@ -49,19 +31,16 @@ export async function finishImport(tx: Pick<Tx, "select" | "update">): Promise<b
   return true
 }
 
-/** Whether a ticket is imported and still read-only for agents (the import is not finished). */
 export async function importedReadOnly(tx: Pick<Tx, "select">, ticketId: string): Promise<boolean> {
   const [row] = await tx.select({ zendeskId: ticket.zendeskId }).from(ticket).where(eq(ticket.id, ticketId))
   if (row?.zendeskId === null || row?.zendeskId === undefined) return false
   return (await finishedAt(tx)) === null
 }
 
-/** Refuses an agent's change to an imported ticket until the import is finished. */
 export async function refuseImported(tx: Pick<Tx, "select">, ticketId: string): Promise<void> {
   if (await importedReadOnly(tx, ticketId)) throw new Refusal("ticket_imported", 409)
 }
 
-/** Refuses deleting a category an imported ticket carries until the import is finished (it would change that ticket). */
 export async function refuseImportedCategory(tx: Pick<Tx, "select">, categoryId: string): Promise<void> {
   if ((await finishedAt(tx)) !== null) return
   const [carried] = await tx

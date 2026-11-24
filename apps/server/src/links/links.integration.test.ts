@@ -31,10 +31,6 @@ import { createTestDatabase } from "../testing/db.ts"
 import { pdf } from "../testing/files.ts"
 import { newCode } from "./service.ts"
 
-// The public link routes of plan 3.4 against a migrated database, a file store in a temporary directory, and the
-// GeoLite2 test databases (documentation networks only). Links are planted as a reply writes them. The client address
-// comes from the TCP peer, so the tests that need it serve the app on a port of 127.0.0.1.
-
 const GEOIP = fileURLToPath(new URL("../testing/geoip/", import.meta.url))
 const CHROME =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36"
@@ -72,7 +68,6 @@ afterEach(async () => {
 
 const db = () => database.db
 
-/** The app served on a port of 127.0.0.1: requests then have a TCP peer, 127.0.0.1. */
 async function listening(): Promise<string> {
   const server = await new Promise<ReturnType<typeof serve>>((resolve) => {
     const s = serve({ fetch: app.app.fetch, port: 0, hostname: "127.0.0.1" }, () => resolve(s))
@@ -81,14 +76,12 @@ async function listening(): Promise<string> {
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 }
 
-/** A request straight to the app's fetch: no TCP peer at all. */
 const get = (path: string, headers: Record<string, string> = {}) =>
   app.fetch(new Request(`http://127.0.0.1:8090${path}`, { headers }))
 
 const reference = () =>
   Array.from({ length: 8 }, (_, i) => (i === 4 ? "-" : "") + REFERENCE_ALPHABET[i % REFERENCE_ALPHABET.length]).join("")
 
-/** A ticket with a customer's message: returns their IDs. */
 async function customerMessage() {
   const [org] = await db().insert(organization).values({ name: "Example Support" }).returning({ id: organization.id })
   const [t] = await db()
@@ -119,11 +112,6 @@ async function customerMessage() {
   return { ticketId: t?.id ?? "", number: t?.number ?? 0, messageId: m?.id ?? "" }
 }
 
-/**
- * A message an agent wrote (`out` or `note`); a reply with an outbox row whose recipient a provider accepted at
- * `acceptedAt` and, with `deliveredAt`, SMTP2GO reported delivered then (plan 3.3). The row's `updated_at` is always
- * now, as a delivery event leaves it: the scanner mark must not read it.
- */
 async function agentMessage(
   ticketId: string,
   userId: string,
@@ -179,7 +167,6 @@ async function agentMessage(
 }
 
 let partIndex = 0
-/** A file part of a message, stored when its status is a stored one. */
 async function filePart(messageId: string, status = "clean", bytes = pdf()) {
   const sha256 = createHash("sha256").update(bytes).digest("hex")
   const stored = ["clean", "not_fully_scanned", "not_scanned"].includes(status)
@@ -208,7 +195,6 @@ async function filePart(messageId: string, status = "clean", bytes = pdf()) {
   return row?.id ?? ""
 }
 
-/** A link a reply carried, as the reply writes it. */
 async function plant(replyId: string, target: { url: string } | { partId: string }) {
   const code = newCode()
   const [row] = await db()
@@ -230,7 +216,6 @@ async function admin() {
   return { b, id: user?.id ?? "" }
 }
 
-/** A reply on a new ticket, and its message. */
 async function reply() {
   const { b, id } = await admin()
   const customer = await customerMessage()
@@ -239,7 +224,6 @@ async function reply() {
 
 const clicks = (linkId: string) => db().select().from(linkClick).where(eq(linkClick.linkId, linkId))
 
-/** The short plain page an unknown code gets, in the default language. */
 async function expectUnknown(response: Response) {
   expect(response.status).toBe(404)
   expect(response.headers.get("cache-control")).toBe("no-store")
@@ -253,7 +237,6 @@ describe("tracked links", () => {
   it("redirects only to the stored link, never caching, and records the click", async () => {
     const { replyId } = await reply()
     const link = await plant(replyId, { url: "https://www.example.com/guide?a=1&b=2" })
-    // Anything the request carries besides the code is ignored.
     const answer = await get(`/l/${link.code}?url=https%3A%2F%2Fevil.example.com%2F&to=https://evil.example.com/`, {
       "user-agent": CHROME,
     })
@@ -276,7 +259,6 @@ describe("tracked links", () => {
       `/f/${newCode()}`,
     ])
       await expectUnknown(await get(path))
-    // The default language decides the page's words.
     expect((await b.call("PUT", "/api/v1/settings", { "general.defaultLocale": "en" })).status).toBe(200)
     const english = await get(`/l/${newCode()}`)
     const text = await english.text()
@@ -287,13 +269,11 @@ describe("tracked links", () => {
   it("takes the client address from the forwarding header only behind a trusted proxy, and locates it", async () => {
     const { replyId } = await reply()
     const link = await plant(replyId, { url: "https://www.example.com/" })
-    // Not trusted: the forged header is ignored, and the TCP peer is recorded.
     let base = await listening()
     expect(
       (await fetch(`${base}/l/${link.code}`, { redirect: "manual", headers: { "x-forwarded-for": "192.0.2.10" } }))
         .status,
     ).toBe(302)
-    // Trusted: the address before the proxy, with its location from the GeoLite2 files.
     await app.close()
     await start({ trustedProxies: ["127.0.0.1"], geoipDir: GEOIP })
     base = await listening()
@@ -335,7 +315,6 @@ describe("tracked links", () => {
     }
     expect(statuses.slice(0, LINK_RATE_LIMIT).every((status) => status === 302)).toBe(true)
     expect(statuses.at(-1)).toBe(429)
-    // The download route shares the allowance.
     expect((await fetch(`${base}/f/${newCode()}`)).status).toBe(429)
   })
 
@@ -437,7 +416,6 @@ describe("download links", () => {
       await expectUnknown(await get(`/f/${link.code}`))
       expect(await clicks(link.id)).toEqual([])
     }
-    // A file code is never a tracked link, and a link code never a download.
     const url = await plant(replyId, { url: "https://www.example.com/" })
     const file = await plant(replyId, { partId: await filePart(messageId) })
     await expectUnknown(await get(`/f/${url.code}`))
@@ -449,12 +427,10 @@ describe("download links", () => {
     const part = await filePart(messageId)
     const link = await plant(replyId, { partId: part })
     expect((await get(`/f/${link.code}`)).status).toBe(200)
-    // The file deleted: its part goes, and its link with it.
     await db().delete(messagePart).where(eq(messagePart.id, part))
     await expectUnknown(await get(`/f/${link.code}`))
     expect(await db().select().from(trackedLink).where(eq(trackedLink.id, link.id))).toEqual([])
 
-    // The ticket deleted: its messages and their parts go, and every link of its replies with them.
     const other = await plant(replyId, { partId: await filePart(messageId) })
     const tracked = await plant(replyId, { url: "https://www.example.com/" })
     await db().transaction(async (tx) => {
@@ -474,7 +450,6 @@ describe("the ticket view", () => {
     await app.close()
     await start({ trustedProxies: ["127.0.0.1"], geoipDir: GEOIP })
     const { b, number, messageId, userId, ticketId } = await reply()
-    // A reply a provider accepted ten minutes ago, its row written again just now by a delivery event.
     const sent = await agentMessage(ticketId, userId, "out", { acceptedAt: new Date(Date.now() - 600_000) })
     const guide = await plant(sent, { url: "https://www.example.com/guide" })
     const file = await plant(sent, { partId: await filePart(messageId) })
@@ -491,11 +466,9 @@ describe("the ticket view", () => {
       "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
     )
     await open(`/f/${file.code}`, "2001:db8::5")
-    // A click right after sending.
     const early = await agentMessage(ticketId, userId, "out", { acceptedAt: new Date() })
     const fresh = await plant(early, { url: "https://www.example.com/fresh" })
     await open(`/l/${fresh.code}`, "192.0.2.11")
-    // Accepted long ago but delivered only now (a queue at the provider): the delivery time counts.
     const late = await agentMessage(ticketId, userId, "out", {
       acceptedAt: new Date(Date.now() - 3_600_000),
       deliveredAt: new Date(),
@@ -545,7 +518,6 @@ describe("the ticket view", () => {
     expect(view.messages.find((m) => m.id === late)?.links?.[0]?.clicks).toEqual([
       expect.objectContaining({ ip: "192.0.2.12", scanner: ["early"] }),
     ])
-    // Incoming messages carry none.
     expect(view.messages.find((m) => m.id === messageId)?.links).toEqual([])
   })
 })
@@ -570,7 +542,6 @@ describe("a link a scanner keeps clicking", () => {
     const [shown] = view.messages.find((m) => m.id === replyId)?.links ?? []
     expect(shown?.total).toBe(total)
     expect(shown?.clicks).toHaveLength(CLICKS_SHOWN)
-    // The newest first: the last one recorded, down to the CLICKS_SHOWN-th newest.
     expect(shown?.clicks[0]?.ip).toBe(`192.0.2.${total - 1}`)
     expect(shown?.clicks.at(-1)?.ip).toBe(`192.0.2.${total - CLICKS_SHOWN}`)
   })
@@ -581,7 +552,6 @@ describe("the early mark after later delivery events (review L1)", () => {
     await app.close()
     await start({ trustedProxies: ["127.0.0.1"], geoipDir: null })
     const { b, number, ticketId, userId } = await reply()
-    // Accepted an hour ago; SMTP2GO reports it delivered 30 seconds ago, through 3.3's own write path.
     const queueId = `queue-${randomUUID()}`
     const sent = await agentMessage(ticketId, userId, "out", {
       acceptedAt: new Date(Date.now() - 3_600_000),
@@ -600,11 +570,9 @@ describe("the early mark after later delivery events (review L1)", () => {
     const link = await plant(sent, { url: "https://www.example.com/" })
     const base = await listening()
     await fetch(`${base}/l/${link.code}`, { redirect: "manual", headers: { "x-forwarded-for": "192.0.2.30" } })
-    // A later spam report replaces the status and its time; the first delivery stays.
     expect(await event("spam", new Date())).toBe(true)
     const [row] = await db().select().from(outboxRecipient).where(eq(outboxRecipient.messageId, sent))
     expect(row).toMatchObject({ delivery: "spam", firstDeliveredAt: deliveredAt })
-    // A second delivered event does not move it either.
     await event("delivered", new Date(Date.now() + 1000))
     const [again] = await db().select().from(outboxRecipient).where(eq(outboxRecipient.messageId, sent))
     expect(again?.firstDeliveredAt).toEqual(deliveredAt)
