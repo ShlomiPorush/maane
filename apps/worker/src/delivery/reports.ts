@@ -16,20 +16,8 @@ import { message, outbox, outboxRecipient } from "@maane/server/db/schema"
 import { applyDeliveryEvent, recordUnmatched } from "@maane/server/delivery/service"
 import { and, eq, lt } from "drizzle-orm"
 import type { Tx } from "../files/types.ts"
-import type { ReportRecipient } from "../intake/parse.ts"
 
 type MessageRow = typeof message.$inferSelect
-
-/** The stored report's recipients, each checked again (the column is JSON). */
-function recipientsOf(value: unknown): ReportRecipient[] {
-  if (!Array.isArray(value)) return []
-  return value.filter(
-    (entry): entry is ReportRecipient =>
-      typeof entry?.address === "string" &&
-      typeof entry?.action === "string" &&
-      (entry?.status === null || typeof entry?.status === "string"),
-  )
-}
 
 /**
  * Applies a delivery report to the reply it names. Returns the reply and its ticket when the report is about one of
@@ -46,7 +34,7 @@ export async function applyDeliveryReport(
     .innerJoin(message, eq(message.id, outbox.messageId))
     .where(eq(outbox.messageIdHeader, msg.reportOriginalMessageId))
   if (!reply) return null
-  const recipients = recipientsOf(msg.deliveryReport)
+  const recipients = msg.deliveryReport
   const failed = recipients.filter((entry) => entry.action === "failed")
   if (recipients.length > 0 && failed.length === 0) return reply
   // The reply's recipients accepted before the report arrived.

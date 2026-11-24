@@ -48,7 +48,7 @@ export class Settings {
         secret: definition.secret,
         set: effective?.source !== "default",
         locked,
-        variable: locked ? definition.env : null,
+        variable: locked ? (definition.env?.name ?? null) : null,
       }
     })
   }
@@ -151,7 +151,7 @@ export class Settings {
       const override = this.overrides[key]
       if (override !== undefined) {
         result.set(key, {
-          value: definition.schema.parse(definition.fromEnv ? definition.fromEnv(override) : override),
+          value: definition.schema.parse(definition.env ? definition.env.parse(override) : override),
           source: "env",
         })
         continue

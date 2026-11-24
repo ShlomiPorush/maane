@@ -1,13 +1,10 @@
 import { randomUUID } from "node:crypto"
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
 import { auditLog, deliveryPoll, outbox, outboxRecipient } from "@maane/server/db/schema"
 import { type JobQueue, openJobQueue } from "@maane/server/jobs/queue"
 import { createSettingsCipher } from "@maane/server/settings/crypto"
 import { Settings } from "@maane/server/settings/service"
 import { createTestApp } from "@maane/server/testing/app"
 import { nextIp, TEST_ORIGIN, TestBrowser, testPassword } from "@maane/server/testing/browser"
-import { MIGRATIONS_DIR } from "@maane/server/testing/db"
 import type { SettingKey, TicketView, WebhookSecretsView } from "@maane/shared"
 import { eq, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
@@ -756,26 +753,6 @@ describe("review of 3.3", () => {
     )
     expect((await view(number)).messages.find((m) => m.id === other.id)?.delivery?.unmatchedDelivery).toBeNull()
   })
-
-  it("D5: the migration fills the queue ID and the acceptance of replies sent before the upgrade", async () => {
-    await firstAdmin()
-    const number = await customerTicket()
-    const reply = await sentReply(number, ["dana@example.com"])
-    const queueId = await queueIdOf(reply.id, "dana@example.com")
-    // As a row sent before 0010: the final reply is stored, the new columns are empty.
-    await h.database.db
-      .update(outboxRecipient)
-      .set({ providerId: null, acceptedAt: null, possibleSends: 0 })
-      .where(eq(outboxRecipient.messageId, reply.id))
-    // The backfill's statements on the recipients (its last one reads a column 0013 drops, so it cannot run again).
-    const file = readFileSync(join(MIGRATIONS_DIR, "0012_delivery_backfill.sql"), "utf8")
-    for (const statement of file.split("--> statement-breakpoint"))
-      if (statement.includes('"outbox_recipient"')) await h.database.db.execute(sql.raw(statement))
-    const [row] = await h.database.db.select().from(outboxRecipient).where(eq(outboxRecipient.messageId, reply.id))
-    expect(row?.providerId).toBe(queueId)
-    expect(row?.acceptedAt?.toISOString()).toBe(row?.updatedAt.toISOString())
-    expect(row?.possibleSends).toBe(1)
-  })
 })
 
 describe("review of 3.3, round 2", () => {
@@ -879,32 +856,5 @@ describe("review of 3.3, round 2", () => {
     // The next run finds it halfway and recovers it without sending.
     expect(await sender({ "failover.host": "" }).send(reply.id)).toBe("unknown")
     expect(await possibleSends(reply.id)).toEqual([1])
-  })
-
-  it("D8, D9: the backfill never lets an old unknown, resent, or mid-send recipient match by Message-ID", async () => {
-    await firstAdmin()
-    const number = await customerTicket()
-    const unknown = await sentReply(number, ["drop.dana@example.com"], { "failover.host": "" })
-    const once = await sentReply(number, ["dana@example.com"])
-    const resent = await sentReply(number, ["drop.ron@example.com"], { "failover.host": "" })
-    expect((await admin.call("POST", `/api/v1/messages/${resent.id}/resend`)).status).toBe(200)
-    expect(await sender(viaFailover()).send(resent.id)).toBe("accepted")
-    // D9: a reply in the middle of its attempt when the upgrade runs (the run stopped after SMTP2GO took the data).
-    const midway = await written(number, ["dana@example.com"])
-    await expect(sender({ "failover.host": "" }, { afterSend: async () => crash() }).send(midway.id)).rejects.toThrow()
-    // As rows sent before 0010.
-    await h.database.db.update(outboxRecipient).set({ possibleSends: 0, acceptedAt: null })
-    const file = readFileSync(join(MIGRATIONS_DIR, "0012_delivery_backfill.sql"), "utf8")
-    for (const statement of file.split("--> statement-breakpoint"))
-      if (statement.includes('"outbox_recipient"')) await h.database.db.execute(sql.raw(statement))
-    expect(await possibleSends(unknown.id)).toEqual([2])
-    expect(await possibleSends(once.id)).toEqual([1])
-    expect(await possibleSends(resent.id)).toEqual([2])
-    const [row] = await h.database.db.select().from(outbox).where(eq(outbox.messageId, midway.id))
-    expect(row?.state).toBe("sending")
-    expect(await possibleSends(midway.id)).toEqual([2])
-    // Its recovery counts nothing, so it stays out of reach of a match by Message-ID.
-    expect(await sender({ "failover.host": "" }).send(midway.id)).toBe("unknown")
-    expect(await possibleSends(midway.id)).toEqual([2])
   })
 })

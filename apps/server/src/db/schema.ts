@@ -524,7 +524,7 @@ export const message = pgTable(
      * A delivery status notification's recipients (RFC 3464), read at stage one: `{ address, action, status }[]`, only
      * validated tokens (an address, an action keyword, a status code), never the report's free text (plan 3.3).
      */
-    deliveryReport: jsonb("delivery_report"),
+    deliveryReport: jsonb("delivery_report").$type<{ address: string; action: string; status: string | null }[]>(),
     /** The top-level content type as mailparser parsed it, bounded: `{ value, reportType }`. */
     contentType: jsonb("content_type"),
     /**

@@ -47,8 +47,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, ne, notInArray, sql } from "d
 import type { Db as QueueDb } from "pg-boss"
 import { applyDeliveryReport } from "../delivery/reports.ts"
 import type { Tx } from "../files/types.ts"
-import { type AutomatedSign, type Classification, classify } from "./classify.ts"
-import type { StoredContentType } from "./content.ts"
+import type { AutomatedSign, Classification } from "./classify.ts"
 import type { MailAddress } from "./parse.ts"
 import { newReferenceCode, referenceCodesIn, referencedIds, ticketNumbersIn } from "./threading.ts"
 
@@ -295,18 +294,12 @@ export class IntakeProcessor {
     }
 
     // Classified at stage one from the parsed headers, also when their stored text was dropped (review G13).
-    const classification: Classification =
-      msg.classification !== null
-        ? {
-            automated: msg.classification === "automated",
-            signs: msg.automatedReasons as AutomatedSign[],
-            possiblyAutomated: msg.possiblyAutomated,
-          }
-        : classify({
-            headers: Array.isArray(msg.headers) ? (msg.headers as { key: string; line: string }[]) : [],
-            contentType: (msg.contentType as StoredContentType | null) ?? { value: "text/plain", reportType: null },
-            from: msg.fromAddress,
-          })
+    if (msg.classification === null) throw new Error("a parsed message was stored without its classification")
+    const classification: Classification = {
+      automated: msg.classification === "automated",
+      signs: msg.automatedReasons as AutomatedSign[],
+      possiblyAutomated: msg.possiblyAutomated,
+    }
     const rules = (await tx
       .select({
         kind: supportAddress.kind,

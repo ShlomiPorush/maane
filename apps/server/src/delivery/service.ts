@@ -192,10 +192,10 @@ export async function refreshDeliveryFlag(tx: Tx, ticketId: string): Promise<voi
         from ${outboxRecipient} r
         join ${message} m on m.id = r.message_id
         where m.ticket_id = ${ticketId} and r.state = 'accepted'
-        order by r.address, r.accepted_at desc nulls last, m.received_at desc, m.id desc
+        order by r.address, r.accepted_at desc, m.received_at desc, m.id desc
       ) latest
       where latest.delivery in (${sql.join(failed, sql`, `)})
-        and (latest.accepted_at is null or latest.delivery_recorded_at >= latest.accepted_at)
+        and latest.delivery_recorded_at >= latest.accepted_at
     ) as failed`)
   const flagged = result.rows[0]?.failed === true
   if (flagged === row.flags.includes(FLAG)) return

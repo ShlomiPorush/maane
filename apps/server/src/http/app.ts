@@ -29,7 +29,6 @@ import { Geo } from "../links/geo.ts"
 import { Links } from "../links/service.ts"
 import { errorFacts, log, loggedPath } from "../log.ts"
 import { Subscriptions } from "../notifications/service.ts"
-import { Refusal } from "../organizations/refusal.ts"
 import { Organizations } from "../organizations/service.ts"
 import { Replies } from "../replies/service.ts"
 import { type Settings, SettingsError } from "../settings/service.ts"
@@ -264,8 +263,6 @@ export function createApp(ctx: AppContext) {
       if (error instanceof SettingsError) {
         return c.json({ error: error.code, key: error.key }, error.code === "setting_locked" ? 409 : 400)
       }
-      // The intake mode's rule (live needs a default address): its code and the key it refuses.
-      if (error instanceof Refusal) return c.json({ error: error.code, ...error.details }, error.status)
       throw error
     }
     await ctx.onSettingsChanged?.()

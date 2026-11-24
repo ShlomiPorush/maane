@@ -14,10 +14,8 @@ export interface SettingDefinition<T> {
   defaultValue: T
   /** Stored encrypted and never returned by the API. */
   secret: boolean
-  /** The variable that overrides and locks this field, or null when no variable may set it. */
-  env: string | null
-  /** Parses the text of the environment variable. */
-  fromEnv: ((text: string) => unknown) | null
+  /** The variable that overrides and locks this field, and how its text is parsed. Absent when no variable may set it. */
+  env?: { name: string; parse: (text: string) => unknown }
   /**
    * Made by Maane from a cryptographically secure generator when the admin asks (plan 3.3), never typed in: the
    * settings update refuses it, and no variable sets it.
@@ -178,15 +176,13 @@ export const SETTINGS = {
     schema: z.enum(LOCALES),
     defaultValue: "he" as (typeof LOCALES)[number],
     secret: false,
-    env: "MAANE_DEFAULT_LOCALE",
-    fromEnv: (text) => text,
+    env: { name: "MAANE_DEFAULT_LOCALE", parse: (text) => text },
   }),
   "security.sessionDays": define({
     schema: z.number().int().min(1).max(90),
     defaultValue: 14,
     secret: false,
-    env: "MAANE_SESSION_DAYS",
-    fromEnv: (text) => Number(text),
+    env: { name: "MAANE_SESSION_DAYS", parse: (text) => Number(text) },
   }),
   // The clamd the worker scans with: the bundled clamav service, or the owner's own (docs/deployment.md lists what an
   // outside clamd must be configured with).
@@ -194,15 +190,13 @@ export const SETTINGS = {
     schema: z.string().refine((text) => parseScannerAddress(text) !== null),
     defaultValue: "clamav:3310",
     secret: false,
-    env: "MAANE_SCANNER_ADDRESS",
-    fromEnv: (text) => text,
+    env: { name: "MAANE_SCANNER_ADDRESS", parse: (text) => text },
   }),
   "scanner.unavailablePolicy": define({
     schema: z.enum(SCANNER_POLICIES),
     defaultValue: "block" as ScannerPolicy,
     secret: false,
-    env: "MAANE_SCANNER_UNAVAILABLE_POLICY",
-    fromEnv: (text) => text,
+    env: { name: "MAANE_SCANNER_UNAVAILABLE_POLICY", parse: (text) => text },
   }),
   /**
    * How long one file scan may take, from connecting to clamd to its answer, before Maane gives up on it and the
@@ -212,23 +206,20 @@ export const SETTINGS = {
     schema: z.number().int().min(SCAN_TIMEOUT_MIN_SECONDS).max(SCAN_TIMEOUT_MAX_SECONDS),
     defaultValue: 150,
     secret: false,
-    env: "MAANE_SCANNER_SCAN_TIMEOUT_SECONDS",
-    fromEnv: (text) => Number(text),
+    env: { name: "MAANE_SCANNER_SCAN_TIMEOUT_SECONDS", parse: (text) => Number(text) },
   }),
   /** The largest file Maane scans and stores, in bytes. */
   "files.maxBytes": define({
     schema: z.number().int().min(FILES_MAX_BYTES_MIN).max(FILES_MAX_BYTES_MAX),
     defaultValue: 50 * MEGABYTE,
     secret: false,
-    env: "MAANE_FILES_MAX_BYTES",
-    fromEnv: (text) => Number(text),
+    env: { name: "MAANE_FILES_MAX_BYTES", parse: (text) => Number(text) },
   }),
   "files.blockedTypes": define({
     schema: z.array(z.string().regex(BLOCKED_TYPE)).max(BLOCKED_TYPES_MAX),
     defaultValue: [...DEFAULT_BLOCKED_TYPES],
     secret: false,
-    env: "MAANE_FILES_BLOCKED_TYPES",
-    fromEnv: normalizeBlockedTypes,
+    env: { name: "MAANE_FILES_BLOCKED_TYPES", parse: normalizeBlockedTypes },
   }),
   // Microsoft Graph (plan 2.3): the Entra application that reads the intake mailbox, and the mailbox. Each may come from
   // a variable that locks its field. A tenant or mailbox change makes a new current intake source.
@@ -236,15 +227,13 @@ export const SETTINGS = {
     schema: graphText(isTenantId),
     defaultValue: "",
     secret: false,
-    env: "MAANE_GRAPH_TENANT_ID",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_GRAPH_TENANT_ID", parse: (text) => text.trim() },
   }),
   "graph.clientId": define({
     schema: graphText(isClientId),
     defaultValue: "",
     secret: false,
-    env: "MAANE_GRAPH_CLIENT_ID",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_GRAPH_CLIENT_ID", parse: (text) => text.trim() },
   }),
   /** The application's client secret: stored encrypted, never returned. A variable that reads as an example is refused. */
   "graph.clientSecret": define({
@@ -256,16 +245,14 @@ export const SETTINGS = {
       .regex(/^\S(?:[^\r\n]*\S)?$/),
     defaultValue: "",
     secret: true,
-    env: "MAANE_GRAPH_CLIENT_SECRET",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_GRAPH_CLIENT_SECRET", parse: (text) => text.trim() },
   }),
   /** The shared intake mailbox Maane reads (read only). */
   "graph.mailbox": define({
     schema: graphText(isMailbox),
     defaultValue: "",
     secret: false,
-    env: "MAANE_GRAPH_MAILBOX",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_GRAPH_MAILBOX", parse: (text) => text.trim() },
   }),
   // Sending (plan 3.1): SMTP to SMTP2GO first, then the failover server, both with TLS required. SMTP2GO uses TLS from
   // the first byte on its TLS ports (SMTP_TLS_PORTS) and STARTTLS, required, on every other; the failover names its own.
@@ -273,38 +260,33 @@ export const SETTINGS = {
     schema: smtpText(isHostName),
     defaultValue: "mail.smtp2go.com",
     secret: false,
-    env: "MAANE_SMTP2GO_HOST",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_SMTP2GO_HOST", parse: (text) => text.trim() },
   }),
   "smtp2go.port": define({
     schema: smtpPort,
     defaultValue: 587,
     secret: false,
-    env: "MAANE_SMTP2GO_PORT",
-    fromEnv: (text) => Number(text),
+    env: { name: "MAANE_SMTP2GO_PORT", parse: (text) => Number(text) },
   }),
   "smtp2go.user": define({
     schema: smtpUser,
     defaultValue: "",
     secret: false,
-    env: "MAANE_SMTP2GO_USER",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_SMTP2GO_USER", parse: (text) => text.trim() },
   }),
   /** The SMTP user's password: stored encrypted, never returned. A variable that reads as an example is refused. */
   "smtp2go.password": define({
     schema: secretText,
     defaultValue: "",
     secret: true,
-    env: "MAANE_SMTP2GO_PASSWORD",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_SMTP2GO_PASSWORD", parse: (text) => text.trim() },
   }),
   /** SMTP2GO's API key, for delivery status only (phase 3.3): stored encrypted, never returned. */
   "smtp2go.apiKey": define({
     schema: secretText,
     defaultValue: "",
     secret: true,
-    env: "MAANE_SMTP2GO_API_KEY",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_SMTP2GO_API_KEY", parse: (text) => text.trim() },
   }),
   // SMTP2GO's delivery webhook (plan 3.3): the secret part of its path and the token of its Authorization header. Both
   // are app-owned secrets Maane generates (32 random bytes each, base64url), stored encrypted, shown once.
@@ -312,61 +294,51 @@ export const SETTINGS = {
     schema: z.string().regex(WEBHOOK_SECRET),
     defaultValue: "",
     secret: true,
-    env: null,
-    fromEnv: null,
     generated: true,
   }),
   "smtp2go.webhookToken": define({
     schema: z.string().regex(WEBHOOK_SECRET),
     defaultValue: "",
     secret: true,
-    env: null,
-    fromEnv: null,
     generated: true,
   }),
   "failover.host": define({
     schema: smtpText(isHostName),
     defaultValue: "",
     secret: false,
-    env: "MAANE_FAILOVER_HOST",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_FAILOVER_HOST", parse: (text) => text.trim() },
   }),
   "failover.port": define({
     schema: smtpPort,
     defaultValue: 587,
     secret: false,
-    env: "MAANE_FAILOVER_PORT",
-    fromEnv: (text) => Number(text),
+    env: { name: "MAANE_FAILOVER_PORT", parse: (text) => Number(text) },
   }),
   /** STARTTLS, required, or TLS from the first byte. Never plain. */
   "failover.security": define({
     schema: z.enum(SMTP_SECURITIES),
     defaultValue: "starttls" as SmtpSecurity,
     secret: false,
-    env: "MAANE_FAILOVER_SECURITY",
-    fromEnv: (text) => text.trim().toLowerCase(),
+    env: { name: "MAANE_FAILOVER_SECURITY", parse: (text) => text.trim().toLowerCase() },
   }),
   "failover.user": define({
     schema: smtpUser,
     defaultValue: "",
     secret: false,
-    env: "MAANE_FAILOVER_USER",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_FAILOVER_USER", parse: (text) => text.trim() },
   }),
   "failover.password": define({
     schema: secretText,
     defaultValue: "",
     secret: true,
-    env: "MAANE_FAILOVER_PASSWORD",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_FAILOVER_PASSWORD", parse: (text) => text.trim() },
   }),
   /** The envelope sender of mail sent through the failover: an address in the owner's domain that reaches intake. */
   "mail.bounceAddress": define({
     schema: smtpText(isMailbox),
     defaultValue: "",
     secret: false,
-    env: "MAANE_BOUNCE_ADDRESS",
-    fromEnv: (text) => text.trim(),
+    env: { name: "MAANE_BOUNCE_ADDRESS", parse: (text) => text.trim() },
   }),
   // Link tracking (plan 3.4): on, the links an agent writes become https://<link domain>/l/<code>, and clicks and
   // downloads are recorded; off, links stay as written and nothing is recorded. Download links of history files exist
@@ -375,16 +347,14 @@ export const SETTINGS = {
     schema: z.enum(LINK_TRACKING),
     defaultValue: "on" as LinkTracking,
     secret: false,
-    env: "MAANE_LINK_TRACKING",
-    fromEnv: (text) => text.trim().toLowerCase(),
+    env: { name: "MAANE_LINK_TRACKING", parse: (text) => text.trim().toLowerCase() },
   }),
   /** The host name of tracked links and download links; empty means the public URL's own. */
   "links.domain": define({
     schema: z.string().refine((text) => text === "" || isLinkDomain(text)),
     defaultValue: "",
     secret: false,
-    env: "MAANE_LINK_DOMAIN",
-    fromEnv: (text) => text.trim().toLowerCase(),
+    env: { name: "MAANE_LINK_DOMAIN", parse: (text) => text.trim().toLowerCase() },
   }),
 } as const
 

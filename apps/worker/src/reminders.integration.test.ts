@@ -938,13 +938,4 @@ describe("no reminder", () => {
     expect(await periodsOf(t.id)).toEqual([])
     expect(await remindersOf(t.id)).toEqual([])
   })
-
-  it("for a period the import made: only Maane's own periods send", async () => {
-    const { t, started } = await waiting()
-    const due = await onlyReminder(t.id)
-    // As phase 5 will mark one: the same period, recorded as imported.
-    await db().update(waitingPeriod).set({ origin: "import" }).where(eq(waitingPeriod.messageId, started))
-    expect(await actions().run(due.id, 1)).toBe("imported")
-    expect(await outboxOfAction(due.id)).toEqual([])
-  })
 })

@@ -6,15 +6,13 @@ import type { CategoryRef } from "./workflow.ts"
 
 /**
  * A run's state: `running` (started, its job active or waiting to go on after a crash), `done`, `stopped` (the archive
- * changed under it, the import was finished, or an admin cancelled it: the next start is a full pass), or `refused`
- * (nothing was written).
+ * changed under it, or an admin cancelled it: the next start is a full pass), or `refused` (nothing was written).
  */
 export const IMPORT_RUN_STATES = ["running", "done", "stopped", "refused"] as const
 export type ImportRunState = (typeof IMPORT_RUN_STATES)[number]
 
 /**
  * Why a run was refused or stopped, or a start refused:
- * - `finished`: an admin pressed Finish import; the import window is closed for good.
  * - `no_agent`: no Maane user was chosen for the comments of Zendesk agents.
  * - `no_archive`: no archive at the mount.
  * - `backup_running`: the backup tool holds the archive's lock; finish the backup first.
@@ -28,7 +26,6 @@ export type ImportRunState = (typeof IMPORT_RUN_STATES)[number]
  * - `cancelled`: an admin cancelled the open run. What it imported stays; the next start is a full pass.
  */
 export const IMPORT_STOP_REASONS = [
-  "finished",
   "no_agent",
   "no_archive",
   "backup_running",

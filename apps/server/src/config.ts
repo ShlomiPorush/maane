@@ -219,12 +219,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 
   const overrides: Partial<Record<SettingKey, string>> = {}
   for (const [key, setting] of Object.entries(SETTINGS) as [SettingKey, (typeof SETTINGS)[SettingKey]][]) {
-    // A setting without a variable (the intake mode) is stored only: no environment value can set or lock it.
-    if (setting.env === null || setting.fromEnv === null) continue
-    const value = env[setting.env]?.trim()
+    // A setting without a variable (the webhook's generated secrets) is stored only: no environment value can set or
+    // lock it.
+    if (!setting.env) continue
+    const { name, parse } = setting.env
+    const value = env[name]?.trim()
     if (!value) continue
-    if (setting.secret && isPlaceholder(value)) problems.push(`${setting.env} is a placeholder`)
-    else if (!setting.schema.safeParse(setting.fromEnv(value)).success) problems.push(`${setting.env} is not valid`)
+    if (setting.secret && isPlaceholder(value)) problems.push(`${name} is a placeholder`)
+    else if (!setting.schema.safeParse(parse(value)).success) problems.push(`${name} is not valid`)
     overrides[key] = value
   }
 

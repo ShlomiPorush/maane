@@ -4,7 +4,8 @@
 // here. Live intake may still attach mail to an imported ticket meanwhile (Maane is live from the first moment).
 //
 // Lock order: the import's row, then the run's row. Finish, a start, and the mappings lock the import's row FOR UPDATE
-// before they read the window and the open run; every ticket of a run locks it FOR SHARE first, so they serialize.
+// before they read the window and the open run, so they serialize. A run never reads the window: it opens only while
+// the window is open, and Finish is refused while it is open.
 
 import { and, eq, isNotNull, sql } from "drizzle-orm"
 import type { Db } from "../db/client.ts"
@@ -25,10 +26,10 @@ export async function finishedAt(tx: Pick<Tx, "select">): Promise<Date | null> {
 }
 
 /**
- * The window as this transaction sees it. With `lock`, the import's row is held (`update` for a change of the window
- * or a start, `share` for a run's ticket) until the transaction ends.
+ * The window as this transaction sees it. With `lock`, the import's row is held FOR UPDATE until the transaction ends
+ * (a change of the window, a start, or the mappings).
  */
-export async function importWindow(tx: Pick<Tx, "select">, lock?: "update" | "share"): Promise<ImportWindow> {
+export async function importWindow(tx: Pick<Tx, "select">, lock?: "update"): Promise<ImportWindow> {
   const query = tx.select({ at: zendeskImport.finishedAt }).from(zendeskImport).where(eq(zendeskImport.id, 1))
   const [row] = lock ? await query.for(lock) : await query
   const at = row?.at ?? null

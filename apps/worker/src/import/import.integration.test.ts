@@ -500,7 +500,15 @@ describe("the import from the Zendesk archive", () => {
 
   it("Finish import: refused while a run is open, final, audited, and imports refused after it", async () => {
     const h = await start()
-    const imports = new Imports(h.db, NO_QUEUE, h.archive)
+    const queued: unknown[] = []
+    const queue: JobQueue = {
+      ...NO_QUEUE,
+      sendIn: async (...job) => {
+        queued.push(job)
+        return ""
+      },
+    }
+    const imports = new Imports(h.db, queue, h.archive)
     const acting = { actor: SYSTEM, ipAddress: null }
     const [open] = await h.db.insert(importRun).values({ startedBy: h.owner }).returning({ id: importRun.id })
     await expect(imports.finish(acting)).rejects.toBeInstanceOf(Refusal)
@@ -516,10 +524,14 @@ describe("the import from the Zendesk archive", () => {
     expect(audits).toHaveLength(1)
     expect(audits[0]).toMatchObject({ entityType: "zendesk_import", entityId: "1", actorLabel: SYSTEM.label })
     expect((await imports.view()).window).toEqual({ open: false, finishedAt: row?.finishedAt?.toISOString() })
-    // Imports are refused after it: a run, a start, and the mappings.
-    const refused = await h.run()
-    expect(refused.outcome).toEqual({ state: "refused", reason: "finished" })
+    // Imports are refused after it: a start opens no run and queues no job, and the mappings are refused.
+    const runs = await h.db.select().from(importRun)
     await expect(imports.start(h.owner)).rejects.toMatchObject({ code: "import_closed" })
+    expect(await h.db.select().from(importRun)).toEqual(runs)
+    expect(queued).toEqual([])
+    // An old job of the run that ended before Finish does nothing.
+    expect(await h.again(open?.id ?? "")).toEqual({ skipped: true })
+    expect(await h.db.select().from(importRun)).toEqual(runs)
     await expect(imports.saveMapping({ brands: {}, tags: {}, agentUserId: h.owner }, acting)).rejects.toMatchObject({
       code: "import_closed",
     })

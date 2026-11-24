@@ -226,8 +226,8 @@ export type ActionState = (typeof ACTION_STATES)[number]
  * moved to another organization (`move`), or a check at its time failed (the From address or the author is no longer
  * allowed). A reminder (plan 4.3) also ends with its waiting period: the ticket left pending
  * (`status_change`), an agent replied again (`agent_reply`), the reply that started the period bounced, was rejected, or
- * was reported as spam (`delivery_failed`); or at its time the organization has no reminder template (`no_template`),
- * the ticket has no customer to write to (`no_recipients`), or the period was imported (`imported`).
+ * was reported as spam (`delivery_failed`); or at its time the organization has no reminder template (`no_template`)
+ * or the ticket has no customer to write to (`no_recipients`).
  */
 export const ACTION_REASONS = [
   "agent",
@@ -240,7 +240,6 @@ export const ACTION_REASONS = [
   "delivery_failed",
   "no_template",
   "no_recipients",
-  "imported",
 ] as const
 export type ActionReason = (typeof ACTION_REASONS)[number]
 
