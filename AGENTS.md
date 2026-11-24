@@ -164,4 +164,4 @@ Details and the container table are in `docs/project-foundation.md`, "Docker dec
 ## Safety
 
 - Production deployment, releases, merges, and every change in Microsoft 365, DNS, SMTP2GO, or Zendesk belong to the owner. Agents prepare safe commands and never run them against production. Agents run the Release workflow only with `dry_run` and `scripts/release.sh` only with `--dry-run`, and never deploy.
-- Tests and `scripts/verify.sh` use stand-ins for Graph, SMTP2GO, failover SMTP, and Zendesk. The development and pull request stacks have no stand-ins and hold no provider credentials until someone enters them in Settings. Nothing real is sent from a development or test stack; real test sends are the owner's own.
+- Tests and `scripts/verify.sh` use stand-ins for Graph, SMTP2GO, failover SMTP, and Zendesk. The development and pull request stacks have no stand-ins: a new one holds no Graph or SMTP settings, so it reads and sends no mail until someone enters them. Nothing real is sent from a development or test stack; real test sends are the owner's own.

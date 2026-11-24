@@ -101,7 +101,7 @@ plant "a quoted build key" "$compose" docker-compose.yml $'services:\n  server:\
 plant "build in a flow mapping" "$compose" docker/docker-compose-dev.example.yml \
   $'services: { server: { image: x, build'": . } }"$'\n'
 # shellcheck disable=SC2016 # the Compose variables must stay literal
-plant "a Compose default" "$forms" docker-compose.yml $'services:\n  server:\n    image: x:${TAG:-latest}\n'
+plant "a Compose default" "$forms" docker-compose.yml $'services:\n  server:\n    image: x:${TAG:-zq9default}\n' zq9default
 # shellcheck disable=SC2016
 plant "a Compose error form in a quoted label" "$forms" docker-compose.yml \
   $'services:\n  server:\n    labels:\n      - "rule=Host(`${DOMAIN:?set it}`)"\n'

@@ -1,6 +1,6 @@
 # Deploying Maane
 
-Status: written before the first release. Nothing here has been run against a production server, and the Release workflow has not run on GitHub yet. What was checked, and how, is listed in [What was verified](#what-was-verified).
+Status: written before the first release. Nothing here has been run against a production server. The Release workflow has passed two dry runs on GitHub; no version is published yet. What was checked, and how, is listed in [What was verified](#what-was-verified).
 
 These notes are for the owner, who deploys production. Agents never deploy. The examples use `maane.example.com`, the folder `~/maane`, and the documentation range `192.0.2.0/24`. Replace them with your own values on the server, and keep real values out of every repository.
 
@@ -350,11 +350,18 @@ While Settings, Link tracking, Track links is on (the default), the links an age
 
 Change the link domain only while the old name still reaches Maane: replies already sent keep their old links.
 
-**Location (GeoLite2).** Maane reads the location of a click from MaxMind GeoLite2 files on the host, never from an outside service. Your existing updater keeps them current; Maane only reads them. `docker-compose.yml` mounts the folder `./geoip` next to it read only at `/geoip` in `server`, and reads `GeoLite2-City.mmdb` (country, city, region) and `GeoLite2-ASN.mmdb` (ISP and AS number) from it. Each file is optional and fails alone: without one, its part of the location stays empty and clicks are still recorded. Maane looks at the files at most once a minute and reads a file again when its modification time changes, so an update needs no restart; a file that cannot be read (for example one your updater is still writing) leaves the last good copy in use until the next look. Point `./geoip` at your updater's folder with a link (here `/srv/geoip`, where `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb` sit), or have your updater write into `./geoip` itself. Docker creates an empty `./geoip` on the first start; the block removes it only while it is empty, and stops when `./geoip` holds files or is already a link:
+**Location (GeoLite2).** Maane reads the location of a click from MaxMind GeoLite2 files on the host, never from an outside service. Your existing updater keeps them current; Maane only reads them. `docker-compose.yml` mounts the folder `./geoip` next to it read only at `/geoip` in `server`, and reads `GeoLite2-City.mmdb` (country, city, region) and `GeoLite2-ASN.mmdb` (ISP and AS number) from it. Each file is optional and fails alone: without one, its part of the location stays empty and clicks are still recorded. Maane looks at the files at most once a minute and reads a file again when its modification time changes, so an update needs no restart; a file that cannot be read (for example one your updater is still writing) leaves the last good copy in use until the next look. Point `./geoip` at your updater's folder with a link (here `/srv/geoip`, where `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb` sit), or have your updater write into `./geoip` itself. Docker creates an empty `./geoip` on the first start; the block replaces it only while it is empty, stops when the target is not a folder or `./geoip` holds files, and can run again after it stopped halfway. It recreates `server`, which sees a new link only then:
 
 ```bash
-cd "$HOME/maane" && { [ -L geoip ] || [ ! -d geoip ] || rmdir geoip; } && ln -sT /srv/geoip geoip &&
+(
+  set -euo pipefail
+  target=/srv/geoip
+  cd "$HOME/maane"
+  [ -d "$target" ] || { echo "error: $target is not a folder; nothing was changed" >&2; exit 1; }
+  [ -L geoip ] || [ ! -e geoip ] || rmdir geoip
+  ln -sfnT "$target" geoip
   docker compose up -d --force-recreate server
+)
 ```
 
 The folder must be readable by UID 1000; the server never writes to it. Check what the server sees:
@@ -367,11 +374,18 @@ cd "$HOME/maane" && docker compose exec -T server ls -l /geoip
 
 ### Import from Zendesk
 
-Admin, Import brings the history of the phase 0 archive ([zendesk-backup.md](zendesk-backup.md)) into Maane, on [setup day](#setup-day-from-zendesk-to-maane). It reads the archive and never calls Zendesk, so it needs no token. `docker-compose.yml` mounts the folder `./zendesk-archive` next to it read only at `/zendesk-archive` in `server` (the page shows the archive's brands, tags, and state) and in `worker` (the import reads it). Maane never writes to it. Point `./zendesk-archive` at the archive's folder with a link (here `/srv/zendesk-archive`, the folder that holds `archive.json`). Docker creates an empty `./zendesk-archive` on the first start; the block removes it only while it is empty, and stops when `./zendesk-archive` holds files or is already a link:
+Admin, Import brings the history of the phase 0 archive ([zendesk-backup.md](zendesk-backup.md)) into Maane, on [setup day](#setup-day-from-zendesk-to-maane). It reads the archive and never calls Zendesk, so it needs no token. `docker-compose.yml` mounts the folder `./zendesk-archive` next to it read only at `/zendesk-archive` in `server` (the page shows the archive's brands, tags, and state) and in `worker` (the import reads it). Maane never writes to it. Point `./zendesk-archive` at the archive's folder with a link (here `/srv/zendesk-archive`, the folder that holds `archive.json`). Docker creates an empty `./zendesk-archive` on the first start; the block replaces it only while it is empty, stops when the target holds no `archive.json` or `./zendesk-archive` holds files, and can run again after it stopped halfway. It recreates `server` and `worker`, which see a new link only then:
 
 ```bash
-cd "$HOME/maane" && { [ -L zendesk-archive ] || [ ! -d zendesk-archive ] || rmdir zendesk-archive; } &&
-  ln -sT /srv/zendesk-archive zendesk-archive && docker compose up -d --force-recreate server worker
+(
+  set -euo pipefail
+  target=/srv/zendesk-archive
+  cd "$HOME/maane"
+  [ -f "$target/archive.json" ] || { echo "error: $target holds no archive.json; nothing was changed" >&2; exit 1; }
+  [ -L zendesk-archive ] || [ ! -e zendesk-archive ] || rmdir zendesk-archive
+  ln -sfnT "$target" zendesk-archive
+  docker compose up -d --force-recreate server worker
+)
 ```
 
 The folder must be readable by UID 1000. Check what the worker sees:
@@ -423,7 +437,7 @@ Rehearse on the production server before setup day: the first deployment is a re
    ```
 
    Remove the transport rule and take the rehearsal mailbox out of the application's scope. Do not answer the rehearsal's mail: its links no longer work, and its ticket numbers will belong to other tickets. Then do sections 2 to 4 again for the version the rehearsal ended on, without step 1, and go on with setup day. At SMTP2GO, change the rehearsal's webhook to the new address and token instead of adding a second one.
-6. **Remove it** after setup day, when you no longer need it. The folder holds customer data. This block deletes it for good, and refuses when a Zendesk archive is inside:
+6. **Remove it** after setup day, when you no longer need it. The folder holds customer data. This block deletes it for good, and refuses when a Zendesk archive is inside. A link such as `./zendesk-archive` is removed as a link; the folder it points to stays:
 
    ```bash
    (
@@ -615,7 +629,7 @@ To go back to an earlier version, restore the dump the block took (section 6, in
 
 ## What was verified
 
-Compose values (2026-11-24): `scripts/verify.sh` checked `docker-compose.yml` with `.env` made from `.env.example`, valid and with no variable missing. The `.env` block of section 3 and the two link blocks of [Link tracking](#link-tracking) and [Import from Zendesk](#import-from-zendesk) ran against a stand-in `docker`: `.env` got `LINK_DOMAIN` equal to `DOMAIN`, and each link block replaced a missing or empty folder and stopped on a folder with files or an existing link. In Docker, a bind mount of a link to a folder showed the folder's files. Not run against a real deployment.
+Compose values (2026-11-24): `scripts/verify.sh` checked `docker-compose.yml` with `.env` made from `.env.example`, valid and with no variable missing. The `.env` block of section 3 and the two link blocks of [Link tracking](#link-tracking) and [Import from Zendesk](#import-from-zendesk) ran against a stand-in `docker`: `.env` got `LINK_DOMAIN` equal to `DOMAIN`, and each link block replaced a missing or empty folder and its own earlier link, and stopped on a folder with files or a target that does not hold the expected files. In Docker, a bind mount of a link to a folder showed the folder's files. Not run against a real deployment.
 
 Rehearsal (2026-11-24): its three blocks ran as written, as an unprivileged user with `sudo`, in a throwaway Docker-in-Docker container with the real `docker-compose.yml`, an image built from this repository, real PostgreSQL, and secrets made in it by the blocks of section 3 (`server` and `postgres` only; no `worker`, `clamav`, or Traefik). The mark refuses without the files and once the deployment started. The end disables the Compose file, stops the stack, and renames the folder; it changes nothing in a folder that is not marked, and when Docker does not answer or the target name is taken it leaves a rehearsal that section 4 cannot start, and finishes when run again. A deployment made again from sections 2 to 4 had new secrets, no organization, and an unused ticket number sequence. The removal refuses a folder that is not marked, a symbolic link, and a folder with a Zendesk archive, and leaves the running deployment as it was. The rehearsal itself, with a real mailbox and real providers, has not run.
 

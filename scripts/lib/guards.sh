@@ -202,11 +202,14 @@ for file in docker-compose.yml docker-compose-dev.yml docker/docker-compose-dev.
     fail=1
     continue
   fi
-  # shellcheck disable=SC2016 # a regular expression, not a shell expansion
-  forms="$(grep -oP '\$(?!\{[A-Za-z_][A-Za-z0-9_]*\})\S{0,30}' <<<"${values//\$\$/}" | sort -u || true)"
-  if [ -n "$forms" ]; then
-    echo "  $file: write a variable as \${VAR} or a literal value instead of:"
-    while IFS= read -r form; do echo "    $form"; done <<<"$forms"
+  # Names only, as for secrets: a default or an error message may hold a value that must not reach CI logs.
+  # shellcheck disable=SC2016 # regular expressions, not shell expansions
+  if grep -qP '\$(?!\{[A-Za-z_][A-Za-z0-9_]*\})' <<<"${values//\$\$/}"; then
+    # shellcheck disable=SC2016
+    names="$(grep -oP '\$(?!\{[A-Za-z_][A-Za-z0-9_]*\})\{?\K[A-Za-z_][A-Za-z0-9_]*' <<<"${values//\$\$/}" |
+      sort -u | tr '\n' ' ' || true)"
+    echo "  $file: write a variable as \${VAR} or a literal value: ${names:-a dollar sign without a name}"
+    [ "$file" != docker-compose-dev.yml ] || echo "  Copy it again: cp docker/docker-compose-dev.example.yml docker-compose-dev.yml"
     fail=1
   fi
 done

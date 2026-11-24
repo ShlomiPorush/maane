@@ -77,7 +77,9 @@ write_compose() {
     -e "s|\${MAANE_PORT}|$PORT|g" \
     "$WORKTREE/docker/docker-compose-dev.example.yml" >"$COMPOSE_FILE"
   if grep -qF "\${MAANE_" "$COMPOSE_FILE"; then
-    die "the pull request's docker/docker-compose-dev.example.yml uses variables this script does not set"
+    # restore runs Compose on this file when it exists, and a variable left in it can stop restore too.
+    rm -f "$COMPOSE_FILE"
+    die "the pull request's docker/docker-compose-dev.example.yml uses variables this script does not set (a pull request from before the plain \${VAR} form). Clean up with: scripts/try-pr.sh restore"
   fi
 }
 
