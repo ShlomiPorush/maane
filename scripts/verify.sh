@@ -148,9 +148,9 @@ run_integration() {
 }
 
 # The production Compose file, with .env from .env.example and its two secret files filled in with values new for
-# this check: it must be valid with no variable missing, show
-# no secret in `docker compose config --no-env-resolution` (secrets come only through env_file), and give PostgreSQL
-# only its own variables. Runs in a subshell, so the caller removes the directory whatever happens.
+# this check: it must be valid with no variable missing, show no secret in `docker compose config --no-env-resolution`
+# (secrets come only through env_file), and give PostgreSQL only its own variables. Runs in a subshell, so the caller
+# removes the directory whatever happens.
 production_compose_checks() {
   local dir="$1" password auth keys vapid names
   password="$(random_hex)" auth="$(random_hex)" keys="$(random_hex)" vapid="$(random_hex)"
