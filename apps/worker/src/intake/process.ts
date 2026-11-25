@@ -62,14 +62,7 @@ export function notificationOf(record: IntakeFacts, messageId: string): PushJob 
 }
 
 export async function recordNotRead(tx: Tx, messageId: string): Promise<void> {
-  await tx
-    .insert(intakeRecord)
-    .values({ messageId, outcome: "unreadable", reason: "not_read" })
-    .onConflictDoUpdate({ target: intakeRecord.messageId, set: { reason: "not_read" } })
-}
-
-export async function recordGone(tx: Tx, messageId: string): Promise<void> {
-  await tx.update(intakeRecord).set({ reason: "unavailable" }).where(eq(intakeRecord.messageId, messageId))
+  await tx.insert(intakeRecord).values({ messageId, outcome: "unreadable", reason: "not_read" })
 }
 
 export type Notify = (jobs: QueueDb, job: PushJob) => Promise<void>

@@ -19,6 +19,7 @@ import {
 } from "./content.ts"
 import { type DeltaItem, type GraphConfig, type GraphGateway, graphConfig, graphStatus, isGone } from "./graph.ts"
 import { type ParsedMessage, parseMessage } from "./parse.ts"
+import type { IntakeSync } from "./sync.ts"
 import { wellFormed } from "./text.ts"
 
 export const MAX_RETRIES_PER_RUN = 50
@@ -42,10 +43,19 @@ export class WaitingFiles {
   readonly #settings: Settings
   readonly #files: FileService
   readonly #graph: GraphGateway
+  readonly #sync: IntakeSync
   readonly #now: () => Date
 
-  constructor(options: { db: Db; settings: Settings; files: FileService; graph: GraphGateway; now?: () => Date }) {
+  constructor(options: {
+    db: Db
+    settings: Settings
+    files: FileService
+    graph: GraphGateway
+    sync: IntakeSync
+    now?: () => Date
+  }) {
     this.#db = options.db
+    this.#sync = options.sync
     this.#settings = options.settings
     this.#files = options.files
     this.#graph = options.graph
@@ -55,21 +65,29 @@ export class WaitingFiles {
   async run(limit = MAX_RETRIES_PER_RUN): Promise<RetrySummary> {
     const summary: RetrySummary = { messages: 0, decided: 0, unavailable: 0, stillWaiting: 0 }
     const rows = await this.#db
-      .select({ id: message.id, graphId: message.graphId, mailbox: intakeSource.mailbox, content: message.content })
+      .select({
+        id: message.id,
+        graphId: message.graphId,
+        mailbox: intakeSource.mailbox,
+        content: message.content,
+        notRead: sql<boolean>`${NOT_READ_YET} and ${intakeSource.current}`,
+        graph: message.graph,
+        folder: message.folder,
+        receivedAt: message.receivedAt,
+        source: intakeSource,
+      })
       .from(message)
       .innerJoin(intakeSource, eq(intakeSource.id, message.sourceId))
       .where(
-        and(
-          sql`not ${NOT_READ_YET}`,
-          or(
-            eq(message.rawStatus, "waiting"),
-            sql`jsonb_path_exists(${message.fieldScans}, '$.* ? (@.status == "waiting")')`,
-            exists(
-              this.#db
-                .select({ id: messagePart.id })
-                .from(messagePart)
-                .where(and(eq(messagePart.messageId, message.id), eq(messagePart.status, "waiting"))),
-            ),
+        or(
+          and(NOT_READ_YET, eq(intakeSource.current, true)),
+          eq(message.rawStatus, "waiting"),
+          sql`jsonb_path_exists(${message.fieldScans}, '$.* ? (@.status == "waiting")')`,
+          exists(
+            this.#db
+              .select({ id: messagePart.id })
+              .from(messagePart)
+              .where(and(eq(messagePart.messageId, message.id), eq(messagePart.status, "waiting"))),
           ),
         ),
       )
@@ -83,6 +101,15 @@ export class WaitingFiles {
     for (const item of waiting) {
       summary.messages++
       await this.#db.update(message).set({ retryAt: this.#now() }).where(eq(message.id, item.id))
+      if (item.notRead) {
+        const settled = await this.#sync.askAgain(config, item.source, item).catch((error) => {
+          log.warn("Graph still does not hand over a message; it stays not read yet", errorFacts(error))
+          return false
+        })
+        if (settled) summary.decided++
+        else summary.stillWaiting++
+        continue
+      }
       if (item.content !== "parsed") {
         const result = await this.#retryRecord(config, item)
         if (result === "waiting") summary.stillWaiting++

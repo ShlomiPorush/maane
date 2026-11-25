@@ -15,7 +15,7 @@ import {
   type StoredStatus,
   type TextField,
 } from "@maane/shared"
-import { and, asc, desc, eq, lte, sql } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { auditBlockedPart, type FileService, FileTooLargeError, type ScanOutcome, sha256Of } from "../files/service.ts"
 import type { Tx } from "../files/types.ts"
 import {
@@ -41,25 +41,16 @@ import {
   mayConcernOneMessage,
 } from "./graph.ts"
 import { type MailPart, type ParsedMessage, parseMessage } from "./parse.ts"
-import { recordGone, recordNotRead } from "./process.ts"
+import { recordNotRead } from "./process.ts"
 import { wellFormed } from "./text.ts"
 
 export class SourceChangedError extends Error {
   override name = "SourceChangedError"
 }
 
-class NotHandedOverError extends Error {
-  override name = "NotHandedOverError"
-  constructor(readonly answer: unknown) {
-    super("not_handed_over")
-  }
-}
-
 export const isRefusedValue = (error: unknown) => /^(22|54|08P01)/.test(databaseError(error)?.code ?? "")
 
 export const MAX_PAGES_PER_RUN = 100
-export const MAX_ASKED_AGAIN_PER_RUN = 50
-const MAX_CONTROLS = 20
 
 export interface SyncHooks {
   afterMessages?: (folder: GraphFolder, page: number) => Promise<void>
@@ -71,13 +62,6 @@ export interface SyncSummary {
   skipped: number
   removed: number
   pages: number
-  notRead: number
-}
-
-export interface AskAgainSummary {
-  asked: number
-  read: number
-  gone: number
 }
 
 export interface IntakeOptions {
@@ -123,12 +107,13 @@ export class IntakeSync {
   }
 
   async run(hooks: SyncHooks = {}, maxPages = MAX_PAGES_PER_RUN): Promise<SyncSummary> {
-    const summary: SyncSummary = { status: "done", stored: 0, skipped: 0, removed: 0, pages: 0, notRead: 0 }
+    const summary: SyncSummary = { status: "done", stored: 0, skipped: 0, removed: 0, pages: 0 }
     let failure: unknown
     const config = await graphConfig(this.#settings)
     if (!config) return { ...summary, status: "not_configured" }
-    const source = await this.#source(config)
-    if (!source) return { ...summary, status: "no_source" }
+    const [source] = await this.#db.select().from(intakeSource).where(eq(intakeSource.current, true))
+    if (!source || source.tenantId !== config.tenantId.toLowerCase() || source.mailbox !== config.mailbox)
+      return { ...summary, status: "no_source" }
     for (const folder of GRAPH_FOLDERS) {
       try {
         await this.#folder(config, source, folder, summary, hooks, maxPages)
@@ -147,13 +132,6 @@ export class IntakeSync {
     if (summary.stored > 0) log.info("intake stored new messages", { stored: summary.stored })
     if (failure) throw failure
     return summary
-  }
-
-  async #source(config: GraphConfig): Promise<IntakeSource | null> {
-    const [source] = await this.#db.select().from(intakeSource).where(eq(intakeSource.current, true))
-    return source && source.tenantId === config.tenantId.toLowerCase() && source.mailbox === config.mailbox
-      ? source
-      : null
   }
 
   async #folder(
@@ -186,36 +164,17 @@ export class IntakeSync {
         throw error
       }
       summary.pages++
-      const refused: { item: DeltaItem; answer: unknown }[] = []
       for (const item of result.items) {
         if (item["@removed"]) {
           summary.removed++
           continue
         }
-        const existing = await this.#existing(source.id, item.id)
-        if (existing) {
-          if (existing.content === "unavailable") await this.#listedAgain(source, item.id)
+        if (await this.#stored(source.id, item.id)) {
           summary.skipped++
           continue
         }
-        try {
-          if (await this.#takeIn(config, source, folder, item)) summary.stored++
-          else summary.skipped++
-        } catch (error) {
-          if (!(error instanceof NotHandedOverError)) throw error
-          refused.push({ item, answer: error.answer })
-        }
-      }
-      for (const { item, answer } of refused) {
-        if (!(await this.#handsOver(config, source))) throw answer
-        try {
-          if (await this.#takeIn(config, source, folder, item)) summary.stored++
-          else summary.skipped++
-        } catch (error) {
-          if (!(error instanceof NotHandedOverError)) throw error
-          await this.#storeRecord(source, folder, item, metadataOf(item, folder), "not_read", null)
-          summary.notRead++
-        }
+        if (await this.#takeIn(config, source, folder, item)) summary.stored++
+        else summary.skipped++
       }
       await hooks.afterMessages?.(folder, page)
       const next = result.nextLink ?? result.deltaLink
@@ -226,117 +185,13 @@ export class IntakeSync {
     }
   }
 
-  async #existing(sourceId: string, graphId: string): Promise<{ content: string } | undefined> {
-    const [row] = await this.#db
-      .select({ content: message.content })
-      .from(message)
-      .where(and(eq(message.sourceId, sourceId), eq(message.graphId, graphId)))
-      .limit(1)
-    return row
-  }
-
-  async #handsOver(config: GraphConfig, source: IntakeSource): Promise<boolean> {
-    const limit = await this.#settings.get("files.maxBytes")
-    const controls = await this.#db
-      .select({ graphId: message.graphId })
-      .from(message)
-      .where(and(eq(message.sourceId, source.id), eq(message.content, "parsed"), lte(message.size, limit)))
-      .orderBy(desc(message.receivedAt))
-      .limit(MAX_CONTROLS)
-    for (const { graphId } of controls) {
-      if (graphId === null) continue
-      try {
-        const fetched = await this.#graph.mime(config, source.mailbox, graphId, limit)
-        if (fetched.kind === "ok") return true
-      } catch (error) {
-        if (!mayConcernOneMessage(error)) return false
-      }
-    }
-    return false
-  }
-
-  async #listedAgain(source: IntakeSource, graphId: string): Promise<void> {
-    await this.#db.transaction(async (tx) => {
-      if (!(await holdSourceIfCurrent(tx, source.id))) throw new SourceChangedError()
-      const [row] = await tx
-        .update(message)
-        .set({ retryAt: null })
-        .where(and(eq(message.sourceId, source.id), eq(message.graphId, graphId), eq(message.content, "unavailable")))
-        .returning({ id: message.id })
-      if (row) await this.#waits(tx, row.id)
-    })
-  }
-
-  async #waits(tx: Tx, id: string): Promise<void> {
-    await tx
-      .update(message)
-      .set({
-        state: "processed",
-        processedAt: this.#now(),
-        reviewFlags: sql`array_append(array_remove(array_remove(${message.reviewFlags}, 'unavailable'), 'not_read'), 'not_read')`,
-      })
-      .where(eq(message.id, id))
-    await recordNotRead(tx, id)
-  }
-
-  async #gone(source: IntakeSource, id: string, askedAt: Date): Promise<boolean> {
-    return this.#db.transaction(async (tx) => {
-      if (!(await holdSourceIfCurrent(tx, source.id))) throw new SourceChangedError()
-      const [row] = await tx
-        .update(message)
-        .set({ reviewFlags: sql`array_replace(${message.reviewFlags}, 'not_read', 'unavailable')` })
-        .where(and(eq(message.id, id), NOT_READ_YET, eq(message.retryAt, askedAt)))
-        .returning({ id: message.id })
-      if (row) await recordGone(tx, id)
-      return row !== undefined
-    })
-  }
-
-  async askAgain(limit = MAX_ASKED_AGAIN_PER_RUN): Promise<AskAgainSummary> {
-    const summary: AskAgainSummary = { asked: 0, read: 0, gone: 0 }
-    const config = await graphConfig(this.#settings)
-    const source = config ? await this.#source(config) : null
-    if (!config || !source) return summary
+  async #stored(sourceId: string, graphId: string): Promise<boolean> {
     const rows = await this.#db
       .select({ id: message.id })
       .from(message)
-      .where(and(eq(message.sourceId, source.id), NOT_READ_YET))
-      .orderBy(sql`${message.retryAt} asc nulls first`, asc(message.receivedAt))
-      .limit(limit)
-    if (rows.length === 0) return summary
-    const folders = await this.#graph.folders(config)
-    for (const { id } of rows) {
-      const askedAt = this.#now()
-      const [row] = await this.#db
-        .update(message)
-        .set({ retryAt: askedAt })
-        .where(and(eq(message.id, id), NOT_READ_YET))
-        .returning({ graphId: message.graphId })
-      if (!row?.graphId) continue
-      summary.asked++
-      try {
-        const item = await this.#lookUp(config, source, row.graphId)
-        const folder = item && folders.get(item.parentFolderId ?? "")
-        if (!item || !folder) {
-          if (await this.#gone(source, id, askedAt)) summary.gone++
-        } else if (await this.#takeIn(config, source, folder, item, id)) summary.read++
-      } catch (error) {
-        if (error instanceof SourceChangedError) return summary
-        if (!(error instanceof NotHandedOverError)) throw error
-        log.warn("Graph still does not hand over a message; it stays not read yet", errorFacts(error.answer))
-      }
-    }
-    return summary
-  }
-
-  async #lookUp(config: GraphConfig, source: IntakeSource, graphId: string): Promise<DeltaItem | null> {
-    try {
-      return await this.#graph.metadata(config, source.mailbox, graphId)
-    } catch (error) {
-      if (graphStatus(error) !== 404) throw mayConcernOneMessage(error) ? new NotHandedOverError(error) : error
-      if ((await this.#graph.test(config)).ok) return null
-      throw error
-    }
+      .where(and(eq(message.sourceId, sourceId), eq(message.graphId, graphId)))
+      .limit(1)
+    return rows.length > 0
   }
 
   async #saveCursor(sourceId: string, folder: GraphFolder, link: string): Promise<void> {
@@ -352,12 +207,30 @@ export class IntakeSync {
     })
   }
 
+  async askAgain(
+    config: GraphConfig,
+    source: IntakeSource,
+    row: Pick<typeof message.$inferSelect, "graph" | "folder" | "receivedAt">,
+  ): Promise<boolean> {
+    const meta = row.graph as GraphMeta
+    const item: DeltaItem = {
+      id: meta.id,
+      receivedDateTime: row.receivedAt.toISOString(),
+      internetMessageId: meta.internetMessageId ?? undefined,
+      subject: meta.subject ?? undefined,
+      from: meta.from
+        ? { emailAddress: { address: meta.from.address ?? undefined, name: meta.from.name ?? undefined } }
+        : undefined,
+    }
+    return this.#takeIn(config, source, row.folder as GraphFolder, item, true)
+  }
+
   async #takeIn(
     config: GraphConfig,
     source: IntakeSource,
     folder: GraphFolder,
     item: DeltaItem,
-    waitingId?: string,
+    again = false,
   ): Promise<boolean> {
     const limit = await this.#settings.get("files.maxBytes")
     const meta = metadataOf(item, folder)
@@ -365,17 +238,17 @@ export class IntakeSync {
     try {
       fetched = await this.#graph.mime(config, source.mailbox, item.id, limit)
     } catch (error) {
-      if (graphStatus(error) === 404 && !waitingId && (await this.#lookUp(config, source, item.id)) === null)
-        return this.#storeRecord(source, folder, item, meta, "unavailable", null)
-      throw mayConcernOneMessage(error) ? new NotHandedOverError(error) : error
+      if (!mayConcernOneMessage(error)) throw error
+      if (!again) return this.#storeRecord(source, folder, item, meta, "not_read", null)
+      if (graphStatus(error) !== 404 || !(await this.#graph.test(config)).ok) throw error
+      return this.#storeRecord(source, folder, item, meta, "unavailable", null)
     }
-    if (fetched.kind === "too_large")
-      return this.#storeRecord(source, folder, item, meta, "too_large", fetched.read, { waitingId })
+    if (fetched.kind === "too_large") return this.#storeRecord(source, folder, item, meta, "too_large", fetched.read)
     let parsed: ParsedMessage
     try {
       parsed = await parseMessage(fetched.bytes)
     } catch {
-      return this.#storeRecord(source, folder, item, meta, "unparsed", fetched.bytes.byteLength, { waitingId })
+      return this.#storeRecord(source, folder, item, meta, "unparsed", fetched.bytes.byteLength)
     }
     const content = contentOf(parsed, meta)
     const fields = await scanFields(this.#files, fieldTexts(content))
@@ -390,44 +263,23 @@ export class IntakeSync {
       }
     }
     try {
-      return await this.#storeParsed(
-        source,
-        folder,
-        item,
-        fetched.bytes,
-        parsed,
-        content,
-        fields,
-        raw,
-        parts,
-        waitingId,
-      )
+      return await this.#storeParsed(source, folder, item, fetched.bytes, parsed, content, fields, raw, parts)
     } catch (error) {
       if (!isRefusedValue(error)) throw error
       log.warn("the database refused a value of a message; it is recorded for review", errorFacts(error))
-      return this.#storeRecord(source, folder, item, meta, "unparsed", fetched.bytes.byteLength, {
-        waitingId,
-        flag: "store_failed",
-      })
+      return this.#storeRecord(source, folder, item, meta, "unparsed", fetched.bytes.byteLength, "store_failed")
     }
   }
 
-  async #write(tx: Tx, values: typeof message.$inferInsert, waitingId?: string): Promise<string | undefined> {
-    if (!waitingId) {
-      const [stored] = await tx
-        .insert(message)
-        .values(values)
-        .onConflictDoNothing({ target: [message.sourceId, message.graphId] })
-        .returning({ id: message.id })
-      return stored?.id
-    }
-    const [read] = await tx
-      .update(message)
-      .set({ ...values, state: "stored", processedAt: null, retryAt: null })
-      .where(and(eq(message.id, waitingId), NOT_READ_YET))
+  async #write(tx: Tx, values: typeof message.$inferInsert): Promise<string | undefined> {
+    const row = { state: "stored", processedAt: null, retryAt: null, ...values }
+    const [written] = await tx
+      .insert(message)
+      .values(row)
+      .onConflictDoUpdate({ target: [message.sourceId, message.graphId], set: row, setWhere: NOT_READ_YET })
       .returning({ id: message.id })
-    if (read) await tx.delete(intakeRecord).where(eq(intakeRecord.messageId, read.id))
-    return read?.id
+    if (written) await tx.delete(intakeRecord).where(eq(intakeRecord.messageId, written.id))
+    return written?.id
   }
 
   async #storeRecord(
@@ -435,12 +287,12 @@ export class IntakeSync {
     folder: GraphFolder,
     item: DeltaItem,
     meta: GraphMeta,
-    reason: Exclude<MessageContent, "parsed"> | "not_read",
+    content: Exclude<MessageContent, "parsed"> | "not_read",
     size: number | null,
-    options: { waitingId?: string; flag?: MessageFlag } = {},
+    reason?: MessageFlag,
   ): Promise<boolean> {
-    const content = reason === "not_read" ? "unavailable" : reason
-    const flag: MessageFlag = options.flag ?? (reason === "unparsed" ? "parse_failed" : reason)
+    const notRead = content === "not_read"
+    const flag: MessageFlag = reason ?? (content === "unparsed" ? "parse_failed" : content)
     const fixed = wellFormed({
       graph: {
         ...meta,
@@ -471,23 +323,20 @@ export class IntakeSync {
         }
     return this.#db.transaction(async (tx) => {
       if (!(await holdSourceIfCurrent(tx, source.id))) throw new SourceChangedError()
-      const id = await this.#write(
-        tx,
-        {
-          sourceId: source.id,
-          graphId: item.id,
-          folder,
-          receivedAt: this.#receivedAt(item),
-          content,
-          size,
-          ...values,
-          fieldScans: fields,
-          reviewFlags: flags,
-        },
-        options.waitingId,
-      )
+      const id = await this.#write(tx, {
+        sourceId: source.id,
+        graphId: item.id,
+        folder,
+        receivedAt: this.#receivedAt(item),
+        content: notRead ? "unavailable" : content,
+        size,
+        ...values,
+        fieldScans: fields,
+        reviewFlags: flags,
+        ...(notRead ? { state: "processed", processedAt: this.#now() } : {}),
+      })
       if (id) {
-        if (reason === "not_read") await this.#waits(tx, id)
+        if (notRead) await recordNotRead(tx, id)
         await auditBlockedFields(tx, id, {}, fields)
         log.warn("a message was recorded for review without its content", { reason: flag })
       }
@@ -510,7 +359,6 @@ export class IntakeSync {
     fields: Partial<Record<TextField, FieldScan>>,
     rawScan: ScanOutcome,
     parts: PartScan[],
-    waitingId?: string,
   ): Promise<boolean> {
     const columns = columnsOf(content, fields)
     const names = partNamesOf(content, fields)
@@ -524,22 +372,18 @@ export class IntakeSync {
 
     return this.#db.transaction(async (tx) => {
       if (!(await holdSourceIfCurrent(tx, source.id))) throw new SourceChangedError()
-      const id = await this.#write(
-        tx,
-        {
-          sourceId: source.id,
-          graphId: item.id,
-          folder,
-          receivedAt: this.#receivedAt(item),
-          content: "parsed",
-          size: raw.byteLength,
-          ...columns,
-          contentHash: parsed.contentHash,
-          rawStatus: rawScan.status,
-          reviewFlags: flags,
-        },
-        waitingId,
-      )
+      const id = await this.#write(tx, {
+        sourceId: source.id,
+        graphId: item.id,
+        folder,
+        receivedAt: this.#receivedAt(item),
+        content: "parsed",
+        size: raw.byteLength,
+        ...columns,
+        contentHash: parsed.contentHash,
+        rawStatus: rawScan.status,
+        reviewFlags: flags,
+      })
       if (!id) return false
       await auditBlockedFields(tx, id, {}, fields)
       for (const [position, scan] of parts.entries()) {

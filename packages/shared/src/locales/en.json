@@ -469,7 +469,7 @@
     }
   },
   "flag": {
-    "unavailable": "Moved or deleted",
+    "unavailable": "Gone from the mailbox",
     "not_read": "Not read yet",
     "parse_failed": "Could not be read",
     "too_large": "Message too large",
@@ -510,7 +510,7 @@
     "reason": {
       "copy": "Same Message-ID, sender, date, and content as an earlier message",
       "process_failed": "Processing failed",
-      "unavailable": "Moved or deleted before Maane read it",
+      "unavailable": "Gone from the mailbox before Maane read it",
       "not_read": "Microsoft 365 has not handed it over yet",
       "unparsed": "Maane could not read it",
       "too_large": "Larger than the file size limit",

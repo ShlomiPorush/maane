@@ -46,13 +46,14 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
     if (!id) throw new Error("the queue did not accept a push-notify job")
   }
   const graph = new GraphGateway()
+  const sync = new IntakeSync({ db: database.db, settings, files, graph })
   const intake = {
     pool: database.pool,
     settings,
     graph,
-    sync: new IntakeSync({ db: database.db, settings, files, graph }),
+    sync,
     process: new IntakeProcessor({ db: database.db, notify }),
-    retry: new WaitingFiles({ db: database.db, settings, files, graph }),
+    retry: new WaitingFiles({ db: database.db, settings, files, graph, sync }),
   }
   const sending = openDatabase(config.databaseUrl, 2, { statementTimeoutMs: SEND_STATEMENT_TIMEOUT_MS })
   const sendSettings = new Settings(sending.db, createSettingsCipher(config.settingsKeys), {

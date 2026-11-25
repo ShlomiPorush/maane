@@ -1,19 +1,14 @@
-import { randomUUID } from "node:crypto"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { SYSTEM } from "@maane/server/audit"
 import { intakeCursor, intakeRecord, message } from "@maane/server/db/schema"
-import { INTAKE_FILES_RETRY } from "@maane/server/jobs/queue"
 import { Tickets } from "@maane/server/tickets/service"
 import { eq } from "drizzle-orm"
-import { PgBoss } from "pg-boss"
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { eicar } from "../files/samples.ts"
-import { registerJobs } from "../jobs.ts"
 import { refusedAddress, type StandInClamd, startStandInClamd } from "../testing/clamd.ts"
 import { type IntakeHarness, startIntake } from "../testing/intake.ts"
 import { mime } from "../testing/mime.ts"
-import { IntakeSync, MAX_ASKED_AGAIN_PER_RUN } from "./sync.ts"
+import { MAX_RETRIES_PER_RUN, WaitingFiles } from "./retry.ts"
+import { IntakeSync } from "./sync.ts"
 
 const SUPPORT = "support@example.com"
 
@@ -31,13 +26,9 @@ afterEach(async () => {
   intake = null
 })
 
-async function start(options: { address?: boolean; read?: boolean } = {}): Promise<IntakeHarness> {
+async function start(options: { address?: boolean } = {}): Promise<IntakeHarness> {
   intake = await startIntake(clamd)
   if (options.address !== false) await intake.organization("Example Support", [{ value: SUPPORT, isDefault: true }])
-  if (options.read !== false) {
-    intake.graph.add(mime({ subject: "read before" }))
-    await intake.round()
-  }
   return intake
 }
 
@@ -63,10 +54,11 @@ const logOf = async (h: IntakeHarness, subject: string) =>
 
 const NOT_READ = { outcome: "unreadable", reasons: ["not_read"], flags: ["not_read"] }
 const GONE = { outcome: "unreadable", reasons: ["unavailable"], flags: ["unavailable"] }
+const TICKET = { outcome: "new_ticket", reasons: [], flags: [] }
 
-async function failingMessage(h: IntakeHarness, subject = "failing", status = 500): Promise<string> {
+async function refusedMessage(h: IntakeHarness, subject = "refused"): Promise<string> {
   const id = h.graph.add(mime({ subject, to: SUPPORT, messageId: `${subject}@example.com` }))
-  h.graph.fail(id, status)
+  h.graph.fail(id)
   await h.round()
   expect(await notRead(h)).toEqual([id])
   return id
@@ -78,88 +70,91 @@ describe("a message Graph does not hand over", () => {
     async (status) => {
       const h = await start()
       h.graph.pageSize = 2
-      const failing = h.graph.add(mime({ subject: "failing", to: SUPPORT }))
-      h.graph.fail(failing, status)
+      const refused = h.graph.add(mime({ subject: "refused", to: SUPPORT }))
+      h.graph.fail(refused, status)
       const rest = Array.from({ length: 4 }, (_, i) => h.graph.add(mime({ subject: `rest ${i}` })))
       const junk = h.graph.add(mime({ subject: "junk" }), { folder: "junkemail" })
-      expect(await h.sync.run()).toMatchObject({ status: "done", stored: 5, notRead: 1 })
+      expect(await h.sync.run()).toMatchObject({ status: "done", stored: 6 })
       expect(await cursorOf(h)).toContain("$deltatoken=")
       for (const id of [...rest, junk]) expect((await h.messageOf(id)).content).toBe("parsed")
-      expect(await logOf(h, "failing")).toEqual([NOT_READ])
+      expect(await logOf(h, "refused")).toEqual([NOT_READ])
       await h.processor.run()
-      expect(await logOf(h, "failing")).toEqual([NOT_READ])
-      expect(await h.ticketOf(failing)).toBeUndefined()
+      expect(await logOf(h, "refused")).toEqual([NOT_READ])
+      expect(await h.ticketOf(refused)).toBeUndefined()
 
-      expect(await h.sync.askAgain()).toEqual({ asked: 1, read: 0, gone: 0 })
-      expect(await h.sync.run()).toMatchObject({ stored: 0, skipped: 0, notRead: 0 })
-      h.graph.fail(failing, null)
-      expect(await h.sync.askAgain()).toEqual({ asked: 1, read: 1, gone: 0 })
+      expect(await h.retry.run()).toMatchObject({ messages: 1, stillWaiting: 1 })
+      expect(await logOf(h, "refused")).toEqual([NOT_READ])
+      h.graph.fail(refused, null)
+      expect(await h.retry.run()).toMatchObject({ messages: 1, decided: 1 })
       await h.round()
-      expect(await logOf(h, "failing")).toEqual([{ outcome: "new_ticket", reasons: [], flags: [] }])
-      expect((await h.ticketOf(failing))?.subject).toBe("failing")
-      expect(await rowsOf(h, failing)).toHaveLength(1)
-      expect(await h.sync.askAgain()).toEqual({ asked: 0, read: 0, gone: 0 })
-      expect(await h.tickets()).toHaveLength(7)
+      expect(await logOf(h, "refused")).toEqual([TICKET])
+      expect((await h.ticketOf(refused))?.subject).toBe("refused")
+      expect(await rowsOf(h, refused)).toHaveLength(1)
+      expect(await h.retry.run()).toMatchObject({ messages: 0 })
+      expect(await h.tickets()).toHaveLength(6)
     },
   )
 
-  it("stays not read yet while it always fails, and other mail flows in every round", async () => {
+  it("stays not read yet while it is always refused, and other mail flows in every round", async () => {
     const h = await start()
-    const failing = await failingMessage(h)
+    const refused = await refusedMessage(h)
     for (let round = 0; round < 5; round++) {
       const other = h.graph.add(mime({ subject: `other ${round}` }))
       await h.round()
       expect((await h.ticketOf(other))?.subject).toBe(`other ${round}`)
-      expect(await h.sync.askAgain()).toEqual({ asked: 1, read: 0, gone: 0 })
+      expect(await h.retry.run()).toMatchObject({ messages: 1, stillWaiting: 1 })
     }
-    expect(await notRead(h)).toEqual([failing])
-    expect(await logOf(h, "failing")).toEqual([NOT_READ])
+    expect(await notRead(h)).toEqual([refused])
+    expect(await logOf(h, "refused")).toEqual([NOT_READ])
   })
 
   it("shows in the log also while no default address exists", async () => {
     const h = await start({ address: false })
-    const failing = await failingMessage(h)
-    expect(await logOf(h, "failing")).toEqual([NOT_READ])
-    h.graph.fail(failing, null)
-    await h.sync.askAgain()
+    const refused = await refusedMessage(h)
+    expect(await logOf(h, "refused")).toEqual([NOT_READ])
+    h.graph.fail(refused, null)
+    await h.retry.run()
     expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
-    expect((await h.messageOf(failing)).state).toBe("stored")
+    expect((await h.messageOf(refused)).state).toBe("stored")
   })
 
   it("joins its ticket when its reply came first", async () => {
     const h = await start()
-    const failing = await failingMessage(h, "original")
+    const refused = await refusedMessage(h, "original")
     const reply = h.graph.add(mime({ subject: "reply", to: SUPPORT, inReplyTo: "original@example.com" }))
     await h.round()
-    h.graph.fail(failing, null)
-    await h.sync.askAgain()
+    h.graph.fail(refused, null)
+    await h.retry.run()
     await h.round()
-    expect((await h.messageOf(failing)).ticketId).toBe((await h.messageOf(reply)).ticketId)
+    expect((await h.messageOf(refused)).ticketId).toBe((await h.messageOf(reply)).ticketId)
     expect(await logOf(h, "original")).toEqual([{ outcome: "joined", reasons: [], flags: [] }])
   })
 
   it("opens no ticket before its scans when the scanner is down once it is handed over", async () => {
     const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.fail(failing, null)
+    const refused = await refusedMessage(h)
+    h.graph.fail(refused, null)
     await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
-    expect(await h.sync.askAgain()).toMatchObject({ read: 1 })
+    expect(await h.retry.run()).toMatchObject({ decided: 1 })
     expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
     await h.settings.update({ "scanner.address": clamd.address }, SYSTEM)
     expect(await h.retry.run()).toMatchObject({ decided: 1 })
     expect(await h.processor.run()).toEqual({ processed: 1, failed: 0 })
-    expect((await h.ticketOf(failing))?.subject).toBe("failing")
+    expect((await h.ticketOf(refused))?.subject).toBe("refused")
   })
 
-  it("is recorded as too large when it is larger than the limit once handed over", async () => {
+  it("is recorded as unreadable when that is what it is once handed over", async () => {
     const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.fail(failing, null)
-    await h.settings.update({ "files.maxBytes": 1024 * 1024 }, SYSTEM)
-    h.graph.replace(failing, mime({ subject: "failing", text: { content: "x".repeat(2_000_000) } }))
-    expect(await h.sync.askAgain()).toMatchObject({ read: 1 })
+    const refused = h.graph.add(Buffer.from(`Subject: broken\r\nX-Long: ${"a".repeat(1_100_000)}\r\n\r\nbody\r\n`))
+    h.graph.fail(refused)
     await h.round()
-    expect(await logOf(h, "failing")).toEqual([{ outcome: "unreadable", reasons: ["too_large"], flags: ["too_large"] }])
+    expect(await logOf(h, "broken")).toEqual([NOT_READ])
+    h.graph.fail(refused, null)
+    expect(await h.retry.run()).toMatchObject({ decided: 1 })
+    await h.round()
+    expect(await logOf(h, "broken")).toEqual([
+      { outcome: "unreadable", reasons: ["unparsed"], flags: ["parse_failed"] },
+    ])
   })
 
   it("shows no subject the scanner refused", async () => {
@@ -170,324 +165,107 @@ describe("a message Graph does not hand over", () => {
     expect(entry).toMatchObject({ subject: null, reasons: ["not_read"], flags: ["blocked_content", "not_read"] })
   })
 
-  it("is asked for again by the retry job that also scans waiting files", async () => {
+  it("does not hold up the first mail of a mailbox", async () => {
     const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.fail(failing, null)
-    const boss = new PgBoss({ connectionString: h.database.url, schema: "pgboss" })
-    boss.on("error", () => {})
-    await boss.start()
-    try {
-      await registerJobs(boss, {
-        heartbeatFile: join(tmpdir(), `maane-heartbeat-${randomUUID()}`),
-        files: h.files,
-        intake: {
-          pool: h.database.pool,
-          settings: h.settings,
-          graph: h.gateway,
-          sync: h.sync,
-          process: h.processor,
-          retry: h.retry,
-        },
-      })
-      await boss.send(INTAKE_FILES_RETRY, {})
-      await expect.poll(async () => (await h.messageOf(failing)).content, { timeout: 20_000 }).toBe("parsed")
-    } finally {
-      await boss.stop({ graceful: true, timeout: 5_000 })
-    }
-  }, 60_000)
-
-  it("is recorded as unreadable when that is what it is once handed over", async () => {
-    const h = await start()
-    const failing = h.graph.add(Buffer.from(`Subject: broken\r\nX-Long: ${"a".repeat(1_100_000)}\r\n\r\nbody\r\n`))
-    h.graph.fail(failing)
+    h.graph.pageSize = 1
+    const refused = await refusedMessage(h)
+    const second = h.graph.add(mime({ subject: "second" }))
     await h.round()
-    expect(await logOf(h, "broken")).toEqual([NOT_READ])
-    h.graph.fail(failing, null)
-    expect(await h.sync.askAgain()).toMatchObject({ read: 1 })
-    await h.round()
-    expect(await logOf(h, "broken")).toEqual([
-      { outcome: "unreadable", reasons: ["unparsed"], flags: ["parse_failed"] },
-    ])
-    expect(await notRead(h)).toEqual([])
+    expect((await h.ticketOf(second))?.subject).toBe("second")
+    expect(await notRead(h)).toEqual([refused])
   })
 })
 
 describe("an error that concerns every message", () => {
-  it.each([400, 401, 403, 429, 500, 503, 504, 509, "network"] as const)(
-    "marks no message when Graph answers every content request with %s, and the cursor stays",
+  it.each([401, 429, 503, 509, "network"] as const)(
+    "fails the round when Graph answers every content request with %s, and the cursor stays",
     async (status) => {
       const h = await start()
+      await h.round()
       const cursor = await cursorOf(h)
       const ids = Array.from({ length: 3 }, (_, i) => h.graph.add(mime({ subject: `waiting ${i}` })))
       h.graph.failContent(status)
       await expect(h.sync.run()).rejects.toThrow()
-      expect(await notRead(h)).toEqual([])
+      expect(await h.database.db.select().from(message)).toEqual([])
       expect(await cursorOf(h)).toBe(cursor)
       h.graph.failContent(null)
-      expect(await h.sync.run()).toMatchObject({ stored: 3, notRead: 0 })
+      expect(await h.sync.run()).toMatchObject({ stored: 3 })
       for (const id of ids) expect(await rowsOf(h, id)).toHaveLength(1)
     },
     60_000,
   )
 
-  it.each([403, 500, 503] as const)("marks no message when %i starts in the middle of a page", async (status) => {
-    const h = await start()
-    const cursor = await cursorOf(h)
-    for (let i = 0; i < 4; i++) h.graph.add(mime({ subject: `middle ${i}` }))
-    h.graph.failContent(status, { after: 2 })
-    await expect(h.sync.run()).rejects.toThrow()
-    expect(await notRead(h)).toEqual([])
-    expect(await cursorOf(h)).toBe(cursor)
-    h.graph.failContent(null)
-    expect(await h.sync.run()).toMatchObject({ stored: 2, skipped: 2, notRead: 0 })
-  })
+  it.each([400, 403, 500, 504] as const)(
+    "loses no message when Graph answers every content request with %s for a while",
+    async (status) => {
+      const h = await start()
+      const ids = Array.from({ length: 3 }, (_, i) => h.graph.add(mime({ subject: `mail ${i}`, to: SUPPORT })))
+      h.graph.failContent(status)
+      await h.round()
+      expect(await h.retry.run()).toMatchObject({ messages: 3, stillWaiting: 3 })
+      h.graph.failContent(null)
+      expect(await h.retry.run()).toMatchObject({ messages: 3, decided: 3 })
+      await h.round()
+      for (const [i, id] of ids.entries()) {
+        expect(await rowsOf(h, id)).toHaveLength(1)
+        expect(await logOf(h, `mail ${i}`)).toEqual([TICKET])
+      }
+      expect(await h.tickets()).toHaveLength(3)
+    },
+  )
 
-  it("marks no message when the error ended before the page did", async () => {
+  it("ends no message while the whole mailbox answers 404, from the middle of a page on", async () => {
     const h = await start()
-    for (let i = 0; i < 3; i++) h.graph.add(mime({ subject: `short ${i}` }))
-    h.graph.failContent(500, { times: 2 })
-    expect(await h.sync.run()).toMatchObject({ status: "done", stored: 3, notRead: 0 })
-    expect(await notRead(h)).toEqual([])
-  })
-
-  it("marks no message while Graph handed over none before, and tells them apart once it does", async () => {
-    const h = await start({ read: false })
-    const failing = h.graph.add(mime({ subject: "failing" }))
-    h.graph.fail(failing)
-    await expect(h.sync.run()).rejects.toThrow()
-    expect(await notRead(h)).toEqual([])
-    expect(await cursorOf(h)).toBeUndefined()
-    const second = h.graph.add(mime({ subject: "second" }))
-    expect(await h.sync.run()).toMatchObject({ stored: 1, notRead: 1 })
-    expect((await h.messageOf(second)).content).toBe("parsed")
-    expect(await notRead(h)).toEqual([failing])
-  })
-
-  it("compares with an older message when the newest ones left the mailbox or are too large by now", async () => {
-    const h = await start()
-    const large = h.graph.add(mime({ text: { content: "x".repeat(2_000_000) } }))
-    const removed = h.graph.add(mime({ subject: "removed later" }))
-    await h.round()
-    h.graph.remove(removed)
-    await h.settings.update({ "files.maxBytes": 1024 * 1024 }, SYSTEM)
-    expect((await h.messageOf(large)).content).toBe("parsed")
-    await failingMessage(h)
-  })
-
-  it("compares with a message further back when the newest ones are gone or fail too", async () => {
-    const h = await start()
-    const newer = Array.from({ length: 10 }, (_, i) => h.graph.add(mime({ subject: `newer ${i}` })))
-    await h.round()
-    for (const id of newer.slice(0, 5)) h.graph.remove(id)
-    for (const id of newer.slice(5)) h.graph.fail(id)
-    await failingMessage(h)
-  })
-
-  it("waits when its content answers 404 after another error while it is in its folder", async () => {
-    const h = await start()
-    const failing = h.graph.add(mime({ subject: "failing" }))
-    h.graph.fail(failing, 500)
-    const hold = h.graph.hold(h.graph.add(mime({ subject: "held" })))
-    const round = h.sync.run()
-    await hold.reached
-    h.graph.fail(failing, 404)
-    hold.release()
-    expect(await round).toMatchObject({ status: "done", notRead: 1 })
-    expect(await notRead(h)).toEqual([failing])
-  })
-
-  it("marks and ends nothing when the whole mailbox answers 404 from the middle of a page", async () => {
-    const h = await start()
-    const cursor = await cursorOf(h)
-    const first = h.graph.add(mime({ subject: "first" }))
-    h.graph.add(mime({ subject: "second" }))
+    const first = h.graph.add(mime({ subject: "first", to: SUPPORT }))
+    const second = h.graph.add(mime({ subject: "second", to: SUPPORT }))
     const hold = h.graph.hold(first)
     const round = h.sync.run()
     await hold.reached
     h.graph.loseMailbox(true)
     hold.release()
     await expect(round).rejects.toThrow()
-    expect(await cursorOf(h)).toBe(cursor)
-    expect(await h.database.db.select().from(message).where(eq(message.content, "unavailable"))).toEqual([])
+    expect(await notRead(h)).toEqual([second])
+    expect(await h.retry.run()).toMatchObject({ messages: 1, stillWaiting: 1 })
+    expect(await notRead(h)).toEqual([second])
     h.graph.loseMailbox(false)
-    expect(await h.sync.run()).toMatchObject({ stored: 1, skipped: 1, notRead: 0 })
-  })
-
-  it("marks and ends nothing when the whole mailbox answers 404 right after another message was handed over", async () => {
-    const h = await start({ read: false })
-    const control = h.graph.add(mime({ subject: "control" }))
+    expect(await h.retry.run()).toMatchObject({ decided: 1 })
     await h.round()
-    const cursor = await cursorOf(h)
-    h.graph.fail(h.graph.add(mime({ subject: "refused" })))
-    const hold = h.graph.hold(control)
-    const round = h.sync.run()
-    await hold.reached
-    h.graph.loseMailbox(true)
-    hold.release()
-    await expect(round).rejects.toThrow()
-    expect(await notRead(h)).toEqual([])
-    expect(await cursorOf(h)).toBe(cursor)
-  })
-
-  it("ends nothing when the whole mailbox answers 404 while the retry runs", async () => {
-    const h = await start()
-    const failing = await failingMessage(h)
-    const hold = h.graph.hold(failing)
-    const asked = h.sync.askAgain()
-    await hold.reached
-    h.graph.loseMailbox(true)
-    h.graph.vanish(failing)
-    hold.release()
-    await expect(asked).rejects.toThrow()
-    expect(await notRead(h)).toEqual([failing])
-  })
-
-  it("ends nothing at the retry when the whole mailbox answers 404, and goes on when it is back", async () => {
-    const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.loseMailbox(true)
-    await expect(h.sync.askAgain()).rejects.toThrow()
-    expect(await notRead(h)).toEqual([failing])
-    h.graph.loseMailbox(false)
-    h.graph.fail(failing, null)
-    expect(await h.sync.askAgain()).toMatchObject({ read: 1 })
-  })
-
-  it("stops the retry at the first error that concerns every message", async () => {
-    const h = await start()
-    for (const subject of ["one", "two"]) h.graph.fail(h.graph.add(mime({ subject })))
-    await h.round()
-    expect(await notRead(h)).toHaveLength(2)
-    h.graph.failContent(503)
-    await expect(h.sync.askAgain()).rejects.toThrow()
-    const tried = (await h.database.db.select({ at: message.retryAt }).from(message)).filter((row) => row.at !== null)
-    expect(tried).toHaveLength(1)
-    expect(await notRead(h)).toHaveLength(2)
+    expect(await logOf(h, "first")).toEqual([TICKET])
+    expect(await logOf(h, "second")).toEqual([TICKET])
   })
 })
 
-describe("a message not read yet that leaves the mailbox", () => {
-  it("is gone when it is deleted for good, and is not asked for again", async () => {
+describe("a message not read yet that leaves its folder", () => {
+  it("is gone once it is deleted for good, and is not asked for again", async () => {
     const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.remove(failing)
-    expect(await h.sync.askAgain()).toEqual({ asked: 1, read: 0, gone: 1 })
-    expect(await logOf(h, "failing")).toEqual([GONE])
+    const refused = await refusedMessage(h)
+    h.graph.remove(refused)
+    h.graph.fail(refused, null)
+    expect(await h.retry.run()).toMatchObject({ messages: 1, decided: 1 })
     await h.round()
-    expect(await h.sync.askAgain()).toEqual({ asked: 0, read: 0, gone: 0 })
-    expect(await logOf(h, "failing")).toEqual([GONE])
+    expect(await logOf(h, "refused")).toEqual([GONE])
+    expect(await h.retry.run()).toMatchObject({ messages: 0 })
+    expect(await h.tickets()).toEqual([])
   })
 
-  it("is gone when it is moved to Deleted Items, and waits again when it is restored", async () => {
+  it("is taken in from another folder once it is handed over", async () => {
     const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.trash(failing)
+    const refused = await refusedMessage(h)
+    h.graph.trash(refused)
     await h.round()
-    expect(await h.sync.askAgain()).toEqual({ asked: 1, read: 0, gone: 1 })
-    expect(await logOf(h, "failing")).toEqual([GONE])
-    h.graph.move(failing, "inbox")
+    expect(await logOf(h, "refused")).toEqual([NOT_READ])
+    h.graph.fail(refused, null)
+    expect(await h.retry.run()).toMatchObject({ decided: 1 })
     await h.round()
-    expect(await logOf(h, "failing")).toEqual([NOT_READ])
-    h.graph.fail(failing, null)
-    expect(await h.sync.askAgain()).toMatchObject({ read: 1 })
-    await h.round()
-    expect(await logOf(h, "failing")).toEqual([{ outcome: "new_ticket", reasons: [], flags: [] }])
-  })
-
-  it.each([
-    ["inbox", "junkemail", true],
-    ["inbox", "junkemail", false],
-    ["junkemail", "inbox", true],
-    ["junkemail", "inbox", false],
-  ] as const)("is still read after a move from %s to %s (retry first: %s)", async (from, to, retryFirst) => {
-    const h = await start()
-    const failing = h.graph.add(mime({ subject: "moved", to: SUPPORT }), { folder: from })
-    h.graph.fail(failing)
-    await h.round()
-    h.graph.move(failing, to)
-    if (retryFirst) await h.sync.askAgain()
-    await h.round()
-    expect(await logOf(h, "moved")).toEqual([NOT_READ])
-    h.graph.fail(failing, null)
-    expect(await h.sync.askAgain()).toMatchObject({ read: 1 })
-    await h.round()
-    expect(await h.messageOf(failing)).toMatchObject({ content: "parsed", folder: to })
-    expect(await logOf(h, "moved")).toEqual([{ outcome: "new_ticket", reasons: [], flags: [] }])
-  })
-
-  it("is gone when it is moved to a folder Maane does not read", async () => {
-    const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.trash(failing)
-    expect(await h.sync.askAgain()).toMatchObject({ gone: 1 })
-    expect(await logOf(h, "failing")).toEqual([GONE])
-  })
-
-  it("keeps waiting in the folder it is in when an older page still lists it in the other one", async () => {
-    const h = await start()
-    h.graph.pageSize = 1
-    h.graph.add(mime({ subject: "first junk" }), { folder: "junkemail" })
-    const failing = h.graph.add(mime({ subject: "moved", to: SUPPORT }), { folder: "junkemail" })
-    h.graph.fail(failing)
-    await h.sync.run({}, 1)
-    h.graph.move(failing, "inbox")
-    await h.round()
-    expect(await notRead(h)).toEqual([failing])
-    expect(await h.sync.askAgain()).toEqual({ asked: 1, read: 0, gone: 0 })
-    h.graph.fail(failing, null)
-    expect(await h.sync.askAgain()).toMatchObject({ read: 1 })
-    expect(await h.messageOf(failing)).toMatchObject({ content: "parsed", folder: "inbox" })
-  })
-
-  it("waits again when it is restored while an answer that it left is on its way", async () => {
-    const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.trash(failing)
-    const hold = h.graph.hold(failing)
-    const asked = h.sync.askAgain()
-    await hold.reached
-    h.graph.move(failing, "inbox")
-    await h.sync.run()
-    h.graph.remove(failing)
-    hold.release()
-    expect(await asked).toEqual({ asked: 1, read: 0, gone: 0 })
-    expect(await notRead(h)).toEqual([failing])
-  })
-
-  it("waits again when it is restored while the scanner retry asks for its metadata", async () => {
-    const h = await start()
-    await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
-    const failing = h.graph.add(mime({ subject: "failing" }))
-    h.graph.fail(failing)
-    await h.round()
-    h.graph.trash(failing)
-    expect(await h.sync.askAgain()).toMatchObject({ gone: 1 })
-    const hold = h.graph.hold(failing)
-    const scanned = h.retry.run()
-    await hold.reached
-    h.graph.move(failing, "inbox")
-    await h.sync.run()
-    h.graph.remove(failing)
-    hold.release()
-    await scanned
-    expect(await notRead(h)).toEqual([failing])
-  })
-
-  it("keeps waiting when only its content answers 404 while it is in its folder", async () => {
-    const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.fail(failing, 404)
-    expect(await h.sync.askAgain()).toEqual({ asked: 1, read: 0, gone: 0 })
-    expect(await notRead(h)).toEqual([failing])
+    expect(await logOf(h, "refused")).toEqual([TICKET])
   })
 })
 
 describe("restarts, old mailboxes, and work at the same time", () => {
   it("repeats nothing after a stop between the record and the cursor", async () => {
     const h = await start()
-    const failing = h.graph.add(mime({ subject: "failing" }))
-    h.graph.fail(failing)
+    const refused = h.graph.add(mime({ subject: "refused" }))
+    h.graph.fail(refused)
     const other = h.graph.add(mime({ subject: "other" }))
     await expect(
       h.sync.run({
@@ -496,105 +274,79 @@ describe("restarts, old mailboxes, and work at the same time", () => {
         },
       }),
     ).rejects.toThrow("stopped")
-    expect(await notRead(h)).toEqual([failing])
+    expect(await notRead(h)).toEqual([refused])
     const restarted = new IntakeSync({ db: h.database.db, settings: h.settings, files: h.files, graph: h.gateway })
-    expect(await restarted.run()).toMatchObject({ status: "done", stored: 0, skipped: 2, notRead: 0 })
-    expect(await rowsOf(h, failing)).toHaveLength(1)
-    expect(await rowsOf(h, other)).toHaveLength(1)
-    expect(await logOf(h, "failing")).toEqual([NOT_READ])
+    expect(await restarted.run()).toMatchObject({ status: "done", stored: 0, skipped: 2 })
+    for (const id of [refused, other]) expect(await rowsOf(h, id)).toHaveLength(1)
+    expect(await logOf(h, "refused")).toEqual([NOT_READ])
   })
 
   it("is processed once after a stop between its content and its ticket", async () => {
     const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.fail(failing, null)
-    await h.sync.askAgain()
-    const restarted = new IntakeSync({ db: h.database.db, settings: h.settings, files: h.files, graph: h.gateway })
-    expect(await restarted.askAgain()).toEqual({ asked: 0, read: 0, gone: 0 })
-    await restarted.run()
+    const refused = await refusedMessage(h)
+    h.graph.fail(refused, null)
+    await h.retry.run()
+    expect(await h.retry.run()).toMatchObject({ messages: 0 })
+    await h.sync.run()
     await h.processor.run()
     await h.processor.run()
-    expect(await h.database.db.select().from(intakeRecord)).toHaveLength(2)
-    expect(await h.tickets()).toHaveLength(2)
+    expect(await h.database.db.select().from(intakeRecord)).toHaveLength(1)
+    expect(await h.tickets()).toHaveLength(1)
   })
 
   it("is taken in once when two workers ask for it at the same time, also beside a sync round", async () => {
     const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.fail(failing, null)
-    const second = new IntakeSync({ db: h.database.db, settings: h.settings, files: h.files, graph: h.gateway })
-    const [one, two] = await Promise.all([h.sync.askAgain(), second.askAgain(), h.sync.run()])
-    expect((one?.read ?? 0) + (two?.read ?? 0)).toBe(1)
+    const refused = await refusedMessage(h)
+    h.graph.fail(refused, null)
+    const parts = { db: h.database.db, settings: h.settings, files: h.files, graph: h.gateway }
+    const second = new WaitingFiles({ ...parts, sync: new IntakeSync(parts) })
+    const [one, two] = await Promise.all([h.retry.run(), second.run(), h.sync.run()])
+    expect(one.decided + two.decided).toBe(1)
     await h.round()
-    expect(await rowsOf(h, failing)).toHaveLength(1)
-    expect(await h.tickets()).toHaveLength(2)
+    expect(await rowsOf(h, refused)).toHaveLength(1)
+    expect(await h.tickets()).toHaveLength(1)
   })
 
   it("is not asked for while another mailbox is configured, and resumes when its own is back", async () => {
     const h = await start()
-    const failing = await failingMessage(h)
+    const refused = await refusedMessage(h)
+    h.graph.fail(refused, null)
     const own = h.graph.mailbox
     h.graph.allow("other-intake@example.com")
     await h.settings.update({ "graph.mailbox": "other-intake@example.com" }, SYSTEM)
-    expect(await h.sync.askAgain()).toEqual({ asked: 0, read: 0, gone: 0 })
+    expect(await h.retry.run()).toMatchObject({ messages: 0 })
     await h.settings.update({ "graph.mailbox": own }, SYSTEM)
-    h.graph.fail(failing, null)
-    expect(await h.sync.askAgain()).toMatchObject({ read: 1 })
+    expect(await h.retry.run()).toMatchObject({ decided: 1 })
   })
 
-  it("is not ended by an answer that arrives after another mailbox was configured", async () => {
+  it("is not taken in when another mailbox is configured while its content is on its way", async () => {
     const h = await start()
-    const failing = await failingMessage(h)
-    h.graph.trash(failing)
-    const hold = h.graph.hold(failing)
-    const asked = h.sync.askAgain()
+    const refused = await refusedMessage(h)
+    h.graph.fail(refused, null)
+    const hold = h.graph.hold(refused)
+    const asked = h.retry.run()
     await hold.reached
     h.graph.allow("other-intake@example.com")
     await h.settings.update({ "graph.mailbox": "other-intake@example.com" }, SYSTEM)
     hold.release()
-    expect(await asked).toEqual({ asked: 1, read: 0, gone: 0 })
-    expect(await notRead(h)).toEqual([failing])
+    expect(await asked).toMatchObject({ stillWaiting: 1 })
+    expect(await notRead(h)).toEqual([refused])
   })
 
-  it("gets its turn while its subject waits for the scanner, also beside others like it", async () => {
+  it("gives every waiting message and file its turn", async () => {
     const h = await start()
     await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
+    for (let i = 0; i < MAX_RETRIES_PER_RUN; i++) h.graph.fail(h.graph.add(mime({ subject: `refused ${i}` })))
     const recovers = h.graph.add(mime({ subject: "recovers" }))
-    const fails = h.graph.add(mime({ subject: "fails" }))
-    for (const id of [recovers, fails]) h.graph.fail(id)
+    h.graph.fail(recovers)
+    const file = h.graph.add(mime({ subject: "waiting for the scanner" }))
     await h.round()
-    expect(await notRead(h)).toHaveLength(2)
     h.graph.fail(recovers, null)
-    for (let run = 0; run < 4; run++) {
-      await h.retry.run(1)
-      await h.sync.askAgain(1)
-    }
-    expect(await notRead(h)).toEqual([fails])
-  })
-
-  it("asks Graph for immutable IDs in every request", async () => {
-    const h = await start()
-    await failingMessage(h)
-    await h.sync.askAgain()
-    expect(h.graph.withoutImmutableIds).toEqual([])
-  })
-
-  it("leaves every waiting file its turn beside many messages not read yet", async () => {
-    const h = await start()
-    for (let i = 0; i <= MAX_ASKED_AGAIN_PER_RUN; i++) h.graph.fail(h.graph.add(mime({ subject: `many ${i}` })))
-    await h.round()
-    await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
-    const waiting = h.graph.add(mime({ subject: "waiting for the scanner" }))
-    await h.sync.run()
     await h.settings.update({ "scanner.address": clamd.address }, SYSTEM)
-    expect(await h.retry.run()).toMatchObject({ messages: 1, decided: 1 })
-    expect((await h.messageOf(waiting)).subject).toBe("waiting for the scanner")
-    expect(await h.sync.askAgain()).toMatchObject({ asked: MAX_ASKED_AGAIN_PER_RUN })
-    expect(await h.sync.askAgain(1)).toMatchObject({ asked: 1 })
-    const asked = (
-      await h.database.db.select({ at: message.retryAt, flags: message.reviewFlags }).from(message)
-    ).filter((row) => row.flags.includes("not_read"))
-    expect(asked).toHaveLength(MAX_ASKED_AGAIN_PER_RUN + 1)
-    expect(asked.every((row) => row.at !== null)).toBe(true)
+    await h.retry.run()
+    await h.retry.run()
+    expect((await h.messageOf(recovers)).subject).toBe("recovers")
+    expect((await h.messageOf(file)).subject).toBe("waiting for the scanner")
+    expect(await notRead(h)).toHaveLength(MAX_RETRIES_PER_RUN)
   }, 120_000)
 })
