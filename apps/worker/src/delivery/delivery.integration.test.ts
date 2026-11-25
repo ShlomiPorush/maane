@@ -564,14 +564,14 @@ describe("failover bounces in the intake mailbox", () => {
   })
 })
 
-describe("review of 3.3", () => {
+describe("delivery events out of order or without a queue ID", () => {
   const resendViaFailover = async (id: string) => {
     expect((await admin.call("POST", `/api/v1/messages/${id}/resend`)).status).toBe(200)
     expect(await sender(viaFailover()).send(id)).toBe("accepted")
   }
   const flagged = async (number: number) => (await view(number)).ticket.reviewFlags.includes("delivery_failed")
 
-  it("D1: the send accepted last decides the flag, in either order of the replies", async () => {
+  it("the send accepted last decides the flag, in either order of the replies", async () => {
     await firstAdmin()
     const number = await customerTicket()
     const address = "drop.dana@example.com"
@@ -588,7 +588,7 @@ describe("review of 3.3", () => {
     expect(await flagged(number)).toBe(true)
   })
 
-  it("D2: a report received before a Send again was accepted changes neither the recipient nor the flag", async () => {
+  it("a report received before a Send again was accepted changes neither the recipient nor the flag", async () => {
     await firstAdmin()
     const number = await customerTicket()
     const address = "drop.dana@example.com"
@@ -604,7 +604,7 @@ describe("review of 3.3", () => {
     expect(await flagged(number)).toBe(false)
   })
 
-  it("D3: the poll goes on past its page limit from SMTP2GO's continue token in the next run", async () => {
+  it("the poll goes on past its page limit from SMTP2GO's continue token in the next run", async () => {
     await firstAdmin()
     const number = await customerTicket()
     const reply = await sentReply(number, ["dana@example.com"])
@@ -640,7 +640,7 @@ describe("review of 3.3", () => {
     expect(done?.until.toISOString()).toBe(new Date(sentAt + 10 * 60_000).toISOString())
   })
 
-  it("D4: a webhook event without a known queue ID finds its recipient by Maane's Message-ID after one attempt", async () => {
+  it("a webhook event without a known queue ID finds its recipient by Maane's Message-ID after one attempt", async () => {
     await firstAdmin()
     const number = await customerTicket()
     const address = "drop.dana@example.com"
@@ -663,7 +663,7 @@ describe("review of 3.3", () => {
     })
   })
 
-  it("D4: an event that two attempts could have caused is recorded on the reply, unmatched", async () => {
+  it("an event that two attempts could have caused is recorded on the reply, unmatched", async () => {
     await firstAdmin()
     const number = await customerTicket()
     const address = "drop.dana@example.com"
@@ -704,7 +704,7 @@ describe("review of 3.3", () => {
   })
 })
 
-describe("review of 3.3, round 2", () => {
+describe("attempts that stopped halfway or were sent again", () => {
   const crash = () => {
     throw new Error("the run stops here")
   }
@@ -731,7 +731,7 @@ describe("review of 3.3, round 2", () => {
       (row) => row.possibleSends,
     )
 
-  it("D6: a run that stops after SMTP2GO took the data and before its answer was saved still counts its attempt", async () => {
+  it("a run that stops after SMTP2GO took the data and before its answer was saved still counts its attempt", async () => {
     await firstAdmin()
     const number = await customerTicket()
     const reply = await written(number, ["dana@example.com"])
@@ -758,7 +758,7 @@ describe("review of 3.3, round 2", () => {
     })
   })
 
-  it("D6: once Send again claims a second attempt, an event by Message-ID is unmatched", async () => {
+  it("once Send again claims a second attempt, an event by Message-ID is unmatched", async () => {
     await firstAdmin()
     const number = await customerTicket()
     const address = "drop.dana@example.com"
@@ -791,7 +791,7 @@ describe("review of 3.3, round 2", () => {
     })
   })
 
-  it("D7: the recovery of a run that stopped after saving an unknown answer is not a new attempt", async () => {
+  it("the recovery of a run that stopped after saving an unknown answer is not a new attempt", async () => {
     await firstAdmin()
     const number = await customerTicket()
     const reply = await written(number, ["drop.dana@example.com"])

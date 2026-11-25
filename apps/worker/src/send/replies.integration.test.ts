@@ -681,7 +681,7 @@ describe("what each provider's answer means", () => {
 })
 
 describe("attempts that overlap", () => {
-  it("an attempt made stale while it was paused after its claim sends nothing and changes nothing (review R3)", async () => {
+  it("an attempt made stale while it was paused after its claim sends nothing and changes nothing", async () => {
     const admin = await firstAdmin()
     const ticket = await customerTicket()
     const written = await admin.call("POST", `/api/v1/tickets/${ticket.number}/messages`, reply())
@@ -721,7 +721,7 @@ describe("attempts that overlap", () => {
     expect(now).toEqual(after)
   })
 
-  it("a claim waits for a move in progress and checks the organization the move leaves (plan 4.1, review S3)", async () => {
+  it("a claim waits for a move in progress and checks the organization the move leaves (plan 4.1)", async () => {
     const admin = await firstAdmin()
     const ticket = await customerTicket()
     const written = await admin.call("POST", `/api/v1/tickets/${ticket.number}/messages`, reply())
@@ -756,7 +756,7 @@ describe("attempts that overlap", () => {
   })
 
   it.each(["mark-sent", "resend"] as const)(
-    "%s waits for a move in progress and refuses a reply the move took out of the agent's organizations (review S8)",
+    "%s waits for a move in progress and refuses a reply the move took out of the agent's organizations",
     async (action) => {
       const admin = await firstAdmin()
       const { b: agent, id: agentId } = await newAgent(admin, "an.agent")
@@ -808,7 +808,7 @@ describe("attempts that overlap", () => {
     },
   )
 
-  it("a claim does not hold up the webhook's delivery flag while it waits for a recipient the webhook holds (review S7)", async () => {
+  it("a claim does not hold up the webhook's delivery flag while it waits for a recipient the webhook holds", async () => {
     const admin = await firstAdmin()
     const ticket = await customerTicket()
     const written = await admin.call("POST", `/api/v1/tickets/${ticket.number}/messages`, reply())

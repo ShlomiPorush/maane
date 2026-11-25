@@ -267,7 +267,7 @@ describe("a scheduled reply", () => {
     expect(change.json).toEqual({ error: "scheduled_not_open" })
   })
 
-  it("sets pending only when it goes: a cancel or a failed check at the send point leaves the status (review T1, T7)", async () => {
+  it("sets pending only when it goes: a cancel or a failed check at the send point leaves the status", async () => {
     const admin = await firstAdmin()
     const { b: agent, id: agentId } = await newAgent(admin, "an.agent", [org])
     const t = await customerTicket()
@@ -297,7 +297,7 @@ describe("a scheduled reply", () => {
     expect(resend.json).toEqual({ error: "reply_not_retryable" })
   })
 
-  it("stores the agent's text cleaned, as a reply sent now is: a NUL never reaches the database (review T6)", async () => {
+  it("stores the agent's text cleaned, as a reply sent now is: a NUL never reaches the database", async () => {
     const admin = await firstAdmin()
     const { b: agent } = await newAgent(admin, "an.agent", [org])
     const t = await customerTicket()
@@ -311,7 +311,7 @@ describe("a scheduled reply", () => {
     expect((await scheduledOf(agent, t.number, id)).html).not.toContain(nul)
   })
 
-  it("refuses a submission ID the other kind took: a lost answer then a note never blocks the scheduled reply (review T8)", async () => {
+  it("refuses a submission ID the other kind took: a lost answer then a note never blocks the scheduled reply", async () => {
     const admin = await firstAdmin()
     const { b: agent } = await newAgent(admin, "an.agent", [org])
     const t = await customerTicket()
@@ -331,7 +331,7 @@ describe("a scheduled reply", () => {
     expect(await outboxOfAction(action?.id ?? "")).toHaveLength(1)
   })
 
-  it("lets one of a reply sent now and a scheduled reply racing with the same ID through, in either order (review T8)", async () => {
+  it("lets one of a reply sent now and a scheduled reply racing with the same ID through, in either order", async () => {
     const admin = await firstAdmin()
     const { b: agent, id: userId } = await newAgent(admin, "an.agent", [org])
     const t = await customerTicket()
@@ -431,7 +431,7 @@ describe("changing and cancelling a scheduled reply", () => {
     ])
   })
 
-  it("after its reply was written (handed): only the new version's text goes, once (review T5)", async () => {
+  it("after its reply was written (handed): only the new version's text goes, once", async () => {
     const admin = await firstAdmin()
     const { b: agent } = await newAgent(admin, "an.agent", [org])
     const t = await customerTicket()
@@ -498,7 +498,7 @@ describe("a customer reply before a scheduled reply's time", () => {
     expect(await actions().run(again, 1)).toBe("handed")
   })
 
-  it("between its outbox row and the send point ends it there without sending (review W1)", async () => {
+  it("between its outbox row and the send point ends it there without sending", async () => {
     const admin = await firstAdmin()
     const { b: agent } = await newAgent(admin, "an.agent", [org])
     const t = await customerTicket()
@@ -605,7 +605,7 @@ describe("the queue", () => {
     expect(job?.keepUntil.getTime()).toBeGreaterThan(at.getTime())
   })
 
-  it("queues again the jobs of a scheduled reply and a snooze left waiting past their time (review T2)", async () => {
+  it("queues again the jobs of a scheduled reply and a snooze left waiting past their time", async () => {
     const admin = await firstAdmin()
     const { b: agent } = await newAgent(admin, "an.agent", [org])
     const t = await customerTicket()

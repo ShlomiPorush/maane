@@ -333,8 +333,8 @@ describe("no default address", () => {
   })
 })
 
-describe("review round 2", () => {
-  it("looks at the first reference codes of a body only, in one query, and still finds a real one (G12)", async () => {
+describe("reference codes, blocked headers, and originals that wait", () => {
+  it("looks at the first reference codes of a body only, in one query, and still finds a real one", async () => {
     const h = await live()
     const original = h.graph.add(mime({ messageId: "g12@example.com" }), { receivedAt: at(1) })
     await h.round()
@@ -361,7 +361,7 @@ describe("review round 2", () => {
     expect(await h.recordOf(found)).toMatchObject({ outcome: "joined", matchLayer: "reference" })
   }, 60_000)
 
-  it("classifies from the parsed headers even when the header block is blocked (G13)", async () => {
+  it("classifies from the parsed headers even when the header block is blocked", async () => {
     const h = await live()
     const original = h.graph.add(mime({ messageId: "g13@example.com" }), { receivedAt: at(1) })
     await h.round()
@@ -381,7 +381,7 @@ describe("review round 2", () => {
     expect((await h.ticketOf(original))?.status).toBe("new")
   })
 
-  it("makes a reply wait for its stored original that waits for the scanner (G15)", async () => {
+  it("makes a reply wait for its stored original that waits for the scanner", async () => {
     const state = { down: true }
     const scanner: Scanner = {
       ...clamdScanner,
@@ -410,7 +410,7 @@ describe("review round 2", () => {
     expect(await h.recordOf(ron)).toMatchObject({ outcome: "joined" })
   })
 
-  it("stops a reply waiting an hour after the reply was stored, whatever an attacker keeps sending (G15, G16)", async () => {
+  it("stops a reply waiting an hour after the reply was stored, whatever an attacker keeps sending", async () => {
     const state = { down: true }
     const scanner: Scanner = {
       ...clamdScanner,

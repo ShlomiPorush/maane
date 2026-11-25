@@ -1891,7 +1891,7 @@ describe("tickets", () => {
     expect(sent()[2]).toMatchObject({ kind: "note", setPending: false })
   })
 
-  it("switches the composer to the new organization's From after a move, keeping the draft (review S2)", async () => {
+  it("switches the composer to the new organization's From after a move, keeping the draft", async () => {
     let moved = false
     const after = ok({
       ...(view().body as Record<string, unknown>),
@@ -2071,7 +2071,7 @@ describe("tickets", () => {
     expect(put).not.toHaveProperty("submissionId")
   })
 
-  it("keeps a change on the version it loaded and on its reply: never a newer version, never a new reply (review T3, T4)", async () => {
+  it("keeps a change on the version it loaded and on its reply: never a newer version, never a new reply", async () => {
     const EDITED = "00000000-0000-4000-8000-0000000000d5"
     const OTHER = "00000000-0000-4000-8000-0000000000d6"
     const entry = (id: string, over: Record<string, unknown> = {}) => ({
@@ -2157,7 +2157,7 @@ describe("tickets", () => {
     expect(requests.some((r) => r.method === "POST" && r.url === "/api/v1/tickets/7/messages")).toBe(false)
   })
 
-  it("asks before a change to another scheduled reply drops unsaved edits of the one being changed (review T11)", async () => {
+  it("asks before a change to another scheduled reply drops unsaved edits of the one being changed", async () => {
     const FIRST = "00000000-0000-4000-8000-0000000000d7"
     const SECOND = "00000000-0000-4000-8000-0000000000d8"
     const entry = (id: string, address: string) => ({
@@ -2234,7 +2234,7 @@ describe("tickets", () => {
     expect(toField().value).toBe("dana@example.com")
   })
 
-  it("starts a new submission after a refusal, and keeps it while no answer came (review T8)", async () => {
+  it("starts a new submission after a refusal, and keeps it while no answer came", async () => {
     const answers: TransportResponse[] = [
       { status: 500, body: { error: "internal" } },
       { status: 409, body: { error: "submission_reused" } },
@@ -2266,7 +2266,7 @@ describe("tickets", () => {
     expect(posts()[2]).not.toBe(posts()[1])
   })
 
-  it("offers Send again for a failed reply, but not for a scheduled reply that ended before it went out (review T7)", async () => {
+  it("offers Send again for a failed reply, but not for a scheduled reply that ended before it went out", async () => {
     const failed = (id: string, scheduledEnded: boolean) =>
       reply({
         id,
@@ -2474,7 +2474,7 @@ describe("tickets", () => {
     )
   })
 
-  it("still offers to end a snooze whose time passed while its end is late (review T2)", async () => {
+  it("still offers to end a snooze whose time passed while its end is late", async () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
@@ -2629,7 +2629,7 @@ describe("tickets", () => {
     expect(composer.querySelector<HTMLButtonElement>('button[data-kind="reply"]')?.disabled).toBe(false)
   })
 
-  it("starts a fresh composer for each ticket: another ticket's recipients and text never carry over (review R2)", async () => {
+  it("starts a fresh composer for each ticket: another ticket's recipients and text never carry over", async () => {
     const other = view()
     const body = other.body as { ticket: { number: number }; compose: Record<string, unknown> }
     const eight = ok({
@@ -2659,7 +2659,7 @@ describe("tickets", () => {
     expect(document.querySelector(".ui-editor-text")?.textContent).toBe("")
   })
 
-  it("never carries a scheduled reply being changed to another ticket (review T4)", async () => {
+  it("never carries a scheduled reply being changed to another ticket", async () => {
     const SCHEDULED = "00000000-0000-4000-8000-0000000000d7"
     const scheduled = {
       id: SCHEDULED,

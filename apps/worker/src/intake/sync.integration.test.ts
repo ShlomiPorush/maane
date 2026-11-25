@@ -281,7 +281,7 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
   })
 })
 
-describe("waiting and the raw MIME (review G6, G7)", () => {
+describe("waiting and the raw MIME", () => {
   const flaky = (marker: (bytes: Uint8Array) => boolean) => {
     const state = { down: true }
     const scanner: Scanner = {
@@ -457,7 +457,7 @@ describe("stage one: Hebrew, encodings, and parts", () => {
   })
 })
 
-describe("text fields scanned like files (review G1)", () => {
+describe("text fields scanned like files", () => {
   it("keeps a message whose text, header, or HTML carries EICAR, stores no copy of it, and writes one audit row each", async () => {
     const h = await start()
     const bad = eicar().toString("latin1")
@@ -515,7 +515,7 @@ describe("text fields scanned like files (review G1)", () => {
   })
 })
 
-describe("records retried (review G14)", () => {
+describe("records retried", () => {
   it("scans a record's Graph metadata again once the scanner is back", async () => {
     const h = await start()
     await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
