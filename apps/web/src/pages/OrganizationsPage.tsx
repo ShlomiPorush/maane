@@ -125,7 +125,7 @@ function CreateOrganizationDialog({ onClose }: { onClose: () => void }) {
       if (!mounted.current) return
       guardedClose.dismiss()
       onClose()
-      navigate(`/organizations/${organization.id}`)
+      navigate(`/organizations/${organization.id}`, { replace: true })
     } catch (failure) {
       setError(errorText(t, failure))
     } finally {

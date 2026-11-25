@@ -61,4 +61,5 @@ All notable changes to Maane. The format follows [Keep a Changelog](https://keep
 - Intake: when reading one folder of the mailbox fails, the other folder is still read in the same round.
 - The customer's email: a sender's name that holds `$&` or `$$` shows as it is in the line above the history.
 - Organizations: adding an agent finds them by username also after their display name changed, and lists every agent at once.
+- Organizations: after adding an organization, Back returns to the list with one press.
 - Browser notifications come in the language chosen last on that browser, wherever it was chosen.

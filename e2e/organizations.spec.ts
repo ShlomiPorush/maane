@@ -33,6 +33,7 @@ test.describe("desktop", () => {
     await expect(userDialog).toHaveCount(0)
     await expect(page.getByText(AGENT, { exact: true })).toBeVisible()
 
+    await page.goto("/categories")
     await page.goto("/organizations")
     await expect(page.locator('a[data-organization="Example Alpha"]')).toBeVisible()
     await page.getByRole("button", { name: he("organizations.create"), exact: true }).click()
@@ -41,6 +42,14 @@ test.describe("desktop", () => {
     await create.getByRole("button", { name: he("organizations.create"), exact: true }).click()
     await expect(page).toHaveURL(/\/organizations\/[0-9a-f-]{36}$/)
     await expect(page.locator(".ui-crumb-current")).toHaveText(ORGANIZATION)
+
+    const created = page.url()
+    await page.goBack()
+    await expect(page).toHaveURL(/\/organizations$/)
+    await expect(page.locator(`a[data-organization="${ORGANIZATION}"]`)).toBeVisible()
+    await page.goBack()
+    await expect(page).toHaveURL(/\/categories$/)
+    await page.goto(created)
 
     await page.getByRole("button", { name: he("organization.addresses.add"), exact: true }).click()
     const address = page.getByRole("dialog")
