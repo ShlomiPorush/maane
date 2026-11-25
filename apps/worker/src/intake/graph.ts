@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { ClientSecretCredential } from "@azure/identity"
 import type { Settings } from "@maane/server/settings/service"
-import type { GraphFolder, GraphProblem, GraphTestResult } from "@maane/shared"
+import { GRAPH_FOLDERS, type GraphFolder, type GraphProblem, type GraphTestResult } from "@maane/shared"
 import { Client, GraphError } from "@microsoft/microsoft-graph-client"
 import { TokenCredentialAuthenticationProvider } from "@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials"
 
@@ -53,6 +53,13 @@ export type MimeResult = { kind: "ok"; bytes: Buffer } | { kind: "too_large"; re
 
 export function graphStatus(error: unknown): number | null {
   return error instanceof GraphError && error.statusCode >= 100 ? error.statusCode : null
+}
+
+const CONCERNS_EVERY_CALL: ReadonlySet<number> = new Set([401, 429, 503, 509])
+
+export function mayConcernOneMessage(error: unknown): boolean {
+  const status = graphStatus(error)
+  return status !== null && !CONCERNS_EVERY_CALL.has(status)
 }
 
 export function isExpiredDelta(error: unknown): boolean {
@@ -145,6 +152,20 @@ export class GraphGateway {
     } catch (error) {
       return { ok: false, ...describeGraphError(error), mailbox: config.mailbox, checkedAt: now().toISOString() }
     }
+  }
+
+  async folders(config: GraphConfig): Promise<Map<string, GraphFolder>> {
+    const ids = new Map<string, GraphFolder>()
+    for (const folder of GRAPH_FOLDERS) {
+      const { id } = (await this.#clientFor(config)
+        .api(`${this.#mailboxPath(config.mailbox)}/mailFolders/${folder}`)
+        .header("Prefer", PREFER_IDS)
+        .select("id")
+        .option("signal", AbortSignal.timeout(REQUEST_TIMEOUT_MS))
+        .get()) as { id: string }
+      ids.set(id, folder)
+    }
+    return ids
   }
 
   firstDeltaLink(config: GraphConfig, folder: GraphFolder): string {

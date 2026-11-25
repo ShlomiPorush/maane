@@ -61,6 +61,17 @@ export function notificationOf(record: IntakeFacts, messageId: string): PushJob 
   return null
 }
 
+export async function recordNotRead(tx: Tx, messageId: string): Promise<void> {
+  await tx
+    .insert(intakeRecord)
+    .values({ messageId, outcome: "unreadable", reason: "not_read" })
+    .onConflictDoUpdate({ target: intakeRecord.messageId, set: { reason: "not_read" } })
+}
+
+export async function recordGone(tx: Tx, messageId: string): Promise<void> {
+  await tx.update(intakeRecord).set({ reason: "unavailable" }).where(eq(intakeRecord.messageId, messageId))
+}
+
 export type Notify = (jobs: QueueDb, job: PushJob) => Promise<void>
 
 const sameTime = (a: Date | null, b: Date | null) => (a === null || b === null ? a === b : a.getTime() === b.getTime())

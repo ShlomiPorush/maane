@@ -11,6 +11,7 @@ import {
   contentOf,
   fieldTexts,
   type GraphMeta,
+  NOT_READ_YET,
   partNamesOf,
   refused,
   scanFields,
@@ -58,14 +59,17 @@ export class WaitingFiles {
       .from(message)
       .innerJoin(intakeSource, eq(intakeSource.id, message.sourceId))
       .where(
-        or(
-          eq(message.rawStatus, "waiting"),
-          sql`jsonb_path_exists(${message.fieldScans}, '$.* ? (@.status == "waiting")')`,
-          exists(
-            this.#db
-              .select({ id: messagePart.id })
-              .from(messagePart)
-              .where(and(eq(messagePart.messageId, message.id), eq(messagePart.status, "waiting"))),
+        and(
+          sql`not ${NOT_READ_YET}`,
+          or(
+            eq(message.rawStatus, "waiting"),
+            sql`jsonb_path_exists(${message.fieldScans}, '$.* ? (@.status == "waiting")')`,
+            exists(
+              this.#db
+                .select({ id: messagePart.id })
+                .from(messagePart)
+                .where(and(eq(messagePart.messageId, message.id), eq(messagePart.status, "waiting"))),
+            ),
           ),
         ),
       )

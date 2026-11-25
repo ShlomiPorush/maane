@@ -192,7 +192,10 @@ export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Prom
   })
   await boss.work(INTAKE_PROCESS, async () => runExclusive(intake.pool, INTAKE_PROCESS, () => intake.process.run()))
   await boss.work(INTAKE_FILES_RETRY, async () =>
-    runExclusive(intake.pool, INTAKE_FILES_RETRY, () => intake.retry.run()),
+    runExclusive(intake.pool, INTAKE_FILES_RETRY, async () => ({
+      files: await intake.retry.run(),
+      notRead: await intake.sync.askAgain(),
+    })),
   )
   await boss.send(INTAKE_PROCESS, {})
 }

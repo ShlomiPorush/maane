@@ -16,7 +16,8 @@ interface Stored {
   addedSeq: number
   removedSeq: number | null
   vanished: boolean
-  failing: boolean
+  failing: number | null
+  trashed: boolean
 }
 
 interface Snapshot {
@@ -39,7 +40,12 @@ export interface StandInGraph {
   add(raw: Buffer, options?: { mailbox?: string; folder?: GraphFolder; receivedAt?: Date }): string
   remove(id: string): void
   vanish(id: string): void
-  fail(id: string): void
+  trash(id: string): void
+  replace(id: string, raw: Buffer): void
+  move(id: string, folder: GraphFolder): void
+  fail(id: string, status?: number | null): void
+  failContent(status: number | "network" | null, options?: { after?: number; times?: number }): void
+  loseMailbox(on: boolean): void
   expireTokens(): void
   throttle(count: number): void
   refuse(on: boolean): void
@@ -65,6 +71,9 @@ const json = (res: ServerResponse, status: number, body: unknown, headers: Recor
 
 const graphError = (res: ServerResponse, status: number, code: string, message: string) =>
   json(res, status, { error: { code, message } })
+
+const failing = (res: ServerResponse, status: number) =>
+  json(res, status, { error: { code: "Failing", message: "Something went wrong." } }, { "retry-after": "0" })
 
 function headerOf(raw: Buffer, name: string): string | null {
   const head = raw.toString("latin1").split(/\r?\n\r?\n/)[0] ?? ""
@@ -102,6 +111,8 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
   let generation = 1
   let throttled = 0
   let refusing = false
+  let mailboxLost = false
+  let contentFailure: { status: number | "network"; after: number; times: number } | null = null
   let base = ""
 
   const itemOf = (message: Stored) => ({
@@ -111,7 +122,7 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
     internetMessageId: headerOf(message.raw, "Message-ID"),
     subject: headerOf(message.raw, "Subject"),
     from: { emailAddress: { address: /<([^>]+)>/.exec(headerOf(message.raw, "From") ?? "")?.[1] ?? null } },
-    parentFolderId: message.folder,
+    parentFolderId: message.trashed ? "folder-deleteditems" : `folder-${message.folder}`,
   })
 
   const deltaPage = (res: ServerResponse, snapshotKey: string, offset: number) => {
@@ -157,6 +168,14 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
     const key = randomBytes(6).toString("hex")
     snapshots.set(key, { items, endSeq: seq, mailbox: box, folder })
     deltaPage(res, key, 0)
+  }
+
+  const held = async (id: string) => {
+    const hold = holds.get(id)
+    if (!hold) return
+    holds.delete(id)
+    hold.reached()
+    await hold.released
   }
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
@@ -214,6 +233,7 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
     if (!users?.[1] || !users[2]) return graphError(res, 404, "ResourceNotFound", "Not found.")
     const box = users[1].toLowerCase()
     if (!allowed.has(box)) return graphError(res, 403, "ErrorAccessDenied", "Access is denied.")
+    if (mailboxLost) return graphError(res, 404, "MailboxNotEnabledForRESTAPI", "The mailbox is not available.")
     const rest = users[2]
     const folderMatch = /^mailFolders\/(inbox|junkemail)$/.exec(rest)
     if (folderMatch) return json(res, 200, { id: `folder-${folderMatch[1]}`, displayName: folderMatch[1] })
@@ -222,21 +242,26 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
     const metadata = /^messages\/([^/$]+)$/.exec(rest)
     if (metadata?.[1]) {
       const message = messages.get(metadata[1])
-      if (!message || message.mailbox !== box || message.removedSeq !== null || message.vanished)
+      await held(metadata[1])
+      if (!message || message.mailbox !== box || (message.removedSeq !== null && !message.trashed) || message.vanished)
         return graphError(res, 404, "ErrorItemNotFound", "The specified object was not found in the store.")
       return json(res, 200, itemOf(message))
     }
     const value = /^messages\/([^/]+)\/\$value$/.exec(rest)
     if (value?.[1]) {
       const message = messages.get(value[1])
-      const hold = holds.get(value[1])
-      if (hold) {
-        holds.delete(value[1])
-        hold.reached()
-        await hold.released
+      await held(value[1])
+      if (contentFailure && contentFailure.after > 0) contentFailure.after--
+      else if (contentFailure && contentFailure.times > 0) {
+        contentFailure.times--
+        if (contentFailure.status === "network") {
+          req.socket.destroy()
+          return
+        }
+        return failing(res, contentFailure.status)
       }
-      if (message?.failing) return graphError(res, 500, "InternalServerError", "Something went wrong.")
-      if (!message || message.mailbox !== box || message.removedSeq !== null || message.vanished)
+      if (message?.failing) return failing(res, message.failing)
+      if (!message || message.mailbox !== box || (message.removedSeq !== null && !message.trashed) || message.vanished)
         return graphError(res, 404, "ErrorItemNotFound", "The specified object was not found in the store.")
       res.writeHead(200, { "content-type": "message/rfc822" })
       return res.end(message.raw)
@@ -272,7 +297,8 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
         addedSeq: seq,
         removedSeq: null,
         vanished: false,
-        failing: false,
+        failing: null,
+        trashed: false,
       })
       return id
     },
@@ -287,10 +313,34 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
       if (!message) throw new Error("no such message")
       message.vanished = true
     },
-    fail(id) {
+    trash(id) {
+      standIn.remove(id)
+      const message = messages.get(id)
+      if (message) message.trashed = true
+    },
+    replace(id, raw) {
       const message = messages.get(id)
       if (!message) throw new Error("no such message")
-      message.failing = true
+      message.raw = raw
+    },
+    move(id, folder) {
+      const message = messages.get(id)
+      if (!message) throw new Error("no such message")
+      seq++
+      messages.set(`left ${seq}`, { ...message, trashed: false, removedSeq: seq })
+      Object.assign(message, { folder, addedSeq: seq, removedSeq: null, trashed: false })
+    },
+    fail(id, status = 500) {
+      const message = messages.get(id)
+      if (!message) throw new Error("no such message")
+      message.failing = status
+    },
+    failContent(status, options = {}) {
+      contentFailure =
+        status === null ? null : { status, after: options.after ?? 0, times: options.times ?? Number.POSITIVE_INFINITY }
+    },
+    loseMailbox(on) {
+      mailboxLost = on
     },
     expireTokens() {
       generation++

@@ -15,6 +15,7 @@ export type PartStatus = (typeof PART_STATUSES)[number]
 
 export const MESSAGE_FLAGS = [
   "unavailable",
+  "not_read",
   "parse_failed",
   "too_large",
   "invalid_characters",
@@ -58,6 +59,7 @@ export const INTAKE_REASONS = [
   "sent_by_maane",
   "process_failed",
   "unavailable",
+  "not_read",
   "unparsed",
   "too_large",
   "sender_not_participant",

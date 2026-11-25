@@ -469,7 +469,8 @@
     }
   },
   "flag": {
-    "unavailable": "Gone from the mailbox",
+    "unavailable": "Moved or deleted",
+    "not_read": "Not read yet",
     "parse_failed": "Could not be read",
     "too_large": "Message too large",
     "invalid_characters": "Invalid characters replaced",
@@ -509,7 +510,8 @@
     "reason": {
       "copy": "Same Message-ID, sender, date, and content as an earlier message",
       "process_failed": "Processing failed",
-      "unavailable": "Gone from the mailbox before Maane read it",
+      "unavailable": "Moved or deleted before Maane read it",
+      "not_read": "Microsoft 365 has not handed it over yet",
       "unparsed": "Maane could not read it",
       "too_large": "Larger than the file size limit",
       "sender_not_participant": "The sender is not a participant of the ticket it matched",
