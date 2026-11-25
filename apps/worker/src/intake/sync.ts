@@ -105,21 +105,29 @@ export class IntakeSync {
 
   async run(hooks: SyncHooks = {}, maxPages = MAX_PAGES_PER_RUN): Promise<SyncSummary> {
     const summary: SyncSummary = { status: "done", stored: 0, skipped: 0, removed: 0, pages: 0 }
+    let failure: unknown
     const config = await graphConfig(this.#settings)
     if (!config) return { ...summary, status: "not_configured" }
     const [source] = await this.#db.select().from(intakeSource).where(eq(intakeSource.current, true))
     if (!source || source.tenantId !== config.tenantId.toLowerCase() || source.mailbox !== config.mailbox)
       return { ...summary, status: "no_source" }
-    try {
-      for (const folder of GRAPH_FOLDERS) await this.#folder(config, source, folder, summary, hooks, maxPages)
-    } catch (error) {
-      if (error instanceof SourceChangedError) {
-        log.info("the intake source changed during a sync round; the round stopped", { stored: summary.stored })
-        return { ...summary, status: "source_changed" }
+    for (const folder of GRAPH_FOLDERS) {
+      try {
+        await this.#folder(config, source, folder, summary, hooks, maxPages)
+      } catch (error) {
+        if (error instanceof SourceChangedError) {
+          log.info("the intake source changed during a sync round; the round stopped", { stored: summary.stored })
+          return { ...summary, status: "source_changed" }
+        }
+        log.warn("reading a folder failed; the next round starts at its cursor again", {
+          folder,
+          ...errorFacts(error),
+        })
+        failure ??= error
       }
-      throw error
     }
     if (summary.stored > 0) log.info("intake stored new messages", { stored: summary.stored })
+    if (failure) throw failure
     return summary
   }
 

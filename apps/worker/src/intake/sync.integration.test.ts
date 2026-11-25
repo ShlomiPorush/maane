@@ -161,6 +161,19 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     expect(await h.sync.run()).toMatchObject({ status: "done", stored: 1 })
   })
 
+  it("reads the next folder although a message of the first one fails, keeps the first one's cursor, and reports it", async () => {
+    const h = await start()
+    await h.sync.run()
+    const cursor = await cursorOf(h)
+    const failing = h.graph.add(mime({ subject: "failing" }))
+    h.graph.fail(failing)
+    const junk = h.graph.add(mime({ subject: "junk" }), { folder: "junkemail" })
+    await expect(h.sync.run()).rejects.toMatchObject({ statusCode: 500 })
+    expect((await h.messageOf(junk)).content).toBe("parsed")
+    expect(await cursorOf(h)).toEqual(cursor)
+    expect(await count(h)).toBe(1)
+  })
+
   it("records a message larger than files.maxBytes and one mailparser cannot parse, and goes on", async () => {
     const h = await start()
     await h.settings.update({ "files.maxBytes": 2 * MEGABYTE }, SYSTEM)
