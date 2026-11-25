@@ -854,17 +854,14 @@ describe("organization dialogs", () => {
     await vi.waitFor(() => expect(dialog()).toBeNull())
   }
 
-  it("finds any agent through the admin plugin's search, and says when the list is cut short", async () => {
-    auth.listUsers.mockImplementation(async ({ query }: { query: Record<string, unknown> }) => ({
-      data:
-        query.searchValue === "dana"
-          ? { users: [agent("u9", "dana.levi")], total: 1 }
-          : {
-              users: [agent("u2", "agent.one"), ...Array.from({ length: 49 }, (_, i) => agent(`a${i}`, `agent${i}`))],
-              total: 120,
-            },
-      error: null,
-    }))
+  async function openAddAgent(everyone: ReturnType<typeof agent>[]) {
+    auth.listUsers.mockImplementation(async ({ query }: { query: Record<string, unknown> }) => {
+      const search = typeof query.searchValue === "string" ? query.searchValue : ""
+      const matching = everyone.filter((user) => user.name.includes(search))
+      const offset = Number(query.offset ?? 0)
+      const users = matching.slice(offset, offset + Number(query.limit))
+      return { data: { users, total: matching.length }, error: null }
+    })
     await renderAt(`/organizations/${ORG}`, {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
@@ -872,73 +869,54 @@ describe("organization dialogs", () => {
     })
     await vi.waitFor(() => expect(button(he("organization.members.add"))).toBeDefined())
     await act(async () => button(he("organization.members.add"))?.click())
-    await vi.waitFor(() => expect(document.querySelector('[data-testid="agents-more"]')).not.toBeNull())
+    await vi.waitFor(() => expect(dialog()?.querySelector('input[type="radio"]')).not.toBeNull())
+    const search = dialog()?.querySelector<HTMLInputElement>('input[type="search"]') as HTMLInputElement
+    const shown = () =>
+      [...(dialog()?.querySelectorAll<HTMLInputElement>('input[type="radio"]') ?? [])].map((radio) => radio.value)
+    return { search, shown }
+  }
+
+  it("finds an agent by username also after the display name changed, and takes every character literally", async () => {
+    const { search, shown } = await openAddAgent([
+      agent("u2", "agent.one"),
+      { ...agent("u7", "ron_levi"), name: "Support desk" },
+      agent("u8", "ronxlevi"),
+      { ...agent("u9", "dana.levi"), name: "Billing desk" },
+    ])
+    expect(shown()).toEqual(["u7", "u8", "u9"])
+    await act(async () => type(search, " Dana"))
+    await vi.waitFor(() => expect(shown()).toEqual(["u9"]))
+    await act(async () => type(search, "ron_"))
+    await vi.waitFor(() => expect(shown()).toEqual(["u7"]))
+    await act(async () => type(search, "agent.one"))
+    await vi.waitFor(() => expect(dialog()?.textContent).toContain(he("organization.members.allMembers")))
+    await act(async () => type(search, "billing"))
+    await vi.waitFor(() =>
+      expect(dialog()?.textContent).toContain(he("organization.members.noMatch", { search: "billing" })),
+    )
     expect(auth.listUsers.mock.calls[0]?.[0]).toEqual({
       query: {
-        limit: 50,
-        offset: 0,
-        sortBy: "name",
+        limit: 1000,
+        sortBy: "username",
         sortDirection: "asc",
         filterField: "role",
         filterValue: "agent",
         filterOperator: "eq",
       },
     })
-    expect(dialog()?.querySelector('input[type="radio"][value="u2"]')).toBeNull()
-    expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(49)
-
-    const search = dialog()?.querySelector<HTMLInputElement>('input[type="search"]') as HTMLInputElement
-    await act(async () => type(search, "Dana"))
-    await vi.waitFor(() => expect(dialog()?.querySelector('input[type="radio"][value="u9"]')).not.toBeNull())
-    expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({
-      query: { searchValue: "dana", searchField: "name", searchOperator: "contains", filterValue: "agent" },
-    })
-    expect(document.querySelector('[data-testid="agents-more"]')).toBeNull()
   })
 
-  it("reaches an agent that 50 others sort before, by loading the next page", async () => {
+  it("lists every agent, also when there are more than a hundred", async () => {
     const everyone = [
-      ...Array.from({ length: 50 }, (_, i) => agent(`p${i}`, `a${String(i).padStart(3, "0")}.sam`)),
+      ...Array.from({ length: 100 }, (_, i) => agent(`p${i}`, `a${String(i).padStart(3, "0")}.sam`)),
       agent("u7", "sam"),
       agent("u8", "zed"),
     ]
-    auth.listUsers.mockImplementation(async ({ query }: { query: Record<string, unknown> }) => {
-      const search = typeof query.searchValue === "string" ? query.searchValue : ""
-      const matching = everyone.filter((user) => user.name.includes(search))
-      const offset = Number(query.offset ?? 0)
-      const limit = Number(query.limit)
-      return { data: { users: matching.slice(offset, offset + limit), total: matching.length }, error: null }
-    })
-    await renderAt(`/organizations/${ORG}`, {
-      "/api/setup/status": status(),
-      "/api/v1/me": admin,
-      [`/api/v1/admin/organizations/${ORG}`]: detail,
-    })
-    await vi.waitFor(() => expect(button(he("organization.members.add"))).toBeDefined())
-    await act(async () => button(he("organization.members.add"))?.click())
-    const search = await vi.waitFor(() => {
-      const found = dialog()?.querySelector<HTMLInputElement>('input[type="search"]')
-      expect(found).toBeTruthy()
-      return found as HTMLInputElement
-    })
+    const { search, shown } = await openAddAgent(everyone)
+    expect(shown()).toHaveLength(102)
     await act(async () => type(search, "sam"))
-    await vi.waitFor(() =>
-      expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({ query: { searchValue: "sam", offset: 0 } }),
-    )
-    await vi.waitFor(() => {
-      expect(dialog()?.querySelector('[data-testid="agents-more"]')?.textContent).toBe(
-        he("organization.members.more", { shown: 50, total: 51 }),
-      )
-      expect(button(he("organization.members.showMore"), dialog() as HTMLElement)?.disabled).toBe(false)
-    })
-    expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(50)
-    expect(dialog()?.querySelector('input[type="radio"][value="u7"]')).toBeNull()
-
-    await act(async () => button(he("organization.members.showMore"), dialog() as HTMLElement)?.click())
-    await vi.waitFor(() => expect(dialog()?.querySelector('input[type="radio"][value="u7"]')).not.toBeNull())
-    expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({ query: { searchValue: "sam", offset: 50 } })
-    expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(51)
-    expect(button(he("organization.members.showMore"), dialog() as HTMLElement)).toBeUndefined()
+    await vi.waitFor(() => expect(shown()).toHaveLength(101))
+    expect(shown()).toContain("u7")
   })
 
   it("shows each line of the signature with its own direction, so an English line after a Hebrew one reads left to right", async () => {

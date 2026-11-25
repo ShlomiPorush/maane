@@ -1162,11 +1162,7 @@
       "added": "Added",
       "search": "Find an agent by username",
       "noMatch": "No agent's username contains {search}.",
-      "allMembers": "Every agent found is already in this organization.",
-      "more": "Showing {shown} of {total} agents.",
-      "showMore": "Show more agents",
-      "loadingMore": "Loading more agents",
-      "moreFailed": "Could not load more agents."
+      "allMembers": "Every agent found is already in this organization."
     },
     "signature": {
       "title": "Signature",

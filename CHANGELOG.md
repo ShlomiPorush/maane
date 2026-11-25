@@ -60,3 +60,4 @@ All notable changes to Maane. The format follows [Keep a Changelog](https://keep
 - Deployment: an address or range in `MAANE_TRUSTED_PROXIES` that cannot be read, such as `/999`, stops the start with a message that names the variable. Before, the server stopped without saying why.
 - Intake: when reading one folder of the mailbox fails, the other folder is still read in the same round.
 - The customer's email: a sender's name that holds `$&` or `$$` shows as it is in the line above the history.
+- Organizations: adding an agent finds them by username also after their display name changed, and lists every agent at once.
