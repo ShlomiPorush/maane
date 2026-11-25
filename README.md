@@ -21,9 +21,14 @@ Not released yet: the first version is being prepared.
 
 ## Installation
 
-Requirements: a Docker host with Traefik on an external network, a Microsoft 365 shared mailbox with an Entra application that may read it, and an SMTP2GO account (plus a second SMTP server for the failover).
+Requirements: a Docker host with Traefik on an external network named `traefik`, with an HTTPS entry point `https` and a middleware chain `default@file` (other names: change the labels and the network in `docker-compose.yml`), serving Maane's host names with a valid certificate, a Microsoft 365 shared mailbox with an Entra application that may read it, and an SMTP2GO account (plus a second SMTP server for the failover).
 
-Follow [the deployment notes](docs/deployment.md): download the release's `docker-compose.yml` and examples, generate the settings and secrets once, start the stack, and create the first admin within five minutes on the setup screen. Updating is one block in the same notes; uninstalling is `docker compose down` and removing the folder after a final backup.
+1. In a new folder on the host, put the release's `docker-compose.yml` and `docker/clamav/`. Copy `.env.example`, `docker/env/postgres.env.example`, and `docker/env/app.env.example` there as `.env`, `postgres.env`, and `app.env`, readable by you only.
+2. Fill them in as their own notes say: the version and the host names, one random database password, two random keys (`openssl rand -hex 32` for each), and the subnets of the Traefik network. Replace the two empty browser notification keys with the lines that `docker run --rm --entrypoint node ghcr.io/shlomiporush/maane:<version> dist/worker/vapid-keys.js` prints once.
+3. Create the folder `data`, owned by UID 1000, and the folder `clamav`, owned by UID 100.
+4. Run `docker compose up -d`, open Maane's address, and create the first admin on the setup screen within five minutes.
+
+To update, take a backup, set the new `VERSION` in `.env`, and run `docker compose pull && docker compose up -d`. To uninstall, take a final backup, run `docker compose down`, and remove the folder.
 
 ## Common questions
 
