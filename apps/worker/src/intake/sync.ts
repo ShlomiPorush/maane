@@ -240,7 +240,8 @@ export class IntakeSync {
     } catch (error) {
       if (!mayConcernOneMessage(error)) throw error
       if (!again) return this.#storeRecord(source, folder, item, meta, "not_read", null)
-      if (graphStatus(error) !== 404 || !(await this.#graph.test({ ...config, mailbox: source.mailbox })).ok) throw error
+      if (graphStatus(error) !== 404 || !(await this.#graph.test({ ...config, mailbox: source.mailbox })).ok)
+        throw error
       return this.#storeRecord(source, folder, item, meta, "unavailable", null)
     }
     if (fetched.kind === "too_large") return this.#storeRecord(source, folder, item, meta, "too_large", fetched.read)
