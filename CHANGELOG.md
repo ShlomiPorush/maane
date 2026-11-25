@@ -59,6 +59,7 @@ All notable changes to Maane. The format follows [Keep a Changelog](https://keep
 - Sign-in: the limit on attempts counts the address a client connects from; a client that reaches the server directly can no longer choose the address it is counted under with `X-Forwarded-For`. Behind a proxy `MAANE_TRUSTED_PROXIES` must be set, as the deployment notes do: without it all clients share one limit.
 - Deployment: an address or range in `MAANE_TRUSTED_PROXIES` that cannot be read, such as `/999`, stops the start with a message that names the variable. Before, the server stopped without saying why.
 - Intake: when reading one folder of the mailbox fails, the other folder is still read in the same round.
+- Intake: a file blocked after it waited for the scanner is named in the audit log, and a blocked extension counts for it also when its name waited too.
 - The customer's email: a sender's name that holds `$&` or `$$` shows as it is in the line above the history.
 - Organizations: adding an agent finds them by username also after their display name changed, and lists every agent at once.
 - Organizations: after adding an organization, Back returns to the list with one press.

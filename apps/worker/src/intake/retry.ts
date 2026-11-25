@@ -219,7 +219,7 @@ export class WaitingFiles {
         continue
       }
       try {
-        outcomes.set(part.id, await this.#files.scan(fresh.content, part.fileName))
+        outcomes.set(part.id, await this.#files.scan(fresh.content, fresh.fileName))
       } catch (error) {
         if (!(error instanceof FileTooLargeError)) throw error
         outcomes.set(part.id, "too_large")
@@ -261,7 +261,9 @@ export class WaitingFiles {
         const names = partNamesOf(content, scans)
         for (const row of rows) {
           const name = names[row.index]
-          if (name) await tx.update(messagePart).set(name).where(eq(messagePart.id, row.id))
+          if (!name) continue
+          await tx.update(messagePart).set(name).where(eq(messagePart.id, row.id))
+          Object.assign(row, name)
         }
       }
       if (Object.values(scans).some((scan) => refused(scan)))
@@ -270,7 +272,7 @@ export class WaitingFiles {
 
       for (const row of rows) {
         const outcome = outcomes.get(row.id)
-        if (!outcome || row.status !== "waiting") continue
+        if (!outcome || row.status !== "waiting" || scans.headers?.status === "waiting") continue
         if (outcome === "changed" || outcome === "too_large") {
           await tx
             .update(messagePart)

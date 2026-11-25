@@ -528,6 +528,38 @@ describe("text fields scanned like files", () => {
   })
 })
 
+describe("a file blocked after it waited together with the header block", () => {
+  it("is blocked by its own name, and the audit row names it", async () => {
+    const h = await start()
+    await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
+    const attachments = [
+      { fileName: "readme.txt", contentType: "text/plain", content: eicar() },
+      { fileName: "macro.xyz", contentType: "text/plain", content: Buffer.from("plain\n") },
+    ]
+    const id = h.graph.add(mime({ attachments }))
+    await h.sync.run()
+    expect((await h.partsOf(id)).map((part) => [part.status, part.fileName])).toEqual([
+      ["waiting", null],
+      ["waiting", null],
+    ])
+    const blocked = await h.settings.get("files.blockedTypes")
+    await h.settings.update({ "files.blockedTypes": [...blocked, "xyz"] }, SYSTEM)
+    expect(await h.retry.run()).toMatchObject({ stillWaiting: 1 })
+    expect((await h.partsOf(id)).map((part) => part.status)).toEqual(["waiting", "waiting"])
+    await h.settings.update({ "scanner.address": clamd.address }, SYSTEM)
+    expect(await h.retry.run()).toMatchObject({ decided: 1 })
+    expect((await h.partsOf(id)).map((part) => [part.status, part.fileName])).toEqual([
+      ["infected", "readme.txt"],
+      ["blocked_type", "macro.xyz"],
+    ])
+    const audits = await h.database.db.select().from(auditLog).where(eq(auditLog.action, "file.blocked"))
+    expect(audits.map((row) => (row.details as { fileName: string | null }).fileName).sort()).toEqual([
+      "macro.xyz",
+      "readme.txt",
+    ])
+  })
+})
+
 describe("records retried", () => {
   it("scans a record's Graph metadata again once the scanner is back", async () => {
     const h = await start()
