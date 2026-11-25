@@ -116,11 +116,13 @@ describe("a message Graph does not hand over", () => {
     await h.retry.run()
     expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
     expect((await h.messageOf(refused)).state).toBe("stored")
+    expect(await h.recordOf(refused)).toMatchObject({ reason: "not_read" })
   })
 
   it("joins its ticket when its reply came first", async () => {
     const h = await start()
     const refused = await refusedMessage(h, "original")
+    const noted = (await h.recordOf(refused))?.createdAt ?? new Date()
     const reply = h.graph.add(mime({ subject: "reply", to: SUPPORT, inReplyTo: "original@example.com" }))
     await h.round()
     h.graph.fail(refused, null)
@@ -128,6 +130,7 @@ describe("a message Graph does not hand over", () => {
     await h.round()
     expect((await h.messageOf(refused)).ticketId).toBe((await h.messageOf(reply)).ticketId)
     expect(await logOf(h, "original")).toEqual([{ outcome: "joined", reasons: [], flags: [] }])
+    expect((await h.recordOf(refused))?.createdAt.getTime()).toBeGreaterThan(noted.getTime())
   })
 
   it("opens no ticket before its scans when the scanner is down once it is handed over", async () => {
@@ -137,6 +140,7 @@ describe("a message Graph does not hand over", () => {
     await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
     expect(await h.retry.run()).toMatchObject({ decided: 1 })
     expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
+    expect(await h.recordOf(refused)).toMatchObject({ reason: "not_read" })
     await h.settings.update({ "scanner.address": clamd.address }, SYSTEM)
     expect(await h.retry.run()).toMatchObject({ decided: 1 })
     expect(await h.processor.run()).toEqual({ processed: 1, failed: 0 })

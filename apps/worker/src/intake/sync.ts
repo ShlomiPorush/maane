@@ -1,5 +1,5 @@
 import type { Db } from "@maane/server/db/client"
-import { intakeCursor, intakeRecord, intakeSource, message, messagePart } from "@maane/server/db/schema"
+import { intakeCursor, intakeSource, message, messagePart } from "@maane/server/db/schema"
 import { holdSourceIfCurrent, type IntakeSource } from "@maane/server/intake/source"
 import { errorFacts, log } from "@maane/server/log"
 import { databaseError } from "@maane/server/organizations/refusal"
@@ -240,7 +240,7 @@ export class IntakeSync {
     } catch (error) {
       if (!mayConcernOneMessage(error)) throw error
       if (!again) return this.#storeRecord(source, folder, item, meta, "not_read", null)
-      if (graphStatus(error) !== 404 || !(await this.#graph.test(config)).ok) throw error
+      if (graphStatus(error) !== 404 || !(await this.#graph.test({ ...config, mailbox: source.mailbox })).ok) throw error
       return this.#storeRecord(source, folder, item, meta, "unavailable", null)
     }
     if (fetched.kind === "too_large") return this.#storeRecord(source, folder, item, meta, "too_large", fetched.read)
@@ -278,7 +278,6 @@ export class IntakeSync {
       .values(row)
       .onConflictDoUpdate({ target: [message.sourceId, message.graphId], set: row, setWhere: NOT_READ_YET })
       .returning({ id: message.id })
-    if (written) await tx.delete(intakeRecord).where(eq(intakeRecord.messageId, written.id))
     return written?.id
   }
 
