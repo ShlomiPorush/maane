@@ -239,6 +239,13 @@
       "when": 1795543282289,
       "tag": "0033_drop_unread_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1795564792427,
+      "tag": "0034_drop_message_headers",
+      "breakpoints": true
     }
   ]
 }

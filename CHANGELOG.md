@@ -64,3 +64,7 @@ All notable changes to Maane. The format follows [Keep a Changelog](https://keep
 - Organizations: adding an agent finds them by username also after their display name changed, and lists every agent at once.
 - Organizations: after adding an organization, Back returns to the list with one press.
 - Browser notifications come in the language chosen last on that browser, wherever it was chosen.
+
+### Removed
+
+- The header lines and the content type of a message are no longer stored: nothing read them. The migration drops the two columns.

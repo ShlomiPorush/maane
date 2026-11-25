@@ -497,7 +497,7 @@ describe("text fields scanned like files", () => {
       expect(stored.rawSha256, name).toBeNull()
     }
     expect((await h.messageOf(cases.text)).textBody).toBeNull()
-    expect(await h.messageOf(cases.subject)).toMatchObject({ subject: null, headers: [] })
+    expect(await h.messageOf(cases.subject)).toMatchObject({ subject: null })
     expect((await h.messageOf(cases.title)).htmlBody).toBeNull()
     expect((await h.messageOf(cases.title)).textBody).toBe("hello")
     expect(await h.messageOf(cases.node)).toMatchObject({ htmlBody: null, textBody: "plain" })
@@ -517,8 +517,11 @@ describe("text fields scanned like files", () => {
     await h.settings.update({ "scanner.address": await refusedAddress() }, SYSTEM)
     const id = h.graph.add(mime({ subject: "later", text: { content: "body later" } }))
     await h.sync.run()
-    expect(await h.messageOf(id)).toMatchObject({ subject: null, textBody: null, headers: [] })
-    expect(((await h.messageOf(id)).fieldScans as Record<string, { status: string }>).text?.status).toBe("waiting")
+    expect(await h.messageOf(id)).toMatchObject({ subject: null, textBody: null })
+    expect((await h.messageOf(id)).fieldScans).toMatchObject({
+      text: { status: "waiting" },
+      headers: { status: "waiting" },
+    })
     expect(await h.processor.run()).toEqual({ processed: 0, failed: 0 })
     await h.settings.update({ "scanner.address": clamd.address }, SYSTEM)
     expect(await h.retry.run()).toMatchObject({ decided: 1 })

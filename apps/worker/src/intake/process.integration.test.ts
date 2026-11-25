@@ -376,7 +376,12 @@ describe("reference codes, blocked headers, and originals that wait", () => {
       { receivedAt: at(2) },
     )
     await h.round()
-    expect(await h.messageOf(auto)).toMatchObject({ headers: [], classification: "automated", ticketId: null })
+    expect(await h.messageOf(auto)).toMatchObject({
+      subject: null,
+      fieldScans: { headers: { status: "infected" } },
+      classification: "automated",
+      ticketId: null,
+    })
     expect(await h.recordOf(auto)).toMatchObject({ outcome: "automated" })
     expect((await h.ticketOf(original))?.status).toBe("new")
   })

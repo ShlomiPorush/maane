@@ -256,7 +256,6 @@ export class WaitingFiles {
           fromName: columns.fromName,
           toAddresses: columns.toAddresses,
           ccAddresses: columns.ccAddresses,
-          headers: columns.headers,
         })
         const names = partNamesOf(content, scans)
         for (const row of rows) {
