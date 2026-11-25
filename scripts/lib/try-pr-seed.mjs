@@ -11,7 +11,7 @@ const password = randomBytes(18).toString("base64url")
 const cookies = new Map()
 
 async function call(path, body) {
-  const headers = { origin, "content-type": "application/json", "x-forwarded-for": "198.51.100.10" }
+  const headers = { origin, "content-type": "application/json" }
   if (cookies.size > 0) headers.cookie = [...cookies].map(([n, v]) => `${n}=${v}`).join("; ")
   const response = await fetch(`${url}${path}`, { method: "POST", headers, body: JSON.stringify(body) })
   for (const cookie of response.headers.getSetCookie()) {

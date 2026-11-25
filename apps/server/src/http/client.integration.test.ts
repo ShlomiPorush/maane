@@ -22,7 +22,7 @@ afterEach(async () => {
   await database.drop()
 })
 
-async function browserThroughPort(trustedProxies: string[]): Promise<TestBrowser> {
+async function serveApp(trustedProxies: string[]): Promise<string> {
   app = createTestApp(database, {}, undefined, "/nonexistent", { trustedProxies })
   await app.ready
   const port = await new Promise<number>((resolve) => {
@@ -31,16 +31,31 @@ async function browserThroughPort(trustedProxies: string[]): Promise<TestBrowser
     )
     server = s
   })
+  return `http://127.0.0.1:${port}`
+}
+
+async function browserThroughPort(trustedProxies: string[]): Promise<TestBrowser> {
+  const base = await serveApp(trustedProxies)
   const through = async (request: Request) => {
     const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.text()
-    return fetch(request.url.replace(TEST_ORIGIN, `http://127.0.0.1:${port}`), {
-      method: request.method,
-      headers: request.headers,
-      body,
-      redirect: "manual",
-    })
+    const headers = new Headers(request.headers)
+    headers.set("x-forwarded-for", FORWARDED)
+    return fetch(request.url.replace(TEST_ORIGIN, base), { method: request.method, headers, body, redirect: "manual" })
   }
   return new TestBrowser(through, FORWARDED)
+}
+
+async function wrongSignIns(base: string, headersOf: (attempt: number) => Record<string, string>): Promise<number[]> {
+  const statuses: number[] = []
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    const answer = await fetch(`${base}/api/auth/sign-in/username`, {
+      method: "POST",
+      headers: { origin: TEST_ORIGIN, "content-type": "application/json", ...headersOf(attempt) },
+      body: JSON.stringify({ username: "nobody", password: testPassword() }),
+    })
+    statuses.push(answer.status)
+  }
+  return statuses
 }
 
 async function act(b: TestBrowser) {
@@ -61,5 +76,28 @@ describe("the client address of the audit log", () => {
   it("takes the forwarded address behind a trusted proxy, in Better Auth's audit rows and Maane's alike", async () => {
     const rows = await act(await browserThroughPort(["127.0.0.1"]))
     expect(new Set(rows.map((row) => row.ip))).toEqual(new Set([FORWARDED]))
+  })
+})
+
+describe("the client address of Better Auth's rate limits", () => {
+  const LIMITED = [401, 401, 401, 401, 401, 429]
+
+  it("is the peer's when the client reaches the server directly, whatever headers it sends", async () => {
+    const base = await serveApp([])
+    const forged = (attempt: number) => ({
+      "x-forwarded-for": `192.0.2.${attempt}`,
+      "x-maane-client-address": `192.0.2.${attempt}`,
+    })
+    expect(await wrongSignIns(base, forged)).toEqual(LIMITED)
+  })
+
+  it("is the forwarded one behind a trusted proxy, each client with its own limit", async () => {
+    const base = await serveApp(["127.0.0.1"])
+    const forwarded = (address: string) => (attempt: number) => ({
+      "x-forwarded-for": `203.0.113.${attempt}, ${address}`,
+      "x-maane-client-address": `203.0.113.${attempt}`,
+    })
+    expect(await wrongSignIns(base, forwarded("192.0.2.10"))).toEqual(LIMITED)
+    expect((await wrongSignIns(base, forwarded("192.0.2.11")))[0]).toBe(401)
   })
 })

@@ -150,12 +150,12 @@ async function uploadFile(b: TestBrowser, name: string, bytes: Buffer): Promise<
       method: "POST",
       body: form,
       headers: {
-        "x-forwarded-for": b.ip,
         origin: b.origin,
         "x-maane-request": "1",
         cookie: [...b.cookies].map(([n, v]) => `${n}=${v}`).join("; "),
       },
     }),
+    b.ip,
   )
   return { status: response.status, json: await response.json() }
 }

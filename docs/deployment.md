@@ -371,7 +371,7 @@ The folder must be readable by UID 1000; the server never writes to it. Check wh
 cd "$HOME/maane" && docker compose exec -T server ls -l /geoip
 ```
 
-**The client address** of a click and of the rate limits (60 requests a minute per address over both routes) comes from `X-Forwarded-For` only when the request came from one of `MAANE_TRUSTED_PROXIES`; set it to the subnets of the `traefik` network as section 3 does. Without it every click records Traefik's own address.
+**The client address** of a click and of the rate limits (60 requests a minute per address over both routes) comes from `X-Forwarded-For` only when the request came from one of `MAANE_TRUSTED_PROXIES`; set it to the subnets of the `traefik` network as section 3 does. Without it every click records Traefik's own address, and all clients share the sign-in limit of that one address.
 
 ### Import from Zendesk
 

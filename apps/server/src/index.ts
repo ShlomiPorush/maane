@@ -24,7 +24,6 @@ async function main(): Promise<void> {
       auditDb: auditDatabase.db,
       secrets: config.authSecrets,
       publicUrl: config.publicUrl,
-      trustedProxies: config.trustedProxies,
       setup,
       sessionDays: await settings.get("security.sessionDays"),
     })

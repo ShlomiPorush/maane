@@ -6,7 +6,7 @@ export const TEST_ORIGIN = "http://127.0.0.1:8090"
 
 export const testPassword = () => randomBytes(18).toString("base64url")
 
-type Fetch = (request: Request) => Response | Promise<Response>
+type Fetch = (request: Request, peer: string) => Response | Promise<Response>
 // biome-ignore lint/suspicious/noExplicitAny: tests read each answer as the shape they expect
 export type Answer = { status: number; json: any }
 
@@ -20,7 +20,7 @@ export class TestBrowser {
   ) {}
 
   async call(method: string, path: string, body?: unknown, extra: Record<string, string> = {}): Promise<Answer> {
-    const headers: Record<string, string> = { "x-forwarded-for": this.ip, ...extra }
+    const headers: Record<string, string> = { ...extra }
     if (this.cookies.size > 0) headers.cookie = [...this.cookies].map(([n, v]) => `${n}=${v}`).join("; ")
     if (method !== "GET") {
       headers.origin ??= this.origin
@@ -33,6 +33,7 @@ export class TestBrowser {
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
       }),
+      this.ip,
     )
     for (const cookie of response.headers.getSetCookie()) {
       const [pair = "", ...attributes] = cookie.split(";")
@@ -53,9 +54,9 @@ export class TestBrowser {
   }
 
   get(path: string): Promise<Response> {
-    const headers: Record<string, string> = { "x-forwarded-for": this.ip }
+    const headers: Record<string, string> = {}
     if (this.cookies.size > 0) headers.cookie = [...this.cookies].map(([n, v]) => `${n}=${v}`).join("; ")
-    return Promise.resolve(this.fetch(new Request(`${this.origin}${path}`, { headers })))
+    return Promise.resolve(this.fetch(new Request(`${this.origin}${path}`, { headers }), this.ip))
   }
 
   setup(username: string, password: string): Promise<Answer> {

@@ -33,7 +33,7 @@ import { Refusal } from "../organizations/refusal.ts"
 import { Organizations } from "../organizations/service.ts"
 import { Replies } from "../replies/service.ts"
 import { type Settings, SettingsError } from "../settings/service.ts"
-import { clientIp, rememberClient, trustOf } from "./client.ts"
+import { clientIp, rememberClient, trustOf, withClientAddress } from "./client.ts"
 import { hookRoutes } from "./hooks.ts"
 import { importRoutes } from "./imports.ts"
 import { linkRoutes } from "./links.ts"
@@ -177,7 +177,7 @@ export function createApp(ctx: AppContext) {
   const links = new Links(ctx.db, ctx.settings, new Geo(ctx.geoipDir))
   app.route("/", linkRoutes(links, ctx.settings, ctx.filesDir))
 
-  app.on(["GET", "POST"], "/api/auth/*", (c) => ctx.auth().handler(c.req.raw))
+  app.on(["GET", "POST"], "/api/auth/*", (c) => ctx.auth().handler(withClientAddress(c.req.raw)))
 
   app.get("/api/setup/status", async (c) => {
     const [row] = await ctx.db.select({ id: authUser.id }).from(authUser).limit(1)

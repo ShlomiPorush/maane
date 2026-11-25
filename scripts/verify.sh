@@ -293,6 +293,7 @@ run_stack() {
   STACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maane-verify-stack.XXXXXX")"
   ensure_stack_env "$STACK_DIR"
   ensure_vapid_keys "$STACK_DIR" "maane:$STACK_TAG"
+  printf 'MAANE_TRUSTED_PROXIES=uniquelocal\n' >>"$STACK_DIR/app.env"
   ensure_stack_dirs "$STACK_DIR"
 
   info "Container stack: health, readiness, runtime users, and hardening ($STACK_PROJECT)"
