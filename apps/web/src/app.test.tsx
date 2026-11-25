@@ -3176,7 +3176,7 @@ describe("browser notifications on this device", () => {
     await renderAt("/", answers)
     await vi.waitFor(() => expect(events).toEqual(["unsubscribe"]))
     const asked = requests.find((r) => r.url === "/api/v1/notifications/state")
-    expect(asked?.body).toBe(JSON.stringify({ endpoint: ENDPOINT }))
+    expect(asked?.body).toBe(JSON.stringify({ endpoint: ENDPOINT, locale: "he" }))
   })
 
   it.each([
@@ -3188,6 +3188,51 @@ describe("browser notifications on this device", () => {
     await vi.waitFor(() => expect(requests.some((r) => r.url === "/api/v1/notifications/state")).toBe(true))
     await settle()
     expect(events).toEqual([])
+  })
+
+  it("tells the server the language whenever it changes, on any page", async () => {
+    fakeDevice(true)
+    await renderAt("/", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": ok({ publicKey: PUBLIC_KEY, on: true }),
+    })
+    const told = () => requests.filter((r) => r.url.startsWith("/api/v1/notifications")).map((r) => r.body)
+    await vi.waitFor(() => expect(told()).toEqual([JSON.stringify({ endpoint: ENDPOINT, locale: "he" })]))
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-language-button]")?.click())
+    await vi.waitFor(() => expect(told().slice(1)).toEqual([JSON.stringify({ endpoint: ENDPOINT, locale: "en" })]))
+  })
+
+  it("tells the server a language chosen while notifications are being turned on", async () => {
+    fakeDevice(false)
+    let on = false
+    let release = () => {}
+    const locales: unknown[] = []
+    await renderAt("/account", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": (request) => {
+        const { locale } = JSON.parse(request.body ?? "{}") as { locale?: string }
+        if (on && locale) locales.push(locale)
+        return ok({ publicKey: PUBLIC_KEY, on })
+      },
+      "/api/v1/notifications/subscription": () =>
+        new Promise((resolve) => {
+          release = () => {
+            on = true
+            resolve(ok({ on: true }))
+          }
+        }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.off")))
+    await act(async () => button(he("notifications.turnOn"))?.click())
+    await vi.waitFor(() => expect(requests.some((r) => r.method === "PUT")).toBe(true))
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-language-button]")?.click())
+    await settle()
+    await act(async () => release())
+    await settle()
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    await vi.waitFor(() => expect(locales).toEqual(["en"]))
   })
 
   it("asks again after a failed check until the server answers, and then ends someone else's subscription", async () => {

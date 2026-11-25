@@ -5,7 +5,7 @@ import { authClient, onAuthUnauthorized } from "../api/auth.ts"
 import { ApiError, onUnauthorized } from "../api/client.ts"
 import { qk } from "../api/endpoints.ts"
 import { useI18n } from "../i18n/i18n.tsx"
-import { dropForeignSubscription } from "../notifications/forget.ts"
+import { followSubscription } from "../notifications/forget.ts"
 import { ConfirmHost, dismissQuestions } from "../ui/confirm.tsx"
 import { ErrorState, Loading } from "../ui/states.tsx"
 import { ToastHost } from "../ui/Toast.tsx"
@@ -77,7 +77,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
     return (
       <>
         <SessionKeeper seen={sessionUser} handled={handledMismatch} shown={`${me.data.id}:${me.data.role}`} />
-        <ForeignSubscription key={me.data.id} />
+        <BrowserSubscription key={me.data.id} />
         <Fragment key={`${me.data.id}:${me.data.role}`}>{children}</Fragment>
       </>
     )
@@ -121,9 +121,10 @@ function SessionKeeper({
   return null
 }
 
-const FOREIGN_RECHECK_MS = 30_000
+const SUBSCRIPTION_RECHECK_MS = 30_000
 
-function ForeignSubscription() {
+function BrowserSubscription() {
+  const { language } = useI18n()
   const queryClient = useQueryClient()
   useEffect(() => {
     let answered = false
@@ -135,7 +136,7 @@ function ForeignSubscription() {
     function check() {
       if (answered || checking) return
       checking = true
-      dropForeignSubscription()
+      followSubscription(language)
         .then((ended) => {
           answered = true
           stop()
@@ -146,13 +147,13 @@ function ForeignSubscription() {
           checking = false
         })
     }
-    const timer = setInterval(check, FOREIGN_RECHECK_MS)
+    const timer = setInterval(check, SUBSCRIPTION_RECHECK_MS)
     window.addEventListener("focus", check)
     check()
     return () => {
       answered = true
       stop()
     }
-  }, [queryClient])
+  }, [queryClient, language])
   return null
 }

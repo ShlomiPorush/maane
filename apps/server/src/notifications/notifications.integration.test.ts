@@ -82,6 +82,23 @@ describe("notification routes", () => {
     expect(await rows()).toHaveLength(0)
   })
 
+  it("changes the language of the signed-in user's own subscription only, and never makes one", async () => {
+    const admin = await firstAdmin()
+    const other = await agent(admin, "agent.other")
+    const device = subscription()
+    const told = (b: TestBrowser, locale: string) =>
+      b.call("POST", "/api/v1/notifications/state", { endpoint: device.endpoint, locale })
+    expect(await told(admin, "en")).toEqual({ status: 200, json: { publicKey, on: false } })
+    expect(await rows()).toEqual([])
+    await admin.call("PUT", "/api/v1/notifications/subscription", { ...device, locale: "he" })
+    const [before] = await rows()
+    expect(await told(other, "en")).toEqual({ status: 200, json: { publicKey, on: false } })
+    expect(await rows()).toEqual([before])
+    expect(await told(admin, "en")).toEqual({ status: 200, json: { publicKey, on: true } })
+    expect(await rows()).toEqual([{ ...before, locale: "en" }])
+    expect((await told(admin, "fr")).status).toBe(400)
+  })
+
   it("never lets a user see, take, change, or delete another user's subscription", async () => {
     const admin = await firstAdmin()
     const other = await agent(admin, "agent.other")

@@ -18,6 +18,15 @@ export class Subscriptions {
     return row !== undefined
   }
 
+  async setLocale(userId: string, endpoint: string, locale: Locale): Promise<boolean> {
+    const rows = await this.db
+      .update(pushSubscription)
+      .set({ locale })
+      .where(and(eq(pushSubscription.userId, userId), eq(pushSubscription.endpoint, endpoint)))
+      .returning({ id: pushSubscription.id })
+    return rows.length > 0
+  }
+
   async subscribe(userId: string, input: SubscriptionInput): Promise<void> {
     if (!pushEndpointAllowed(input.endpoint)) throw new Refusal("push_endpoint_refused", 400)
     if (!subscriptionKeysValid(input.keys.p256dh, input.keys.auth)) throw new Refusal("push_subscription_invalid", 400)
