@@ -10,7 +10,7 @@ import { type Actor, writeAudit } from "../audit.ts"
 import type { VersionedKey } from "../config.ts"
 import type { Db } from "../db/client.ts"
 import { authAccount, authRateLimit, authSession, authTwoFactor, authUser, authVerification } from "../db/schema.ts"
-import { clientIp } from "../http/client.ts"
+import { CLIENT_ADDRESS_HEADER, clientIp } from "../http/client.ts"
 import { errorFacts, log } from "../log.ts"
 import { clearMemberships } from "../organizations/service.ts"
 import type { SetupWindow } from "./setup-window.ts"
@@ -98,7 +98,6 @@ export interface AuthOptions {
   auditDb: Db
   secrets: VersionedKey[]
   publicUrl: URL
-  trustedProxies: string[]
   setup: SetupWindow
   sessionDays: number
 }
@@ -327,7 +326,7 @@ export function createAuth(options: AuthOptions) {
       disableOriginCheck: false,
       disableCSRFCheck: false,
       useSecureCookies: publicUrl.protocol === "https:",
-      ipAddress: { ipAddressHeaders: ["x-forwarded-for"], trustedProxies: options.trustedProxies },
+      ipAddress: { ipAddressHeaders: [CLIENT_ADDRESS_HEADER] },
     },
     hooks: { before: beforeRoute, after: afterRoute },
     databaseHooks: {

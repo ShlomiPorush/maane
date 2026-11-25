@@ -547,7 +547,7 @@ describe("a link a scanner keeps clicking", () => {
   })
 })
 
-describe("the early mark after later delivery events (review L1)", () => {
+describe("the early mark after later delivery events", () => {
   it("keeps a click early against the first delivery when a spam report replaces the status", async () => {
     await app.close()
     await start({ trustedProxies: ["127.0.0.1"], geoipDir: null })

@@ -139,6 +139,14 @@ describe("the customer's email", () => {
     )
   })
 
+  it("writes a sender's name with replacement patterns in the attribution line as it is", async () => {
+    const name = "Cash $& Carry $$ $1 {date}"
+    const html = (await parse(await buildReply(mail({ history: [entry({ name })] })))).html || ""
+    const shown = `<span dir="ltr">${name.replaceAll("&", "&amp;")}</span>`
+    const before = html.slice(0, html.indexOf('<blockquote type="cite"'))
+    expect(before).toContain(shown)
+  })
+
   it("writes times in Israel time, daylight saving included", () => {
     expect(israelTime(new Date("2026-07-21T21:18:00Z"))).toBe("22/07/2026 00:18")
     expect(israelTime(new Date("2026-11-13T12:05:00Z"))).toBe("13/11/2026 14:05")

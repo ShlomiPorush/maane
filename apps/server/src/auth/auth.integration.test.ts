@@ -147,7 +147,7 @@ describe("two-factor before anything else", () => {
     expect((await b.call("GET", "/api/v1/me")).status).toBe(200)
   })
 
-  it("G7, open for the owner: a password-only session of another browser passes once the user enrolls elsewhere", async () => {
+  it("accepts a password-only session of another browser once the user enrolls elsewhere, until the other sessions are revoked", async () => {
     const setupBrowser = browser()
     await setupBrowser.setup("first.admin", password)
     const other = browser()

@@ -12,7 +12,7 @@ import {
   windows1255,
 } from "../testing/mime.ts"
 import { classify } from "./classify.ts"
-import { contentOf, headerBlock, storedContentType } from "./content.ts"
+import { contentOf, headerBlock, mediaTypeOf } from "./content.ts"
 import { describeGraphError, isExpiredDelta } from "./graph.ts"
 import { MAX_REFERENCES, MESSAGE_ID_MAX, messageIds, parseMessage } from "./parse.ts"
 import { sanitizeMailHtml, textFromHtml } from "./sanitize.ts"
@@ -85,13 +85,12 @@ describe("classification (RFC 3834, RFC 3464)", () => {
           "latin1",
         ),
       )
-      const contentType = storedContentType(parsed.contentType)
+      const contentType = mediaTypeOf(parsed.contentType)
       expect(contentType, type).toEqual({ value: "multipart/report", reportType: "delivery-status" })
       expect(classify({ headers: [], contentType, from: "mailer-daemon@example.com" }).signs).toEqual([
         "delivery_report",
       ])
     }
-    expect(storedContentType({ value: "text/<b>", params: {} }).value).toBe("application/octet-stream")
   })
 })
 

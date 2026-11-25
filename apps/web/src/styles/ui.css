@@ -864,11 +864,6 @@ button {
 .ui-check-result > :last-child {
   margin-bottom: 14px;
 }
-.ui-agents-more {
-  display: grid;
-  justify-items: start;
-  gap: 6px;
-}
 .ui-set-desc-line {
   display: block;
 }

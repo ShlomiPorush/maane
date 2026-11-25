@@ -8,7 +8,7 @@ import type { ApiEnv } from "./request.ts"
 
 const Endpoint = z.string().min(1).max(ENDPOINT_MAX)
 const KEY_MAX = 200
-const StateBody = z.object({ endpoint: Endpoint.nullable() })
+const StateBody = z.object({ endpoint: Endpoint.nullable(), locale: z.enum(LOCALES).optional() })
 const SubscribeBody = z.object({
   endpoint: Endpoint,
   keys: z.object({ p256dh: z.string().min(1).max(KEY_MAX), auth: z.string().min(1).max(KEY_MAX) }),
@@ -26,8 +26,11 @@ export function notificationRoutes(subscriptions: Subscriptions, vapidPublicKey:
   const routes = new Hono<ApiEnv>()
 
   routes.post("/state", async (c) => {
-    const { endpoint } = await body(c, StateBody)
-    const on = endpoint !== null && (await subscriptions.isOn(c.get("user").id, endpoint))
+    const { endpoint, locale } = await body(c, StateBody)
+    const userId = c.get("user").id
+    const on =
+      endpoint !== null &&
+      (locale ? await subscriptions.setLocale(userId, endpoint, locale) : await subscriptions.isOn(userId, endpoint))
     return c.json({ publicKey: vapidPublicKey, on })
   })
 

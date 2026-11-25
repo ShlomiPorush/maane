@@ -2,7 +2,7 @@ import { SYSTEM, writeAudit } from "@maane/server/audit"
 import type { Db } from "@maane/server/db/client"
 import { type FieldScan, type PartStatus, STORED_STATUSES, type TextField } from "@maane/shared"
 import { type FileService, FileTooLargeError } from "../files/service.ts"
-import { classify } from "./classify.ts"
+import { type ClassifyInput, classify } from "./classify.ts"
 import type { MailAddress, ParsedMessage, ReportRecipient } from "./parse.ts"
 import { wellFormed } from "./text.ts"
 
@@ -15,20 +15,8 @@ export interface GraphMeta {
   from: { address: string | null; name: string | null } | null
 }
 
-export interface StoredContentType {
-  value: string
-  reportType: string | null
-}
-
-const MEDIA_TYPE = /^[a-z0-9!#$&^_.+-]{1,63}\/[a-z0-9!#$&^_.+-]{1,63}$/
-const TOKEN = /^[a-z0-9.+-]{1,64}$/
-
-export function storedContentType(type: ParsedMessage["contentType"]): StoredContentType {
-  const report = (type.params["report-type"] ?? "").trim()
-  return {
-    value: MEDIA_TYPE.test(type.value) ? type.value : "application/octet-stream",
-    reportType: TOKEN.test(report) ? report : null,
-  }
+export function mediaTypeOf(type: ParsedMessage["contentType"]): ClassifyInput["contentType"] {
+  return { value: type.value, reportType: type.params["report-type"]?.trim() ?? null }
 }
 
 export interface MessageContent {
@@ -40,7 +28,7 @@ export interface MessageContent {
     to: string[]
     cc: string[]
     sentAt: Date | null
-    contentType: StoredContentType
+    contentType: ClassifyInput["contentType"]
     reportOriginalMessageId: string | null
     deliveryReport: ReportRecipient[] | null
     graph: Omit<GraphMeta, "subject" | "from"> & { fromAddress: string | null }
@@ -99,7 +87,7 @@ export function contentOf(parsed: ParsedMessage, meta: GraphMeta): MessageConten
   })
   return {
     ...fixed.value,
-    structured: { ...fixed.value.structured, sentAt: parsed.date, contentType: storedContentType(parsed.contentType) },
+    structured: { ...fixed.value.structured, sentAt: parsed.date, contentType: mediaTypeOf(parsed.contentType) },
     invalidCharacters: fixed.changed,
   }
 }
@@ -170,11 +158,9 @@ export function columnsOf(content: MessageContent, scans: Partial<Record<TextFie
     toAddresses: named(s.to, h.toNames),
     ccAddresses: named(s.cc, h.ccNames),
     sentAt: s.sentAt,
-    contentType: s.contentType,
     reportOriginalMessageId: s.reportOriginalMessageId,
     deliveryReport: s.deliveryReport,
     subject: headersOk ? h.subject : null,
-    headers: headersOk ? h.lines : [],
     graph: {
       id: s.graph.id,
       folder: s.graph.folder,

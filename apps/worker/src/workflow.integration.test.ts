@@ -481,7 +481,7 @@ describe("moving a ticket to another organization", () => {
     expect(parsed.from?.value[0]?.name).toContain("(Example Other)")
   })
 
-  it("refuses a move to an organization with no address to send the ticket's replies from (review S4)", async () => {
+  it("refuses a move to an organization with no address to send the ticket's replies from", async () => {
     const admin = await firstAdmin()
     const patterns = await h.organization("Example Patterns", [{ value: "*@sales.example.com", kind: "pattern" }])
     const t = await customerTicket()
@@ -500,7 +500,7 @@ describe("moving a ticket to another organization", () => {
     expect((await move(other)).status).toBe(200)
   })
 
-  it("writes no note to a ticket moved out of its author's organizations while the note was written (review S1)", async () => {
+  it("writes no note to a ticket moved out of its author's organizations while the note was written", async () => {
     const admin = await firstAdmin()
     const one = await newAgent(admin, "agent.one", [org])
     const t = await customerTicket()

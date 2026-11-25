@@ -854,17 +854,14 @@ describe("organization dialogs", () => {
     await vi.waitFor(() => expect(dialog()).toBeNull())
   }
 
-  it("finds any agent through the admin plugin's search, and says when the list is cut short", async () => {
-    auth.listUsers.mockImplementation(async ({ query }: { query: Record<string, unknown> }) => ({
-      data:
-        query.searchValue === "dana"
-          ? { users: [agent("u9", "dana.levi")], total: 1 }
-          : {
-              users: [agent("u2", "agent.one"), ...Array.from({ length: 49 }, (_, i) => agent(`a${i}`, `agent${i}`))],
-              total: 120,
-            },
-      error: null,
-    }))
+  async function openAddAgent(everyone: ReturnType<typeof agent>[]) {
+    auth.listUsers.mockImplementation(async ({ query }: { query: Record<string, unknown> }) => {
+      const search = typeof query.searchValue === "string" ? query.searchValue : ""
+      const matching = everyone.filter((user) => user.name.includes(search))
+      const offset = Number(query.offset ?? 0)
+      const users = matching.slice(offset, offset + Number(query.limit))
+      return { data: { users, total: matching.length }, error: null }
+    })
     await renderAt(`/organizations/${ORG}`, {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
@@ -872,73 +869,54 @@ describe("organization dialogs", () => {
     })
     await vi.waitFor(() => expect(button(he("organization.members.add"))).toBeDefined())
     await act(async () => button(he("organization.members.add"))?.click())
-    await vi.waitFor(() => expect(document.querySelector('[data-testid="agents-more"]')).not.toBeNull())
+    await vi.waitFor(() => expect(dialog()?.querySelector('input[type="radio"]')).not.toBeNull())
+    const search = dialog()?.querySelector<HTMLInputElement>('input[type="search"]') as HTMLInputElement
+    const shown = () =>
+      [...(dialog()?.querySelectorAll<HTMLInputElement>('input[type="radio"]') ?? [])].map((radio) => radio.value)
+    return { search, shown }
+  }
+
+  it("finds an agent by username also after the display name changed, and takes every character literally", async () => {
+    const { search, shown } = await openAddAgent([
+      agent("u2", "agent.one"),
+      { ...agent("u7", "ron_levi"), name: "Support desk" },
+      agent("u8", "ronxlevi"),
+      { ...agent("u9", "dana.levi"), name: "Billing desk" },
+    ])
+    expect(shown()).toEqual(["u7", "u8", "u9"])
+    await act(async () => type(search, " Dana"))
+    await vi.waitFor(() => expect(shown()).toEqual(["u9"]))
+    await act(async () => type(search, "ron_"))
+    await vi.waitFor(() => expect(shown()).toEqual(["u7"]))
+    await act(async () => type(search, "agent.one"))
+    await vi.waitFor(() => expect(dialog()?.textContent).toContain(he("organization.members.allMembers")))
+    await act(async () => type(search, "billing"))
+    await vi.waitFor(() =>
+      expect(dialog()?.textContent).toContain(he("organization.members.noMatch", { search: "billing" })),
+    )
     expect(auth.listUsers.mock.calls[0]?.[0]).toEqual({
       query: {
-        limit: 50,
-        offset: 0,
-        sortBy: "name",
+        limit: 1000,
+        sortBy: "username",
         sortDirection: "asc",
         filterField: "role",
         filterValue: "agent",
         filterOperator: "eq",
       },
     })
-    expect(dialog()?.querySelector('input[type="radio"][value="u2"]')).toBeNull()
-    expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(49)
-
-    const search = dialog()?.querySelector<HTMLInputElement>('input[type="search"]') as HTMLInputElement
-    await act(async () => type(search, "Dana"))
-    await vi.waitFor(() => expect(dialog()?.querySelector('input[type="radio"][value="u9"]')).not.toBeNull())
-    expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({
-      query: { searchValue: "dana", searchField: "name", searchOperator: "contains", filterValue: "agent" },
-    })
-    expect(document.querySelector('[data-testid="agents-more"]')).toBeNull()
   })
 
-  it("reaches an agent that 50 others sort before, by loading the next page", async () => {
+  it("lists every agent, also when there are more than a hundred", async () => {
     const everyone = [
-      ...Array.from({ length: 50 }, (_, i) => agent(`p${i}`, `a${String(i).padStart(3, "0")}.sam`)),
+      ...Array.from({ length: 100 }, (_, i) => agent(`p${i}`, `a${String(i).padStart(3, "0")}.sam`)),
       agent("u7", "sam"),
       agent("u8", "zed"),
     ]
-    auth.listUsers.mockImplementation(async ({ query }: { query: Record<string, unknown> }) => {
-      const search = typeof query.searchValue === "string" ? query.searchValue : ""
-      const matching = everyone.filter((user) => user.name.includes(search))
-      const offset = Number(query.offset ?? 0)
-      const limit = Number(query.limit)
-      return { data: { users: matching.slice(offset, offset + limit), total: matching.length }, error: null }
-    })
-    await renderAt(`/organizations/${ORG}`, {
-      "/api/setup/status": status(),
-      "/api/v1/me": admin,
-      [`/api/v1/admin/organizations/${ORG}`]: detail,
-    })
-    await vi.waitFor(() => expect(button(he("organization.members.add"))).toBeDefined())
-    await act(async () => button(he("organization.members.add"))?.click())
-    const search = await vi.waitFor(() => {
-      const found = dialog()?.querySelector<HTMLInputElement>('input[type="search"]')
-      expect(found).toBeTruthy()
-      return found as HTMLInputElement
-    })
+    const { search, shown } = await openAddAgent(everyone)
+    expect(shown()).toHaveLength(102)
     await act(async () => type(search, "sam"))
-    await vi.waitFor(() =>
-      expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({ query: { searchValue: "sam", offset: 0 } }),
-    )
-    await vi.waitFor(() => {
-      expect(dialog()?.querySelector('[data-testid="agents-more"]')?.textContent).toBe(
-        he("organization.members.more", { shown: 50, total: 51 }),
-      )
-      expect(button(he("organization.members.showMore"), dialog() as HTMLElement)?.disabled).toBe(false)
-    })
-    expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(50)
-    expect(dialog()?.querySelector('input[type="radio"][value="u7"]')).toBeNull()
-
-    await act(async () => button(he("organization.members.showMore"), dialog() as HTMLElement)?.click())
-    await vi.waitFor(() => expect(dialog()?.querySelector('input[type="radio"][value="u7"]')).not.toBeNull())
-    expect(auth.listUsers.mock.calls.at(-1)?.[0]).toMatchObject({ query: { searchValue: "sam", offset: 50 } })
-    expect(dialog()?.querySelectorAll('input[type="radio"]')).toHaveLength(51)
-    expect(button(he("organization.members.showMore"), dialog() as HTMLElement)).toBeUndefined()
+    await vi.waitFor(() => expect(shown()).toHaveLength(101))
+    expect(shown()).toContain("u7")
   })
 
   it("shows each line of the signature with its own direction, so an English line after a Hebrew one reads left to right", async () => {
@@ -1891,7 +1869,7 @@ describe("tickets", () => {
     expect(sent()[2]).toMatchObject({ kind: "note", setPending: false })
   })
 
-  it("switches the composer to the new organization's From after a move, keeping the draft (review S2)", async () => {
+  it("switches the composer to the new organization's From after a move, keeping the draft", async () => {
     let moved = false
     const after = ok({
       ...(view().body as Record<string, unknown>),
@@ -2071,7 +2049,7 @@ describe("tickets", () => {
     expect(put).not.toHaveProperty("submissionId")
   })
 
-  it("keeps a change on the version it loaded and on its reply: never a newer version, never a new reply (review T3, T4)", async () => {
+  it("keeps a change on the version it loaded and on its reply: never a newer version, never a new reply", async () => {
     const EDITED = "00000000-0000-4000-8000-0000000000d5"
     const OTHER = "00000000-0000-4000-8000-0000000000d6"
     const entry = (id: string, over: Record<string, unknown> = {}) => ({
@@ -2157,7 +2135,7 @@ describe("tickets", () => {
     expect(requests.some((r) => r.method === "POST" && r.url === "/api/v1/tickets/7/messages")).toBe(false)
   })
 
-  it("asks before a change to another scheduled reply drops unsaved edits of the one being changed (review T11)", async () => {
+  it("asks before a change to another scheduled reply drops unsaved edits of the one being changed", async () => {
     const FIRST = "00000000-0000-4000-8000-0000000000d7"
     const SECOND = "00000000-0000-4000-8000-0000000000d8"
     const entry = (id: string, address: string) => ({
@@ -2234,7 +2212,7 @@ describe("tickets", () => {
     expect(toField().value).toBe("dana@example.com")
   })
 
-  it("starts a new submission after a refusal, and keeps it while no answer came (review T8)", async () => {
+  it("starts a new submission after a refusal, and keeps it while no answer came", async () => {
     const answers: TransportResponse[] = [
       { status: 500, body: { error: "internal" } },
       { status: 409, body: { error: "submission_reused" } },
@@ -2266,7 +2244,7 @@ describe("tickets", () => {
     expect(posts()[2]).not.toBe(posts()[1])
   })
 
-  it("offers Send again for a failed reply, but not for a scheduled reply that ended before it went out (review T7)", async () => {
+  it("offers Send again for a failed reply, but not for a scheduled reply that ended before it went out", async () => {
     const failed = (id: string, scheduledEnded: boolean) =>
       reply({
         id,
@@ -2474,7 +2452,7 @@ describe("tickets", () => {
     )
   })
 
-  it("still offers to end a snooze whose time passed while its end is late (review T2)", async () => {
+  it("still offers to end a snooze whose time passed while its end is late", async () => {
     await renderAt("/tickets/7", {
       "/api/setup/status": status(),
       "/api/v1/me": admin,
@@ -2629,7 +2607,7 @@ describe("tickets", () => {
     expect(composer.querySelector<HTMLButtonElement>('button[data-kind="reply"]')?.disabled).toBe(false)
   })
 
-  it("starts a fresh composer for each ticket: another ticket's recipients and text never carry over (review R2)", async () => {
+  it("starts a fresh composer for each ticket: another ticket's recipients and text never carry over", async () => {
     const other = view()
     const body = other.body as { ticket: { number: number }; compose: Record<string, unknown> }
     const eight = ok({
@@ -2659,7 +2637,7 @@ describe("tickets", () => {
     expect(document.querySelector(".ui-editor-text")?.textContent).toBe("")
   })
 
-  it("never carries a scheduled reply being changed to another ticket (review T4)", async () => {
+  it("never carries a scheduled reply being changed to another ticket", async () => {
     const SCHEDULED = "00000000-0000-4000-8000-0000000000d7"
     const scheduled = {
       id: SCHEDULED,
@@ -3198,7 +3176,7 @@ describe("browser notifications on this device", () => {
     await renderAt("/", answers)
     await vi.waitFor(() => expect(events).toEqual(["unsubscribe"]))
     const asked = requests.find((r) => r.url === "/api/v1/notifications/state")
-    expect(asked?.body).toBe(JSON.stringify({ endpoint: ENDPOINT }))
+    expect(asked?.body).toBe(JSON.stringify({ endpoint: ENDPOINT, locale: "he" }))
   })
 
   it.each([
@@ -3210,6 +3188,51 @@ describe("browser notifications on this device", () => {
     await vi.waitFor(() => expect(requests.some((r) => r.url === "/api/v1/notifications/state")).toBe(true))
     await settle()
     expect(events).toEqual([])
+  })
+
+  it("tells the server the language whenever it changes, on any page", async () => {
+    fakeDevice(true)
+    await renderAt("/", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": ok({ publicKey: PUBLIC_KEY, on: true }),
+    })
+    const told = () => requests.filter((r) => r.url.startsWith("/api/v1/notifications")).map((r) => r.body)
+    await vi.waitFor(() => expect(told()).toEqual([JSON.stringify({ endpoint: ENDPOINT, locale: "he" })]))
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-language-button]")?.click())
+    await vi.waitFor(() => expect(told().slice(1)).toEqual([JSON.stringify({ endpoint: ENDPOINT, locale: "en" })]))
+  })
+
+  it("tells the server a language chosen while notifications are being turned on", async () => {
+    fakeDevice(false)
+    let on = false
+    let release = () => {}
+    const locales: unknown[] = []
+    await renderAt("/account", {
+      "/api/setup/status": status(),
+      "/api/v1/me": admin,
+      "/api/v1/notifications/state": (request) => {
+        const { locale } = JSON.parse(request.body ?? "{}") as { locale?: string }
+        if (on && locale) locales.push(locale)
+        return ok({ publicKey: PUBLIC_KEY, on })
+      },
+      "/api/v1/notifications/subscription": () =>
+        new Promise((resolve) => {
+          release = () => {
+            on = true
+            resolve(ok({ on: true }))
+          }
+        }),
+    })
+    await vi.waitFor(() => expect(text()).toContain(he("notifications.off")))
+    await act(async () => button(he("notifications.turnOn"))?.click())
+    await vi.waitFor(() => expect(requests.some((r) => r.method === "PUT")).toBe(true))
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-language-button]")?.click())
+    await settle()
+    await act(async () => release())
+    await settle()
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    await vi.waitFor(() => expect(locales).toEqual(["en"]))
   })
 
   it("asks again after a failed check until the server answers, and then ends someone else's subscription", async () => {

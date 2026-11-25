@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { useEffect, useRef, useState } from "react"
+import { useState } from "react"
 import { api, qk } from "../api/endpoints.ts"
 import { errorText } from "../api/errors.ts"
 import { useI18n } from "../i18n/i18n.tsx"
@@ -68,17 +68,6 @@ export function DeviceNotifications() {
       await api.unsubscribeDevice(subscription.endpoint)
       await subscription.unsubscribe()
     }, t("notifications.turnedOff"))
-
-  const shownLanguage = useRef(language)
-  useEffect(() => {
-    if (shownLanguage.current === language) return
-    shownLanguage.current = language
-    if (!(state?.support === "ok" && state.on)) return
-    void (async () => {
-      const subscription = await device.current()
-      if (subscription) await api.subscribeDevice(subscription, language)
-    })().catch(() => {})
-  }, [language, state, device])
 
   return (
     <Group id="account-notifications" title={t("notifications.group")} intro={t("notifications.hint")}>

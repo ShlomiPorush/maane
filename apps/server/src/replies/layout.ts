@@ -274,9 +274,10 @@ export function layout(conversation: Conversation, trim: Trim): Built {
     `${blockHtml(conversation.current, "full", words, dir, COLUMN_WIDTH, false, used)}</td></tr>`
   if (history.length) {
     const newest = history[0] as Entry
-    const attribution = escapeHtml(words.attribution)
-      .replace("{date}", `<span dir="ltr">${escapeHtml(israelTime(newest.at))}</span>`)
-      .replace("{name}", isolated(newest.name, dir))
+    const attribution = fill(escapeHtml(words.attribution), {
+      date: `<span dir="ltr">${escapeHtml(israelTime(newest.at))}</span>`,
+      name: isolated(newest.name, dir),
+    })
     const blocks = history
       .map((entry, index) => ({ entry, form: forms[index] as Form }))
       .filter(({ form }) => form !== "omitted")

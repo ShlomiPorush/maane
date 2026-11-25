@@ -8,9 +8,9 @@ import {
   REMINDER_TEMPLATE_MAX,
   SIGNATURE_MAX,
 } from "@maane/shared"
-import { keepPreviousData, useInfiniteQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Ellipsis, Pencil, Plus, Star, Trash2, UserMinus, UserPlus } from "lucide-react"
-import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react"
+import { type FormEvent, type ReactNode, useId, useRef, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router"
 import { authClient, authData } from "../api/auth.ts"
 import { ApiError } from "../api/client.ts"
@@ -796,23 +796,21 @@ function AddAddressDialog({ id, onClose }: { id: string; onClose: () => void }) 
   )
 }
 
-export const AGENT_PAGE = 50
+const AGENT_LIMIT = 1000
 
-export function searchAgents(search: string, offset = 0): Promise<{ users: ListedUser[]; total: number }> {
+function everyAgent(): Promise<{ users: ListedUser[] }> {
   return authData(
     authClient.admin.listUsers({
       query: {
-        limit: AGENT_PAGE,
-        offset,
-        sortBy: "name",
+        limit: AGENT_LIMIT,
+        sortBy: "username",
         sortDirection: "asc",
         filterField: "role",
         filterValue: "agent",
         filterOperator: "eq",
-        ...(search ? { searchValue: search, searchField: "name" as const, searchOperator: "contains" as const } : {}),
       },
     }),
-  ) as Promise<{ users: ListedUser[]; total: number }>
+  ) as Promise<{ users: ListedUser[] }>
 }
 
 function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose: () => void }) {
@@ -822,32 +820,15 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
   const formId = useId()
   const searchId = useId()
   const [typed, setTyped] = useState("")
-  const [search, setSearch] = useState("")
   const [userId, setUserId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useEffect(() => {
-    const timer = window.setTimeout(() => setSearch(typed.trim().toLowerCase()), 250)
-    return () => window.clearTimeout(timer)
-  }, [typed])
-  const found = useInfiniteQuery({
-    queryKey: ["agents", search],
-    queryFn: ({ pageParam }) => searchAgents(search, pageParam),
-    initialPageParam: 0,
-    getNextPageParam: (last, pages) => {
-      const loaded = pages.reduce((sum, page) => sum + page.users.length, 0)
-      return last.users.length > 0 && loaded < last.total ? loaded : undefined
-    },
-    placeholderData: keepPreviousData,
-    staleTime: EVERY.live,
-  })
+  const found = useQuery({ queryKey: ["agents"], queryFn: everyAgent, staleTime: EVERY.live })
+  const search = typed.trim().toLowerCase()
   const present = new Set(data.members.map((member) => member.userId))
-  const seen = new Set<string>()
-  const shown = (found.data?.pages ?? [])
-    .flatMap((page) => page.users)
-    .filter((user) => !seen.has(user.id) && Boolean(seen.add(user.id)))
-  const total = found.data?.pages.at(-1)?.total ?? 0
-  const agents = shown.filter((user) => !present.has(user.id))
+  const everyone = found.data?.users ?? []
+  const matching = everyone.filter((user) => (user.username ?? user.name).toLowerCase().includes(search))
+  const agents = matching.filter((user) => !present.has(user.id))
   const chosen = agents.find((agent) => agent.id === userId)
   const name = data.organization.name
 
@@ -875,69 +856,43 @@ function AddMemberDialog({ data, onClose }: { data: OrganizationDetail; onClose:
   if (found.isPending) list = <Loading label={t("organization.members.loadingAgents")} />
   else if (found.isError && !found.data)
     list = <ErrorState title={t("users.failed")} error={found.error} onRetry={() => void found.refetch()} />
-  else if (total === 0 && !search)
+  else if (everyone.length === 0)
     list = (
       <div className="ui-form-stack">
         <p className="ui-hint">{t("organization.members.noAgents")}</p>
-        <Link className="ui-btn" to="/users">
+        <Link className="ui-btn" to="/users" replace>
           {t("organization.members.toUsers")}
         </Link>
       </div>
     )
-  else if (total === 0) list = <p className="ui-hint">{t("organization.members.noMatch", { search })}</p>
+  else if (matching.length === 0) list = <p className="ui-hint">{t("organization.members.noMatch", { search })}</p>
+  else if (agents.length === 0) list = <p className="ui-hint">{t("organization.members.allMembers")}</p>
   else
     list = (
-      <>
-        {agents.length === 0 && !found.hasNextPage ? (
-          <p className="ui-hint">{t("organization.members.allMembers")}</p>
-        ) : null}
-        {agents.length > 0 ? (
-          <fieldset className="ui-field ui-choice">
-            <legend className="ui-label">{t("organization.members.choose")}</legend>
-            {agents.map((agent) => (
-              <label key={agent.id} className="ui-check-label">
-                <input
-                  type="radio"
-                  name={`${formId}-agent`}
-                  className="ui-check"
-                  value={agent.id}
-                  checked={userId === agent.id}
-                  onChange={() => {
-                    setUserId(agent.id)
-                    setError(null)
-                  }}
-                />
-                <span>
-                  <bdi className="ui-mono" dir="ltr">
-                    {agent.username ?? agent.name}
-                  </bdi>{" "}
-                  {agent.banned ? <Tag tone="fail">{t("organization.members.disabled")}</Tag> : null}
-                </span>
-              </label>
-            ))}
-          </fieldset>
-        ) : null}
-        {found.hasNextPage ? (
-          <div className="ui-agents-more">
-            <p className="ui-hint" data-testid="agents-more">
-              {t("organization.members.more", { shown: shown.length, total })}
-            </p>
-            {found.isFetchNextPageError ? <p className="ui-hint">{t("organization.members.moreFailed")}</p> : null}
-            <button
-              type="button"
-              className="ui-btn ui-btn-sm"
-              disabled={found.isFetchingNextPage || found.isPlaceholderData}
-              onClick={() => void found.fetchNextPage()}
-            >
-              {found.isFetchingNextPage
-                ? t("organization.members.loadingMore")
-                : found.isFetchNextPageError
-                  ? t("common.tryAgain")
-                  : t("organization.members.showMore")}
-            </button>
-          </div>
-        ) : null}
-      </>
+      <fieldset className="ui-field ui-choice">
+        <legend className="ui-label">{t("organization.members.choose")}</legend>
+        {agents.map((agent) => (
+          <label key={agent.id} className="ui-check-label">
+            <input
+              type="radio"
+              name={`${formId}-agent`}
+              className="ui-check"
+              value={agent.id}
+              checked={userId === agent.id}
+              onChange={() => {
+                setUserId(agent.id)
+                setError(null)
+              }}
+            />
+            <span>
+              <bdi className="ui-mono" dir="ltr">
+                {agent.username ?? agent.name}
+              </bdi>{" "}
+              {agent.banned ? <Tag tone="fail">{t("organization.members.disabled")}</Tag> : null}
+            </span>
+          </label>
+        ))}
+      </fieldset>
     )
 
   return (

@@ -219,8 +219,8 @@ export const api = {
     request<{ ok: true }>("PUT", `/admin/users/${encodeURIComponent(userId)}/name`, { name }),
   checkAddress: (address: string) =>
     request<AddressCheck>("GET", `${ORGANIZATIONS}/address-check${query({ address })}`),
-  notificationState: (endpoint: string | null) =>
-    request<NotificationState>("POST", "/notifications/state", { endpoint }),
+  notificationState: (endpoint: string | null, locale?: Locale) =>
+    request<NotificationState>("POST", "/notifications/state", { endpoint, locale }),
   subscribeDevice: (subscription: { endpoint: string; keys: { p256dh: string; auth: string } }, locale: Locale) =>
     request<{ on: true }>("PUT", "/notifications/subscription", { ...subscription, locale }),
   unsubscribeDevice: (endpoint: string) =>

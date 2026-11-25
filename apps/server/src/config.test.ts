@@ -60,6 +60,13 @@ describe("loadConfig", () => {
     expect(loadConfig(env({ MAANE_AUTH_SECRETS: `1:${key().toUpperCase()}` })).authSecrets).toHaveLength(1)
   })
 
+  it("takes the trusted proxies that proxy-addr reads, and refuses the others by the variable's name", () => {
+    for (const value of ["192.0.2.0/999", "192.0.2.0/0", "999.0.2.1", "2001:db8::/129", "1:2:3", "....", "192.0.2.1,x"])
+      expect(problems(env({ MAANE_TRUSTED_PROXIES: value })), value).toContain("MAANE_TRUSTED_PROXIES")
+    for (const value of ["192.0.2.0/24", "192.0.2.1, 2001:db8::/32", "loopback,uniquelocal"])
+      expect(problems(env({ MAANE_TRUSTED_PROXIES: value })), value).toBe("")
+  })
+
   it("refuses missing secrets and names the variables only", () => {
     const secret = key()
     const message = problems(

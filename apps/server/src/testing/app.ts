@@ -57,7 +57,6 @@ export function createTestApp(
       auditDb: audit.db,
       secrets,
       publicUrl,
-      trustedProxies: [],
       setup,
       sessionDays: await settings.get("security.sessionDays"),
     })
@@ -83,9 +82,9 @@ export function createTestApp(
     ready,
     clock,
     settings,
-    fetch: async (request: Request) => {
+    fetch: async (request: Request, peer?: string) => {
       await ready
-      return app.fetch(request)
+      return app.fetch(request, peer ? { incoming: { socket: { remoteAddress: peer }, headers: {} } } : undefined)
     },
     auth: () => auth,
     app,

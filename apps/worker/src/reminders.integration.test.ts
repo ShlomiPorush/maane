@@ -736,7 +736,7 @@ describe("Send again of a reminder that no provider took", () => {
     expect(await deliveryShown(agent, t.number, id)).toMatchObject({ problem: "reminder_ended", reminderResend: false })
   })
 
-  describe("and the end of its waiting period at the same time (review round 2, M2)", () => {
+  describe("and the end of its waiting period at the same time", () => {
     type Tx = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0]
     const lockWaiters = async () => {
       const rows = await db().execute<{ n: number }>(

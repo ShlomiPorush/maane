@@ -2,6 +2,8 @@ import type { IncomingMessage } from "node:http"
 import { CLICK_BOUNDS } from "@maane/shared"
 import proxyAddr from "proxy-addr"
 
+export const CLIENT_ADDRESS_HEADER = "x-maane-client-address"
+
 export type Trust = (address: string, hop: number) => boolean
 
 export function trustOf(proxies: readonly string[]): Trust {
@@ -29,4 +31,11 @@ export function rememberClient(request: Request, incoming: IncomingMessage | und
 
 export function clientIp(request: Request | null | undefined): string | null {
   return request ? (clients.get(request) ?? null) : null
+}
+
+export function withClientAddress(request: Request): Request {
+  const address = clientIp(request)
+  if (address) request.headers.set(CLIENT_ADDRESS_HEADER, address)
+  else request.headers.delete(CLIENT_ADDRESS_HEADER)
+  return request
 }

@@ -1,5 +1,6 @@
 import { createECDH } from "node:crypto"
 import { SETTINGS, type SettingKey } from "@maane/shared"
+import { trustOf } from "./http/client.ts"
 
 export type VersionedKey = { version: number; value: string }
 
@@ -161,8 +162,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     .split(",")
     .map((p) => p.trim())
     .filter(Boolean)
-  if (trustedProxies.some((p) => !/^[0-9A-Fa-f:.]+(\/\d{1,3})?$/.test(p))) {
-    problems.push("MAANE_TRUSTED_PROXIES must be a comma-separated list of IP addresses or CIDR ranges")
+  try {
+    trustOf(trustedProxies)
+  } catch (error) {
+    problems.push(
+      `MAANE_TRUSTED_PROXIES must be a comma-separated list of IP addresses or CIDR ranges (${(error as Error).message})`,
+    )
   }
 
   const port = Number(env.PORT ?? 8080)
