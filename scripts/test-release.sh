@@ -143,6 +143,7 @@ lacks_release() { ! has_release "$1"; }
 nothing_built() { ! grep -q "buildx build" "$STATE/calls"; }
 nothing_published() { ! grep -qE "buildx (build|imagetools create)|release create" "$STATE/calls"; }
 said() { grep -q "$1" "$WORK/case/out"; }
+not_said() { ! said "$1"; }
 label() {
   grep "buildx build" "$STATE/calls" | grep -F -- "-t ghcr.io/shlomiporush/maane:$1 " |
     grep -oE -- "--label $2=[^ ]*" | tail -1 | cut -d= -f2-
@@ -223,6 +224,12 @@ check "the resumed run labels 0.1.1 from its tag although main moved on" [ "$(la
 check "  and with its tag's docker-compose.yml" [ "$(label 0.1.1 maane.compose-sha256)" = "$seed_compose_sha" ]
 DIR="$(checkout)" run_in --target ghcr --bump minor --dry-run
 check "a dry run of the next release prints the labels from main" said "maane.rollout-from=0.2.0"
+
+sandbox
+push_change "No Compose file" 'git rm --quiet docker-compose.yml'
+DIR="$(checkout)" run_in --target ghcr --bump minor --dry-run
+check "a dry run that cannot hash docker-compose.yml fails" [ $? -ne 0 ]
+check "  and prints no label" not_said "labelled"
 
 sandbox
 run_in --bump minor

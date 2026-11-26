@@ -310,9 +310,11 @@ main() {
   [ $DRY_RUN -eq 1 ] || take_lock
   preflight
   if [ $DRY_RUN -eq 1 ]; then
-    local source=HEAD
+    local source=HEAD compose rollout
+    [ $RESUME -eq 0 ] || source="$TAG"
+    compose="$(compose_sha256 "$source")"
+    rollout="$(rollout_from "$source" "$VERSION")"
     if [ $RESUME -eq 1 ]; then
-      source="$TAG"
       info "Dry run. Would finish $TAG: the image if missing, :latest and the GitHub Release."
     else
       info "Dry run. Release notes for $TAG:"
@@ -320,7 +322,7 @@ main() {
       info "Would commit package.json and CHANGELOG.md, push them with $TAG, then publish:"
     fi
     echo "    $(image_ref "$VERSION") and :latest"
-    echo "    labelled maane.compose-sha256=$(compose_sha256 "$source") maane.rollout-from=$(rollout_from "$source" "$VERSION")"
+    echo "    labelled maane.compose-sha256=$compose maane.rollout-from=$rollout"
     return 0
   fi
 

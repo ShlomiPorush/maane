@@ -607,6 +607,7 @@ This upgrade stops Maane for the length of a dump and a restart. A release that 
    (
      set -euo pipefail
      umask 077
+     unset VERSION
      version=0.2.0
      cd "$HOME/maane"
      [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version must look like 1.2.3" >&2; exit 1; }
@@ -615,9 +616,8 @@ This upgrade stops Maane for the length of a dump and a restart. A release that 
      mkdir -p backups
      file="backups/maane-before-$version-$(date -u +%Y%m%dT%H%M%SZ).dump"
      partial="$(mktemp backups/.partial-XXXXXX)"
-     trap 'rm -f -- "$partial"' EXIT
-     docker compose stop server worker
      trap 'rm -f -- "$partial"; docker compose start server worker' EXIT
+     docker compose stop server worker
      docker compose exec -T postgres pg_dump -U maane -d maane -Fc >"$partial"
      # Only this run's own dump, published under a name nothing else holds, lets the upgrade go on.
      ln -- "$partial" "$file"
@@ -633,7 +633,7 @@ This upgrade stops Maane for the length of a dump and a restart. A release that 
 
 3. Check `https://maane.example.com/healthz/ready` and sign in.
 
-To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported. The dump holds replies the new release sent after it as not sent yet, so the restored worker would send them again: start `server` alone first (`docker compose up -d server`), check the replies of the tickets handled since the upgrade, and only then start `worker`.
+To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported. A restore loses everything after the dump, and it brings back as waiting the replies the new release sent after it: the worker sends them again when it starts.
 
 ## 8. Roll out a release without downtime
 
@@ -691,7 +691,7 @@ cd "$HOME/maane" && grep '^VERSION=' .env && docker compose ps server worker
 Each service should show one healthy container on the `VERSION` in `.env`. When one does not, read why in its logs (`docker compose logs worker`) and fix that. Then bring both to the release in `.env`:
 
 ```bash
-cd "$HOME/maane" && grep -qxE 'VERSION=[0-9]+\.[0-9]+\.[0-9]+' .env && docker compose up -d --wait server worker && docker compose ps server worker
+cd "$HOME/maane" && grep -qxE 'VERSION=[0-9]+\.[0-9]+\.[0-9]+' .env && env -u VERSION docker compose up -d --wait server worker && docker compose ps server worker
 ```
 
 It leaves one healthy container of each service on that release. A service it replaces is down for a few seconds.

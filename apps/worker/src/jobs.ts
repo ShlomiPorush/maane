@@ -43,7 +43,7 @@ export const HEARTBEAT_FILE = process.env.MAANE_HEARTBEAT_FILE || "/tmp/maane-wo
 
 export const HEARTBEAT_MAX_AGE_MS = 3 * 60_000
 
-export const HEARTBEAT_INTERVAL_MS = 10_000
+const HEARTBEAT_INTERVAL_MS = 10_000
 
 const HEARTBEAT = "heartbeat"
 
@@ -103,12 +103,15 @@ async function keepHeartbeat(boss: PgBoss, file: string, intervalMs: number): Pr
 }
 
 export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Promise<void> {
+  await registerWork(boss, options)
   await keepHeartbeat(
     boss,
     options.heartbeatFile ?? HEARTBEAT_FILE,
     options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS,
   )
+}
 
+async function registerWork(boss: PgBoss, options: JobOptions): Promise<void> {
   const files = options.files
   if (!files) return
   await boss.createQueue(SCANNER_SELF_TEST)
