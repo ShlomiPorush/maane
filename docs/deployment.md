@@ -668,7 +668,7 @@ Your `docker-compose.yml` and `.env` stay yours. A rollout needs these in them:
 - `server` and `worker` with `image: ghcr.io/shlomiporush/maane:${VERSION}`, and exactly one `VERSION=X.Y.Z` line in `.env`. A rollout changes only that line.
 - On `server` and `worker`: no `container_name`, no published port, no `network_mode: host`, no `build`, and one replica, because a rollout runs two containers of a service for a moment. Requests reach `server` through Traefik's labels.
 - `worker` keeps its own `healthcheck:` (`node dist/worker/healthcheck.js`): the health check in the image is the server's.
-- `worker` has `stop_grace_period: 60s`, so a reply that is being sent when the old worker stops has up to 50 seconds to finish. Docker fixes a container's stop timeout when it creates the container: add the line, then apply it once with `docker compose up -d worker`. The shipped `docker-compose.yml` does not set it.
+- `worker` has `stop_grace_period: 60s`, so a reply that is being sent when the old worker stops has up to 50 seconds to finish. Docker fixes a container's stop timeout when it creates the container: add the line, then apply it once with `env -u VERSION docker compose up -d --no-deps worker`. The shipped `docker-compose.yml` does not set it.
 - No `pull_policy: always` on `server` or `worker`.
 
 ### The minutes in between
@@ -685,13 +685,13 @@ While the old and the new containers of a service run together:
 When `server` rolled out and `worker` did not, `.env` holds the new release while `worker` still runs the old one. Check each service:
 
 ```bash
-cd "$HOME/maane" && grep '^VERSION=' .env && docker compose ps server worker
+cd "$HOME/maane" && grep '^VERSION=' .env && env -u VERSION docker compose ps --all server worker
 ```
 
-Each service should show one healthy container on the `VERSION` in `.env`. When one does not, read why in its logs (`docker compose logs worker`) and fix that. Then bring both to the release in `.env`:
+Each service should show exactly one container, running and healthy, on the `VERSION` in `.env`; a stopped one left over counts as a rollout that stopped half way. When one does not, read why in its logs (`docker compose logs worker`) and fix that. Then bring both to the release in `.env`:
 
 ```bash
-cd "$HOME/maane" && grep -qxE 'VERSION=[0-9]+\.[0-9]+\.[0-9]+' .env && env -u VERSION docker compose up -d --wait server worker && docker compose ps server worker
+cd "$HOME/maane" && grep -qxE 'VERSION=[0-9]+\.[0-9]+\.[0-9]+' .env && env -u VERSION docker compose up -d --wait server worker && env -u VERSION docker compose ps --all server worker
 ```
 
 It leaves one healthy container of each service on that release. A service it replaces is down for a few seconds.

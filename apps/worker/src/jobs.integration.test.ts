@@ -44,17 +44,17 @@ describe("worker jobs", () => {
     try {
       const files = [join(dir, "heartbeat-one"), join(dir, "heartbeat-two")]
       const started = Date.now()
-      await registerJobs(boss, { heartbeatFile: files[0], heartbeatIntervalMs: 200 })
-      await registerJobs(other, { heartbeatFile: files[1], heartbeatIntervalMs: 200 })
+      await registerJobs(boss, { heartbeatFile: files[0] })
+      await registerJobs(other, { heartbeatFile: files[1] })
       for (const file of files)
         await expect
-          .poll(async () => Number(await readFile(file, "utf8").catch(() => "0")), { timeout: 15_000 })
+          .poll(async () => Number(await readFile(file, "utf8").catch(() => "0")), { timeout: 20_000 })
           .toBeGreaterThanOrEqual(started)
       expect((await boss.getSchedules()).map((s) => s.name)).not.toContain("heartbeat")
     } finally {
       await other.stop({ graceful: false })
     }
-  })
+  }, 60_000)
 
   it("runs the scanner self-test at start and for a test the server queues, with its result as the output", async () => {
     const settings = new Settings(database.db, createSettingsCipher([{ version: 1, value: testKey() }]), {})

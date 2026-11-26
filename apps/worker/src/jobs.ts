@@ -49,7 +49,6 @@ const HEARTBEAT = "heartbeat"
 
 export interface JobOptions {
   heartbeatFile?: string
-  heartbeatIntervalMs?: number
   files?: FileService
   intake?: IntakeJobs
   send?: SendJobs
@@ -88,7 +87,7 @@ export async function graphTest(settings: Settings, graph: GraphGateway): Promis
   return graph.test(config)
 }
 
-async function keepHeartbeat(boss: PgBoss, file: string, intervalMs: number): Promise<void> {
+async function keepHeartbeat(boss: PgBoss, file: string): Promise<void> {
   await boss.createQueue(HEARTBEAT)
   await boss.work(HEARTBEAT, async () => {})
   const write = async () => {
@@ -97,18 +96,14 @@ async function keepHeartbeat(boss: PgBoss, file: string, intervalMs: number): Pr
   }
   const timer = setInterval(() => {
     write().catch((error) => log.warn("could not write the heartbeat file", errorFacts(error)))
-  }, intervalMs)
+  }, HEARTBEAT_INTERVAL_MS)
   timer.unref()
   boss.once("stopped", () => clearInterval(timer))
 }
 
 export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Promise<void> {
   await registerWork(boss, options)
-  await keepHeartbeat(
-    boss,
-    options.heartbeatFile ?? HEARTBEAT_FILE,
-    options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS,
-  )
+  await keepHeartbeat(boss, options.heartbeatFile ?? HEARTBEAT_FILE)
 }
 
 async function registerWork(boss: PgBoss, options: JobOptions): Promise<void> {
