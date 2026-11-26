@@ -136,9 +136,16 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     expect(await h.database.db.select().from(message).where(eq(message.graphId, never))).toEqual([])
     expect(await h.messageOf(vanished)).toMatchObject({
       content: "unavailable",
-      reviewFlags: ["unavailable"],
+      reviewFlags: ["not_read"],
       subject: "vanished",
       messageIdHeader: null,
+      graph: expect.objectContaining({ internetMessageId: "<vanished@example.com>" }),
+    })
+    expect(await h.retry.run()).toMatchObject({ messages: 1, decided: 1 })
+    expect(await h.messageOf(vanished)).toMatchObject({
+      content: "unavailable",
+      reviewFlags: ["unavailable"],
+      subject: "vanished",
       graph: expect.objectContaining({ internetMessageId: "<vanished@example.com>" }),
     })
     expect((await h.messageOf(after)).content).toBe("parsed")
@@ -166,9 +173,9 @@ describe("stage one: delta paging, the cursor, and vanished items", () => {
     await h.sync.run()
     const cursor = await cursorOf(h)
     const failing = h.graph.add(mime({ subject: "failing" }))
-    h.graph.fail(failing)
+    h.graph.fail(failing, 503)
     const junk = h.graph.add(mime({ subject: "junk" }), { folder: "junkemail" })
-    await expect(h.sync.run()).rejects.toMatchObject({ statusCode: 500 })
+    await expect(h.sync.run()).rejects.toMatchObject({ statusCode: 503 })
     expect((await h.messageOf(junk)).content).toBe("parsed")
     expect(await cursorOf(h)).toEqual(cursor)
     expect(await count(h)).toBe(1)

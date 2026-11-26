@@ -1,6 +1,8 @@
 import { SYSTEM, writeAudit } from "@maane/server/audit"
 import type { Db } from "@maane/server/db/client"
+import { message } from "@maane/server/db/schema"
 import { type FieldScan, type PartStatus, STORED_STATUSES, type TextField } from "@maane/shared"
+import { sql } from "drizzle-orm"
 import { type FileService, FileTooLargeError } from "../files/service.ts"
 import { type ClassifyInput, classify } from "./classify.ts"
 import type { MailAddress, ParsedMessage, ReportRecipient } from "./parse.ts"
@@ -14,6 +16,8 @@ export interface GraphMeta {
   subject: string | null
   from: { address: string | null; name: string | null } | null
 }
+
+export const NOT_READ_YET = sql`(${message.content} = 'unavailable' and 'not_read' = any(${message.reviewFlags}))`
 
 export function mediaTypeOf(type: ParsedMessage["contentType"]): ClassifyInput["contentType"] {
   return { value: type.value, reportType: type.params["report-type"]?.trim() ?? null }

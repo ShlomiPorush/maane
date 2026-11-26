@@ -16,7 +16,8 @@ interface Stored {
   addedSeq: number
   removedSeq: number | null
   vanished: boolean
-  failing: boolean
+  failing: number | null
+  trashed: boolean
 }
 
 interface Snapshot {
@@ -39,7 +40,10 @@ export interface StandInGraph {
   add(raw: Buffer, options?: { mailbox?: string; folder?: GraphFolder; receivedAt?: Date }): string
   remove(id: string): void
   vanish(id: string): void
-  fail(id: string): void
+  trash(id: string): void
+  fail(id: string, status?: number | null): void
+  failContent(status: number | "network" | null): void
+  loseMailbox(on: boolean): void
   expireTokens(): void
   throttle(count: number): void
   refuse(on: boolean): void
@@ -102,6 +106,8 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
   let generation = 1
   let throttled = 0
   let refusing = false
+  let mailboxLost = false
+  let contentFailure: number | "network" | null = null
   let base = ""
 
   const itemOf = (message: Stored) => ({
@@ -214,6 +220,7 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
     if (!users?.[1] || !users[2]) return graphError(res, 404, "ResourceNotFound", "Not found.")
     const box = users[1].toLowerCase()
     if (!allowed.has(box)) return graphError(res, 403, "ErrorAccessDenied", "Access is denied.")
+    if (mailboxLost) return graphError(res, 404, "MailboxNotEnabledForRESTAPI", "The mailbox is not available.")
     const rest = users[2]
     const folderMatch = /^mailFolders\/(inbox|junkemail)$/.exec(rest)
     if (folderMatch) return json(res, 200, { id: `folder-${folderMatch[1]}`, displayName: folderMatch[1] })
@@ -235,8 +242,19 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
         hold.reached()
         await hold.released
       }
-      if (message?.failing) return graphError(res, 500, "InternalServerError", "Something went wrong.")
-      if (!message || message.mailbox !== box || message.removedSeq !== null || message.vanished)
+      if (contentFailure === "network") {
+        req.socket.destroy()
+        return
+      }
+      const failure = contentFailure ?? message?.failing
+      if (failure)
+        return json(
+          res,
+          failure,
+          { error: { code: "Failing", message: "Something went wrong." } },
+          { "retry-after": "0" },
+        )
+      if (!message || message.mailbox !== box || (message.removedSeq !== null && !message.trashed) || message.vanished)
         return graphError(res, 404, "ErrorItemNotFound", "The specified object was not found in the store.")
       res.writeHead(200, { "content-type": "message/rfc822" })
       return res.end(message.raw)
@@ -272,7 +290,8 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
         addedSeq: seq,
         removedSeq: null,
         vanished: false,
-        failing: false,
+        failing: null,
+        trashed: false,
       })
       return id
     },
@@ -287,10 +306,21 @@ export async function startStandInGraph(options: { trust?: boolean } = {}): Prom
       if (!message) throw new Error("no such message")
       message.vanished = true
     },
-    fail(id) {
+    trash(id) {
+      standIn.remove(id)
+      const message = messages.get(id)
+      if (message) message.trashed = true
+    },
+    fail(id, status = 500) {
       const message = messages.get(id)
       if (!message) throw new Error("no such message")
-      message.failing = true
+      message.failing = status
+    },
+    failContent(status) {
+      contentFailure = status
+    },
+    loseMailbox(on) {
+      mailboxLost = on
     },
     expireTokens() {
       generation++

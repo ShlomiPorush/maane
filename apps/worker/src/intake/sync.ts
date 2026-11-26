@@ -24,6 +24,7 @@ import {
   contentOf,
   fieldTexts,
   type GraphMeta,
+  NOT_READ_YET,
   partNamesOf,
   refused,
   type MessageContent as StoredContent,
@@ -37,8 +38,10 @@ import {
   graphConfig,
   graphStatus,
   isExpiredDelta,
+  mayConcernOneMessage,
 } from "./graph.ts"
 import { type MailPart, type ParsedMessage, parseMessage } from "./parse.ts"
+import { recordNotRead } from "./process.ts"
 import { wellFormed } from "./text.ts"
 
 export class SourceChangedError extends Error {
@@ -204,15 +207,42 @@ export class IntakeSync {
     })
   }
 
-  async #takeIn(config: GraphConfig, source: IntakeSource, folder: GraphFolder, item: DeltaItem): Promise<boolean> {
+  async askAgain(
+    config: GraphConfig,
+    source: IntakeSource,
+    row: Pick<typeof message.$inferSelect, "graph" | "folder" | "receivedAt">,
+  ): Promise<boolean> {
+    const meta = row.graph as GraphMeta
+    const item: DeltaItem = {
+      id: meta.id,
+      receivedDateTime: row.receivedAt.toISOString(),
+      internetMessageId: meta.internetMessageId ?? undefined,
+      subject: meta.subject ?? undefined,
+      from: meta.from
+        ? { emailAddress: { address: meta.from.address ?? undefined, name: meta.from.name ?? undefined } }
+        : undefined,
+    }
+    return this.#takeIn(config, source, row.folder as GraphFolder, item, true)
+  }
+
+  async #takeIn(
+    config: GraphConfig,
+    source: IntakeSource,
+    folder: GraphFolder,
+    item: DeltaItem,
+    again = false,
+  ): Promise<boolean> {
     const limit = await this.#settings.get("files.maxBytes")
     const meta = metadataOf(item, folder)
     let fetched: Awaited<ReturnType<GraphGateway["mime"]>>
     try {
       fetched = await this.#graph.mime(config, source.mailbox, item.id, limit)
     } catch (error) {
-      if (graphStatus(error) === 404) return this.#storeRecord(source, folder, item, meta, "unavailable", null)
-      throw error
+      if (!mayConcernOneMessage(error)) throw error
+      if (!again) return this.#storeRecord(source, folder, item, meta, "not_read", null)
+      if (graphStatus(error) !== 404 || !(await this.#graph.test({ ...config, mailbox: source.mailbox })).ok)
+        throw error
+      return this.#storeRecord(source, folder, item, meta, "unavailable", null)
     }
     if (fetched.kind === "too_large") return this.#storeRecord(source, folder, item, meta, "too_large", fetched.read)
     let parsed: ParsedMessage
@@ -242,15 +272,26 @@ export class IntakeSync {
     }
   }
 
+  async #write(tx: Tx, values: typeof message.$inferInsert): Promise<string | undefined> {
+    const row = { state: "stored", processedAt: null, retryAt: null, ...values }
+    const [written] = await tx
+      .insert(message)
+      .values(row)
+      .onConflictDoUpdate({ target: [message.sourceId, message.graphId], set: row, setWhere: NOT_READ_YET })
+      .returning({ id: message.id })
+    return written?.id
+  }
+
   async #storeRecord(
     source: IntakeSource,
     folder: GraphFolder,
     item: DeltaItem,
     meta: GraphMeta,
-    content: Exclude<MessageContent, "parsed">,
+    content: Exclude<MessageContent, "parsed"> | "not_read",
     size: number | null,
     reason?: MessageFlag,
   ): Promise<boolean> {
+    const notRead = content === "not_read"
     const flag: MessageFlag = reason ?? (content === "unparsed" ? "parse_failed" : content)
     const fixed = wellFormed({
       graph: {
@@ -282,26 +323,24 @@ export class IntakeSync {
         }
     return this.#db.transaction(async (tx) => {
       if (!(await holdSourceIfCurrent(tx, source.id))) throw new SourceChangedError()
-      const [row] = await tx
-        .insert(message)
-        .values({
-          sourceId: source.id,
-          graphId: item.id,
-          folder,
-          receivedAt: this.#receivedAt(item),
-          content,
-          size,
-          ...values,
-          fieldScans: fields,
-          reviewFlags: flags,
-        })
-        .onConflictDoNothing({ target: [message.sourceId, message.graphId] })
-        .returning({ id: message.id })
-      if (row) {
-        await auditBlockedFields(tx, row.id, {}, fields)
+      const id = await this.#write(tx, {
+        sourceId: source.id,
+        graphId: item.id,
+        folder,
+        receivedAt: this.#receivedAt(item),
+        content: notRead ? "unavailable" : content,
+        size,
+        ...values,
+        fieldScans: fields,
+        reviewFlags: flags,
+        ...(notRead ? { state: "processed", processedAt: this.#now() } : {}),
+      })
+      if (id) {
+        if (notRead) await recordNotRead(tx, id)
+        await auditBlockedFields(tx, id, {}, fields)
         log.warn("a message was recorded for review without its content", { reason: flag })
       }
-      return row !== undefined
+      return id !== undefined
     })
   }
 
@@ -333,30 +372,26 @@ export class IntakeSync {
 
     return this.#db.transaction(async (tx) => {
       if (!(await holdSourceIfCurrent(tx, source.id))) throw new SourceChangedError()
-      const [stored] = await tx
-        .insert(message)
-        .values({
-          sourceId: source.id,
-          graphId: item.id,
-          folder,
-          receivedAt: this.#receivedAt(item),
-          content: "parsed",
-          size: raw.byteLength,
-          ...columns,
-          contentHash: parsed.contentHash,
-          rawStatus: rawScan.status,
-          reviewFlags: flags,
-        })
-        .onConflictDoNothing({ target: [message.sourceId, message.graphId] })
-        .returning({ id: message.id })
-      if (!stored) return false
-      await auditBlockedFields(tx, stored.id, {}, fields)
+      const id = await this.#write(tx, {
+        sourceId: source.id,
+        graphId: item.id,
+        folder,
+        receivedAt: this.#receivedAt(item),
+        content: "parsed",
+        size: raw.byteLength,
+        ...columns,
+        contentHash: parsed.contentHash,
+        rawStatus: rawScan.status,
+        reviewFlags: flags,
+      })
+      if (!id) return false
+      await auditBlockedFields(tx, id, {}, fields)
       for (const [position, scan] of parts.entries()) {
-        await this.#storePart(tx, stored.id, scan, names[position] ?? null)
+        await this.#storePart(tx, id, scan, names[position] ?? null)
       }
       if (keepRaw) {
         await this.#files.storeIn(tx, raw, rawScan)
-        await tx.update(message).set({ rawSha256: rawScan.sha256 }).where(eq(message.id, stored.id))
+        await tx.update(message).set({ rawSha256: rawScan.sha256 }).where(eq(message.id, id))
       }
       return true
     })

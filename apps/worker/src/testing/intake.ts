@@ -83,7 +83,7 @@ export async function startIntake(
   const gateway = new GraphGateway(graph.endpoints)
   const sync = new IntakeSync({ db: database.db, settings, files, graph: gateway })
   const processor = new IntakeProcessor({ db: database.db })
-  const retry = new WaitingFiles({ db: database.db, settings, files, graph: gateway })
+  const retry = new WaitingFiles({ db: database.db, settings, files, graph: gateway, sync })
   const db = database.db
   const messageOf = async (graphId: string) => {
     const [row] = await db.select().from(message).where(eq(message.graphId, graphId))

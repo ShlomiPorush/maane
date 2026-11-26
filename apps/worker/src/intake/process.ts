@@ -61,6 +61,15 @@ export function notificationOf(record: IntakeFacts, messageId: string): PushJob 
   return null
 }
 
+export async function recordNotRead(tx: Tx, messageId: string): Promise<void> {
+  await tx.insert(intakeRecord).values({ messageId, outcome: "unreadable", reason: "not_read" })
+}
+
+async function recordOutcome(tx: Tx, record: RecordFields & { messageId: string }): Promise<void> {
+  await tx.delete(intakeRecord).where(eq(intakeRecord.messageId, record.messageId))
+  await tx.insert(intakeRecord).values(record)
+}
+
 export type Notify = (jobs: QueueDb, job: PushJob) => Promise<void>
 
 const sameTime = (a: Date | null, b: Date | null) => (a === null || b === null ? a === b : a.getTime() === b.getTime())
@@ -151,7 +160,7 @@ export class IntakeProcessor {
           reviewFlags: [...new Set([...row.reviewFlags, "store_failed"])],
         })
         .where(eq(message.id, id))
-      await tx.insert(intakeRecord).values({ messageId: id, outcome: "unreadable", reason: "process_failed" })
+      await recordOutcome(tx, { messageId: id, outcome: "unreadable", reason: "process_failed" })
       return true
     })
   }
@@ -183,7 +192,7 @@ export class IntakeProcessor {
         .update(message)
         .set({ ...patch, reviewFlags: [...flags], state: "processed", processedAt: this.#now() })
         .where(eq(message.id, msg.id))
-      await tx.insert(intakeRecord).values({ messageId: msg.id, ...record })
+      await recordOutcome(tx, { messageId: msg.id, ...record })
       const notification = notificationOf(record, msg.id)
       if (notification) notifications.push(notification)
     }

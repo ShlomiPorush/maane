@@ -55,6 +55,13 @@ export function graphStatus(error: unknown): number | null {
   return error instanceof GraphError && error.statusCode >= 100 ? error.statusCode : null
 }
 
+const CONCERNS_EVERY_CALL: ReadonlySet<number> = new Set([401, 429, 503, 509])
+
+export function mayConcernOneMessage(error: unknown): boolean {
+  const status = graphStatus(error)
+  return status !== null && !CONCERNS_EVERY_CALL.has(status)
+}
+
 export function isExpiredDelta(error: unknown): boolean {
   if (!(error instanceof GraphError)) return false
   return error.statusCode === 410 || /^syncState(NotFound|Invalid)$/i.test(error.code ?? "")
