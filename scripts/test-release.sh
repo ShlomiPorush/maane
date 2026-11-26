@@ -100,10 +100,14 @@ sandbox() {
   git init --quiet --bare --initial-branch=main "$WORK/case/origin.git"
   local seed="$WORK/case/seed"
   git init --quiet --initial-branch=main "$seed"
-  mkdir -p "$seed/scripts/lib" "$seed/docker"
+  mkdir -p "$seed/scripts/lib" "$seed/docker" "$seed/apps/server/drizzle"
   cp "$REPO/scripts/release.sh" "$seed/scripts/"
   cp "$REPO/scripts/lib/common.sh" "$seed/scripts/lib/"
   : >"$seed/docker/maane.Dockerfile"
+  printf 'name: maane\n' >"$seed/docker-compose.yml"
+  printf 'CREATE TABLE a (id int);\n' >"$seed/apps/server/drizzle/0000_init.sql"
+  printf 'packages:\n\n  pg-boss@12.0.0:\n    resolution: {}\n' >"$seed/pnpm-lock.yaml"
+  printf '# Changes the previous release cannot run beside.\n' >"$seed/docker/rollout.txt"
   printf '{\n  "name": "maane",\n  "version": "0.0.0",\n  "private": true\n}\n' >"$seed/package.json"
   printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- The first feature.\n' >"$seed/CHANGELOG.md"
   git -C "$seed" add -A
@@ -139,6 +143,18 @@ lacks_release() { ! has_release "$1"; }
 nothing_built() { ! grep -q "buildx build" "$STATE/calls"; }
 nothing_published() { ! grep -qE "buildx (build|imagetools create)|release create" "$STATE/calls"; }
 said() { grep -q "$1" "$WORK/case/out"; }
+label() {
+  grep "buildx build" "$STATE/calls" | grep -F -- "-t ghcr.io/shlomiporush/maane:$1 " |
+    grep -oE -- "--label $2=[^ ]*" | tail -1 | cut -d= -f2-
+}
+seed_compose_sha="$(printf 'name: maane\n' | sha256sum | cut -d ' ' -f 1)"
+push_change() {
+  local dir
+  dir="$(checkout)"
+  (cd "$dir" && eval "$2")
+  sed -i "s/^## \[Unreleased\]$/## [Unreleased]\n\n### Changed\n\n- $1./" "$dir/CHANGELOG.md"
+  git -C "$dir" add -A && git -C "$dir" commit --quiet -m "$1" && git -C "$dir" push --quiet origin main
+}
 complete() {
   local rev
   rev="$(tag_rev "v$1")"
@@ -171,6 +187,42 @@ check "the next run releases 0.1.1 with --bump patch" complete 0.1.1
 check "0.1.1's notes hold only its own entries" [ "$(sed -n '2,$p' "$STATE/releases/v0.1.1")" = "$(printf '### Fixed\n\n- A fix.')" ]
 check "0.1.0 is left as it was" [ "$(image_rev 0.1.0)" = "$(tag_rev v0.1.0)" ]
 check ":latest is 0.1.1" [ "$(image_rev latest)" = "$(tag_rev v0.1.1)" ]
+check "the first release is labelled with the tag's docker-compose.yml hash" [ "$(label 0.1.0 maane.compose-sha256)" = "$seed_compose_sha" ]
+check "  and may run beside no earlier release" [ "$(label 0.1.0 maane.rollout-from)" = 0.1.0 ]
+check "a release without breaking changes may run beside the one before" [ "$(label 0.1.1 maane.rollout-from)" = 0.1.0 ]
+
+sandbox
+release
+push_change "A migration" 'printf "ALTER TABLE a ADD b int;\n" >apps/server/drizzle/0001_b.sql'
+release
+check "a new migration: the release runs beside no earlier release" [ "$(label 0.2.0 maane.rollout-from)" = 0.2.0 ]
+push_change "A fix" true
+release
+check "  and the release after it may run beside it" [ "$(label 0.3.0 maane.rollout-from)" = 0.2.0 ]
+push_change "A queue update" 'sed -i "s/pg-boss@12.0.0/pg-boss@12.1.0/" pnpm-lock.yaml'
+release
+check "another pg-boss version: the release runs beside no earlier release" [ "$(label 0.4.0 maane.rollout-from)" = 0.4.0 ]
+push_change "A new job payload" 'echo "send-reply carries a new field the previous worker refuses" >>docker/rollout.txt'
+release
+check "a line added to docker/rollout.txt: the release runs beside no earlier release" [ "$(label 0.5.0 maane.rollout-from)" = 0.5.0 ]
+push_change "A Compose change" 'printf "name: maane\nservices: {}\n" >docker-compose.yml'
+release
+check "a changed docker-compose.yml changes the hash" \
+  [ "$(label 0.6.0 maane.compose-sha256)" = "$(printf 'name: maane\nservices: {}\n' | sha256sum | cut -d ' ' -f 1)" ]
+check "  and alone does not stop the release running beside the one before" [ "$(label 0.6.0 maane.rollout-from)" = 0.5.0 ]
+
+sandbox
+release
+push_change "A fix" true
+MOCK_FAIL_BUILD=1 BUMP=patch release
+push_change "A migration" 'printf "ALTER TABLE a ADD b int;\n" >apps/server/drizzle/0001_b.sql'
+DIR="$(checkout)" run_in --target ghcr --bump minor --dry-run
+check "a dry run while 0.1.1 is unfinished prints the labels of its tag, not of main" said "maane.rollout-from=0.1.0"
+release
+check "the resumed run labels 0.1.1 from its tag although main moved on" [ "$(label 0.1.1 maane.rollout-from)" = 0.1.0 ]
+check "  and with its tag's docker-compose.yml" [ "$(label 0.1.1 maane.compose-sha256)" = "$seed_compose_sha" ]
+DIR="$(checkout)" run_in --target ghcr --bump minor --dry-run
+check "a dry run of the next release prints the labels from main" said "maane.rollout-from=0.2.0"
 
 sandbox
 run_in --bump minor

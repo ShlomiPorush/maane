@@ -35,6 +35,9 @@ Usage: scripts/release.sh --target ghcr --bump <patch|minor|major> [--skip-verif
 Steps: preflight (clean main in sync with origin, release notes present, version unused), full
 scripts/verify.sh, version and changelog update, release commit and tag pushed together, the image
 built from the tag and pushed, then :latest, then the GitHub Release from the CHANGELOG section.
+The image carries maane.compose-sha256 (the tag's docker-compose.yml) and maane.rollout-from: the
+previous release's version, or this version when apps/server/drizzle, docker/rollout.txt, or the
+pg-boss version in pnpm-lock.yaml changed since the previous release (docs/deployment.md, section 8).
 When the newest tag has no GitHub Release yet, an earlier run stopped halfway: this run finishes that
 version instead of starting a new one, reusing what is already published and refusing anything that
 was not built from the tag. Needs docker with buildx, git and gh (logged in to GitHub and GHCR).
@@ -110,6 +113,38 @@ image_state() {
 
 newest_tag() {
   git_ tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1
+}
+
+version_below() {
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]
+}
+
+previous_tag() {
+  local version="$1" tag previous=""
+  while read -r tag; do
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && version_below "${tag#v}" "$version" && previous="$tag"
+  done < <(git_ tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=v:refname)
+  echo "$previous"
+}
+
+pg_boss_versions() {
+  git_ show "$1:pnpm-lock.yaml" 2>/dev/null | sed -nE 's/^  pg-boss@([^:(]+).*/\1/p' | sort -u
+}
+
+rollout_from() {
+  local ref="$1" version="$2" previous
+  previous="$(previous_tag "$version")"
+  if [ -z "$previous" ] ||
+    ! git_ diff --quiet "$previous" "$ref" -- apps/server/drizzle docker/rollout.txt ||
+    [ "$(pg_boss_versions "$previous")" != "$(pg_boss_versions "$ref")" ]; then
+    echo "$version"
+  else
+    echo "${previous#v}"
+  fi
+}
+
+compose_sha256() {
+  git_ show "$1:docker-compose.yml" | sha256sum | cut -d ' ' -f 1
 }
 
 preflight() {
@@ -193,9 +228,11 @@ cleanup() {
 }
 
 publish_image() {
-  local revision src ref state
+  local revision src ref state compose rollout
   revision="$(git_ rev-parse "$TAG^{commit}")"
   ref="$(image_ref "$VERSION")"
+  compose="$(compose_sha256 "$TAG")"
+  rollout="$(rollout_from "$TAG" "$VERSION")"
   src="$(mktemp -d)"
   SRC_DIR="$src"
   git_ archive "$TAG" | tar -x -C "$src"
@@ -210,6 +247,8 @@ publish_image() {
         --label "org.opencontainers.image.revision=$revision" \
         --label "org.opencontainers.image.source=$SOURCE_URL" \
         --label "org.opencontainers.image.version=$VERSION" \
+        --label "maane.compose-sha256=$compose" \
+        --label "maane.rollout-from=$rollout" \
         -t "$ref" "$src" || die "building or pushing $ref failed. Run the release again to finish $TAG."
       ;;
   esac
@@ -271,7 +310,9 @@ main() {
   [ $DRY_RUN -eq 1 ] || take_lock
   preflight
   if [ $DRY_RUN -eq 1 ]; then
+    local source=HEAD
     if [ $RESUME -eq 1 ]; then
+      source="$TAG"
       info "Dry run. Would finish $TAG: the image if missing, :latest and the GitHub Release."
     else
       info "Dry run. Release notes for $TAG:"
@@ -279,6 +320,7 @@ main() {
       info "Would commit package.json and CHANGELOG.md, push them with $TAG, then publish:"
     fi
     echo "    $(image_ref "$VERSION") and :latest"
+    echo "    labelled maane.compose-sha256=$(compose_sha256 "$source") maane.rollout-from=$(rollout_from "$source" "$VERSION")"
     return 0
   fi
 

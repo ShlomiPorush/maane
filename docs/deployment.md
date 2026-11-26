@@ -8,7 +8,7 @@ Every command block below runs in Bash on the Docker host and is safe to run aga
 
 ## What you deploy
 
-- **Image.** `ghcr.io/shlomiporush/maane:<version>`, published by the Release workflow. Each release has an immutable version tag (for example `0.1.0`) and moves `latest`. Run a version tag, never `latest`: `docker-compose.yml` refuses to start without `VERSION`.
+- **Image.** `ghcr.io/shlomiporush/maane:<version>`, published by the Release workflow. Each release has an immutable version tag (for example `0.1.0`) and moves `latest`, and carries the two labels of a zero-downtime rollout ([section 8](#8-roll-out-a-release-without-downtime)). Run a version tag, never `latest`: `docker-compose.yml` refuses to start without `VERSION`.
 - **Package visibility.** GitHub creates a new package as private, also for a public repository, and a server that is not logged in cannot pull a private one. Once, after the first release and before the first deployment, open the package on GitHub (the repository's Packages, `maane`, Package settings) and change its visibility to public. To keep it private instead, log the server in with a token that can only read packages, taken from your secret store and piped to `docker login ghcr.io --username <your GitHub user> --password-stdin`; never type it on the command line.
 - **Services.** `docker-compose.yml` runs `server` (the web UI and the API, behind Traefik), `worker` (background jobs), `postgres` (PostgreSQL 18, data in `./postgres-data`), and `clamav` (ClamAV 1.5.4, the virus scanner, signatures in `./clamav`). `server` and `worker` run as `node` and share the attachments in `./data`; `clamav` runs as `clamav` (UID 100) through the image's unprivileged entrypoint, with Maane's configuration from `./docker/clamav/`. `server`, `worker`, and `clamav` run with no capabilities, no new privileges, and a read-only root file system. Only `server` is on the `traefik` network. `postgres` is on a network with no route outside the stack. `clamav`, `server`, and `worker` share the `scanner` network, which can reach the internet: freshclam downloads signatures, and the worker will reach Microsoft Graph. No port is published.
 - **Memory.** ClamAV holds its signature database in memory, about 1.5 to 3 GB, twice that for a moment while it loads new signatures. Make room for it on the host, or point Maane at a clamd you already run ([An outside clamd](#an-outside-clamd)).
@@ -598,8 +598,10 @@ Test a restore before setup day, and again from time to time. Run it on another 
 
 ## 7. Upgrade to a release
 
-1. Read the release notes of the new version on the repository's Releases page. They say when `docker-compose.yml` or `.env.example` changed; compare your copy with the new tag's file before you continue. The first release with browser notifications needs the VAPID key pair in `app.env` before it starts: run [its block](#browser-notification-keys-once) with the new `version` first.
-2. Set `version`, then run the block. It pulls the new image, then takes a dump into `~/maane/backups` (migrations only move forward: the dump is the way back), and only then sets `VERSION` in `.env` and restarts. When the pull or the dump fails, it stops with `.env` unchanged and the running version untouched.
+This upgrade stops Maane for the length of a dump and a restart. A release that may run beside the one you run can be deployed without downtime instead ([section 8](#8-roll-out-a-release-without-downtime)).
+
+1. Read the release notes of the new version on the repository's Releases page. They say when `docker-compose.yml` or `.env.example` changed, and any step the host needs by hand, such as a new variable in `app.env` or a changed file under `docker/clamav/`; compare your copy with the new tag's file and do those steps before you continue. The first release with browser notifications needs the VAPID key pair in `app.env` before it starts: run [its block](#browser-notification-keys-once) with the new `version` first.
+2. Set `version`, then run the block. It pulls the new image, stops `server` and `worker`, so nothing writes to the database after the dump, then takes a dump into `~/maane/backups` (migrations only move forward: the dump is the way back), and only then sets `VERSION` in `.env` and starts the new release. When the pull fails, it stops with nothing changed. When the dump fails, it starts the stopped `server` and `worker` again on the running version, with `.env` unchanged.
 
    ```bash
    (
@@ -614,11 +616,14 @@ Test a restore before setup day, and again from time to time. Run it on another 
      file="backups/maane-before-$version-$(date -u +%Y%m%dT%H%M%SZ).dump"
      partial="$(mktemp backups/.partial-XXXXXX)"
      trap 'rm -f -- "$partial"' EXIT
+     docker compose stop server worker
+     trap 'rm -f -- "$partial"; docker compose start server worker' EXIT
      docker compose exec -T postgres pg_dump -U maane -d maane -Fc >"$partial"
      # Only this run's own dump, published under a name nothing else holds, lets the upgrade go on.
      ln -- "$partial" "$file"
      echo "Wrote $HOME/maane/$file"
      sed -i "s/^VERSION=.*/VERSION=$version/" .env
+     trap 'rm -f -- "$partial"' EXIT
      docker compose up -d --wait
      docker compose ps
    )
@@ -628,7 +633,68 @@ Test a restore before setup day, and again from time to time. Run it on another 
 
 3. Check `https://maane.example.com/healthz/ready` and sign in.
 
-To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported.
+To go back to an earlier version, restore the dump the block took (section 6, into an empty `postgres-data`), set the earlier `VERSION`, and start it. Starting an older version on a database that newer migrations changed is not supported. The dump holds replies the new release sent after it as not sent yet, so the restored worker would send them again: start `server` alone first (`docker compose up -d server`), check the replies of the tickets handled since the upgrade, and only then start `worker`.
+
+## 8. Roll out a release without downtime
+
+Maane can also be updated with a zero-downtime rollout through [docker rollout](https://github.com/wowu/docker-rollout): each service gets a new container beside the old one, and the old one stops once the new one is healthy. `server` rolls out first, then `worker`, both from the same image. `postgres` and `clamav` are not part of it: they do not use `VERSION`, and you update them yourself. Release notes still apply: read them first, as in section 7.
+
+### What the image says
+
+Each release's image carries two labels that tell whether it may roll out over the release you run:
+
+| Label | Value |
+|---|---|
+| `maane.compose-sha256` | The sha256 of `docker-compose.yml` at the release's tag. It differs from the running image's when the release changed that file: compare your copy with the tag's file and deploy that release with section 7. |
+| `maane.rollout-from` | The oldest running release this image may run beside. |
+
+`maane.rollout-from` is the previous release, or the release itself when one of these changed since the previous release:
+
+- any file under `apps/server/drizzle/`: the server migrates when it starts, while the old release still serves, and every migration locks tables;
+- the version of pg-boss, which upgrades its own schema when the new server starts;
+- `docker/rollout.txt`, where a change marks that the previous release cannot run beside it, or that the host needs a step by hand.
+
+Deploy with section 7 a release whose `maane.rollout-from` is newer than the release you run. That covers every release with a migration, and skipping a release. Read the labels of a pulled image with:
+
+```bash
+docker image inspect --format '{{index .Config.Labels "maane.rollout-from"}} {{index .Config.Labels "maane.compose-sha256"}}' ghcr.io/shlomiporush/maane:0.2.0
+```
+
+### What your files need
+
+Your `docker-compose.yml` and `.env` stay yours. A rollout needs these in them:
+
+- `name: maane` at the top of `docker-compose.yml`.
+- `server` and `worker` with `image: ghcr.io/shlomiporush/maane:${VERSION}`, and exactly one `VERSION=X.Y.Z` line in `.env`. A rollout changes only that line.
+- On `server` and `worker`: no `container_name`, no published port, no `network_mode: host`, no `build`, and one replica, because a rollout runs two containers of a service for a moment. Requests reach `server` through Traefik's labels.
+- `worker` keeps its own `healthcheck:` (`node dist/worker/healthcheck.js`): the health check in the image is the server's.
+- `worker` has `stop_grace_period: 60s`, so a reply that is being sent when the old worker stops has up to 50 seconds to finish. Docker fixes a container's stop timeout when it creates the container: add the line, then apply it once with `docker compose up -d worker`. The shipped `docker-compose.yml` does not set it.
+- No `pull_policy: always` on `server` or `worker`.
+
+### The minutes in between
+
+While the old and the new containers of a service run together:
+
+- Each job goes to one worker, and Maane's jobs lock what they change, so two workers never do the same work twice. Each worker reports healthy from its own reads from the job queue.
+- Traefik sends requests to both servers for a few seconds. A page loaded in those seconds can mix the files of the two releases and fail; reload it. Reload the tabs left open from before the rollout too. A request still running on the old server when it stops, such as a slow upload, can be cut; send it again.
+- A change of the session length in Settings reaches only the server that saved it, until the other one restarts. Change it outside a rollout, or restart `server` after the rollout.
+- The rate limits of the link routes count on each server apart.
+
+### A rollout that stopped half way
+
+When `server` rolled out and `worker` did not, `.env` holds the new release while `worker` still runs the old one. Check each service:
+
+```bash
+cd "$HOME/maane" && grep '^VERSION=' .env && docker compose ps server worker
+```
+
+Each service should show one healthy container on the `VERSION` in `.env`. When one does not, read why in its logs (`docker compose logs worker`) and fix that. Then bring both to the release in `.env`:
+
+```bash
+cd "$HOME/maane" && grep -qxE 'VERSION=[0-9]+\.[0-9]+\.[0-9]+' .env && docker compose up -d --wait server worker && docker compose ps server worker
+```
+
+It leaves one healthy container of each service on that release. A service it replaces is down for a few seconds.
 
 ## What was verified
 

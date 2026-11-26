@@ -1,0 +1,10 @@
+# Changes a release cannot roll out over, one line each, added by the change that brings them.
+#
+# A zero-downtime rollout runs the previous release beside the new one for a few minutes (docs/deployment.md,
+# section 8). Add a line here when the previous release cannot run beside your change, or when the host needs a step
+# by hand: a job the older worker reads wrongly, stored data whose meaning changes, a new required variable in
+# app.env, a changed file under docker/clamav/. Write the host step in CHANGELOG.md too: the release notes come from it.
+#
+# Any change to this file since the previous release makes the release deploy by hand: its maane.rollout-from label
+# becomes its own version (scripts/release.sh). Migrations under apps/server/drizzle and a new pg-boss version count
+# without a line here. Only add lines.
