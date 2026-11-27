@@ -90,7 +90,18 @@ case "$2" in
 esac
 exit 2
 EOF
-chmod +x "$WORK/bin/docker" "$WORK/bin/gh"
+REAL_GIT="$(command -v git)"
+cat >"$WORK/bin/git" <<EOF
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ -n "\${MOCK_GIT_UNREADABLE:-}" ] && [ "\$arg" = "\$MOCK_GIT_UNREADABLE" ]; then
+    echo "fatal: unable to read \$arg" >&2
+    exit 128
+  fi
+done
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$WORK/bin/docker" "$WORK/bin/gh" "$WORK/bin/git"
 
 sandbox() {
   rm -rf "$WORK/case"
@@ -242,6 +253,13 @@ release
 push_change "A moved journal entry" 'sed -i "s/\"when\":1000/\"when\":999/" apps/server/drizzle/meta/_journal.json'
 release
 check "a released journal entry changed: refused" said "the migration journal changed entries that v0.1.0 released"
+check "  before the tag" lacks_tag v0.2.0
+
+sandbox
+release
+push_change "A job payload" 'echo "breaking send-reply-payload-2" >>docker/rollout.txt'
+MOCK_GIT_UNREADABLE="v0.1.0:docker/rollout.txt" release
+check "a declarations file an earlier release has that cannot be read: refused" said "cannot read docker/rollout.txt at v0.1.0"
 check "  before the tag" lacks_tag v0.2.0
 
 sandbox

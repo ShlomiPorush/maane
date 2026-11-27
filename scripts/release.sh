@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+shopt -s inherit_errexit
 
 # shellcheck source=scripts/lib/common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
@@ -131,7 +132,9 @@ previous_tag() {
 }
 
 file_at() {
-  [ -n "$(git_ ls-tree --name-only "$1" -- "$2")" ] || return 0
+  local listed
+  listed="$(git_ ls-tree --name-only "$1" -- "$2")" || die "cannot read the tree of $1"
+  [ -n "$listed" ] || return 0
   git_ show "$1:$2" || die "cannot read $2 at $1"
 }
 
@@ -185,7 +188,7 @@ check_declarations() {
   done < <(git_ ls-tree --name-only "$previous" "$MIGRATIONS_DIR/" | grep '\.sql$' || true)
   released="$(journal_entries "$previous")"
   current="$(journal_entries "$ref")"
-  [ "$(head -n "$(grep -c . <<<"$released")" <<<"$current")" = "$released" ] ||
+  [ -z "$released" ] || [ "$(head -n "$(wc -l <<<"$released")" <<<"$current")" = "$released" ] ||
     die "the migration journal changed entries that $previous released"
 }
 

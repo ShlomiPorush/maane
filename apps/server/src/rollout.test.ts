@@ -30,38 +30,39 @@ function declarations(text: string): Declaration[] {
     })
 }
 
-const identifier = String.raw`(?:"(\w+)"\.)?"(\w+)"`
+const identifier = String.raw`(?:"(\w+)"\.)?"(\w+)"(?!\s*\.)`
 
-function tableOf(match: RegExpExecArray | RegExpMatchArray, at: number): string {
-  return `${match[at] ?? "public"}.${match[at + 1]}`
+function tableOf(match: RegExpExecArray | RegExpMatchArray): string {
+  return `${match[1] ?? "public"}.${match[2]}`
 }
 
 function expandProblem(sql: string): string | null {
-  const statements = sql
+  const segments = sql
     .split(BREAKPOINT)
-    .flatMap((segment) => segment.split(";"))
-    .map((statement) => statement.replace(/\s+/g, " ").trim())
-    .filter((statement) => statement !== "")
+    .map((segment) => segment.replace(/\s+/g, " ").trim())
+    .filter((segment) => segment !== "")
+  const several = segments.find((segment) => segment.indexOf(";") !== segment.length - 1)
+  if (several !== undefined) return `not exactly one statement ending in ";": ${several}`
+  const statements = segments.map((segment) => segment.slice(0, -1).trim())
   const created = new Set(
     statements.flatMap((statement) => {
       const match = new RegExp(String.raw`^CREATE TABLE ${identifier} \(`, "i").exec(statement)
-      return match ? [tableOf(match, 1)] : []
+      return match ? [tableOf(match)] : []
     }),
   )
   for (const statement of statements) {
+    if (/\b(?:INHERITS|PARTITION|LIKE)\b/i.test(statement)) return `a table built on another table: ${statement}`
     const references = statement.match(/\bREFERENCES\b/gi)?.length ?? 0
-    const targets = [...statement.matchAll(new RegExp(String.raw`\bREFERENCES ${identifier}`, "gi"))].map((m) =>
-      tableOf(m, 1),
-    )
+    const targets = [...statement.matchAll(new RegExp(String.raw`\bREFERENCES ${identifier}`, "gi"))].map(tableOf)
     if (targets.length !== references) return `a reference the check cannot read: ${statement}`
     const outside = targets.find((table) => !created.has(table))
     if (outside) return `references the existing table ${outside}: ${statement}`
     if (new RegExp(String.raw`^CREATE TABLE ${identifier} \(`, "i").test(statement)) continue
     if (new RegExp(String.raw`^CREATE TYPE ${identifier} AS ENUM ?\(`, "i").test(statement)) continue
     const index = new RegExp(String.raw`^CREATE (?:UNIQUE )?INDEX "\w+" ON ${identifier}`, "i").exec(statement)
-    if (index && created.has(tableOf(index, 1))) continue
+    if (index && created.has(tableOf(index))) continue
     const constraint = new RegExp(`^ALTER TABLE ${identifier} ADD CONSTRAINT `, "i").exec(statement)
-    if (constraint && created.has(tableOf(constraint, 1))) continue
+    if (constraint && created.has(tableOf(constraint))) continue
     return `not an expand statement: ${statement}`
   }
   return null
@@ -168,7 +169,7 @@ describe("the expand shape check", () => {
       expandProblem(
         `CREATE TABLE "note" ("id" uuid PRIMARY KEY NOT NULL);\nALTER TABLE "ticket" ADD COLUMN "note" text;`,
       ),
-    ).toMatch(/not an expand statement: ALTER TABLE "ticket"/)
+    ).toMatch(/not exactly one statement/)
   })
 
   it("refuses an index on an existing table that shares a new table's name in another schema", () => {
@@ -177,6 +178,32 @@ describe("the expand shape check", () => {
         sql(
           `CREATE TABLE "archive"."ticket" ("id" uuid PRIMARY KEY NOT NULL);`,
           `CREATE INDEX "ticket_subject_idx" ON "public"."ticket" USING btree ("subject");`,
+        ),
+      ),
+    ).not.toBeNull()
+  })
+
+  it("refuses a reference spelled with spaces around the schema's dot, even beside a table named like the schema", () => {
+    expect(
+      expandProblem(
+        sql(
+          `CREATE TABLE "public" ("id" uuid PRIMARY KEY NOT NULL);`,
+          `CREATE TABLE "note" ("ticket_id" uuid REFERENCES "public" . "ticket"("id"));`,
+        ),
+      ),
+    ).toMatch(/cannot read/)
+  })
+
+  it("refuses a new table built on an existing one", () => {
+    expect(expandProblem(`CREATE TABLE "note" ("id" uuid) INHERITS ("ticket");`)).toMatch(/built on another table/)
+  })
+
+  it("refuses a segment whose text holds a second statement, also inside a quoted value", () => {
+    expect(
+      expandProblem(
+        sql(
+          `CREATE TYPE "public"."level" AS ENUM('a;CREATE TABLE "ticket" (', 'b');`,
+          `CREATE INDEX "ticket_subject_idx" ON "ticket" USING btree ("subject");`,
         ),
       ),
     ).not.toBeNull()

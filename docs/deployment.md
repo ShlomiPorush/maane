@@ -702,12 +702,12 @@ cd "$HOME/maane" && grep '^VERSION=' .env && docker ps -a --filter label=com.doc
 
 Each of `server` and `worker` should show exactly one container, `Up` and `(healthy)`, on the `VERSION` in `.env`. When one does not, read why in its logs (`docker logs <id>`) and fix that first. The blocks below each take a container's ID and its release from the check; with either left empty, or with an ID that is not that release's Maane container, a block stops at its first check and changes nothing. Then, for that service, in this order:
 
-1. **A stopped container is left over.** Remove it before anything else, because docker rollout would otherwise take it for a finished rollout:
+1. **A container that is not running is left over** (stopped, or created and never started). Remove it before anything else, because docker rollout would otherwise take it for a finished rollout:
 
    ```bash
    ID=
    RELEASE=
-   [ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{.Config.Image}} {{.State.Status}}' "$ID")" = "maane ghcr.io/shlomiporush/maane:$RELEASE exited" ] &&
+   [ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{.Config.Image}} {{.State.Running}}' "$ID")" = "maane ghcr.io/shlomiporush/maane:$RELEASE false" ] &&
      docker rm "$ID"
    ```
 
@@ -720,15 +720,19 @@ Each of `server` and `worker` should show exactly one container, `Up` and `(heal
      docker exec "$ID" rm -f /tmp/drain
    ```
 
-3. **An old and a new container run.** Set `OLD` and `OLD_RELEASE` for the old one, `NEW` and `NEW_RELEASE` for the new one. The block drains the old container as the rollout would, and stops and removes it only when the new one is still healthy after the drain; otherwise it removes the drain and leaves the old one serving:
+3. **An old and a new container run.** Set `SERVICE` (`server` or `worker`), `OLD` and `OLD_RELEASE` for the old container, `NEW` and `NEW_RELEASE` for the new one. The block checks that they are two different containers of that service, and that the new one is healthy; it then drains the old container as the rollout would, and stops and removes it only when the new one is still healthy after the drain; otherwise it removes the drain and leaves the old one serving:
 
    ```bash
+   SERVICE=
    OLD=
    OLD_RELEASE=
    NEW=
    NEW_RELEASE=
-   [ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{.Config.Image}}' "$OLD")" = "maane ghcr.io/shlomiporush/maane:$OLD_RELEASE" ] &&
-     [ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{.Config.Image}}' "$NEW")" = "maane ghcr.io/shlomiporush/maane:$NEW_RELEASE" ] &&
+   identity() { docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{index .Config.Labels "com.docker.compose.service"}} {{.Config.Image}}' "$1"; }
+   [ -n "$OLD" ] && [ "$OLD" != "$NEW" ] &&
+     [ "$(identity "$OLD")" = "maane $SERVICE ghcr.io/shlomiporush/maane:$OLD_RELEASE" ] &&
+     [ "$(identity "$NEW")" = "maane $SERVICE ghcr.io/shlomiporush/maane:$NEW_RELEASE" ] &&
+     [ "$(docker inspect --format '{{.State.Health.Status}}' "$NEW")" = healthy ] &&
      docker exec "$OLD" touch /tmp/drain && sleep 45 &&
      if [ "$(docker inspect --format '{{.State.Health.Status}}' "$NEW")" = healthy ]; then
        docker stop "$OLD" && docker rm "$OLD"
