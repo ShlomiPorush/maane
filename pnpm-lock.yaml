@@ -186,7 +186,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: 2.1.11
-        version: 2.1.11(hono@4.13.19)
+        version: 2.1.11(hono@4.13.20)
       '@maane/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -206,11 +206,11 @@ importers:
         specifier: 0.45.4
         version: 0.45.4(@opentelemetry/api@1.10.0)(@types/pg@8.23.1)(kysely@0.29.8)(pg@8.23.1)
       hono:
-        specifier: 4.13.19
-        version: 4.13.19
+        specifier: 4.13.20
+        version: 4.13.20
       hono-rate-limiter:
         specifier: 0.5.4
-        version: 0.5.4(hono@4.13.19)
+        version: 0.5.4(hono@4.13.20)
       html-to-text:
         specifier: 10.0.1
         version: 10.0.1
@@ -227,8 +227,8 @@ importers:
         specifier: 8.23.1
         version: 8.23.1
       pg-boss:
-        specifier: 12.38.2
-        version: 12.38.2(@opentelemetry/api@1.10.0)
+        specifier: 12.39.0
+        version: 12.39.0(@opentelemetry/api@1.10.0)
       proxy-addr:
         specifier: 2.0.8
         version: 2.0.8
@@ -385,8 +385,8 @@ importers:
         specifier: 10.6.1
         version: 10.6.1
       pg-boss:
-        specifier: 12.38.2
-        version: 12.38.2(@opentelemetry/api@1.10.0)
+        specifier: 12.39.0
+        version: 12.39.0(@opentelemetry/api@1.10.0)
       web-push:
         specifier: 4.0.0
         version: 4.0.0
@@ -1959,8 +1959,8 @@ packages:
   cookie-es@3.1.1:
     resolution: {integrity: sha512-UaXxwISYJPTr9hwQxMFYZ7kNhSXboMXP+Z3TRX6f1/NyaGPfuNUZOWP1pUEb75B2HjfklIYLVRfWiFZJyC6Npg==}
 
-  cron-parser@5.10.4:
-    resolution: {integrity: sha512-TagNqYzoV/C7Ty7VAQjrQg+57WsEOuQEUh0tWT5Dc+l/GOuoAdWVIzFU0CqYdQswqdjUalrdmOvaMtQhErYZTA==}
+  cron-parser@5.10.6:
+    resolution: {integrity: sha512-kpoxgQyveO1l29nw+FWdvmotyV7eOSzGHQpxiXOEZIDOjqO1iR6kfgJ0PVHTuV26uBemKq3ppzma7dHFAG7viw==}
     engines: {node: '>=18'}
 
   csstype@3.2.3:
@@ -2239,8 +2239,8 @@ packages:
       unstorage:
         optional: true
 
-  hono@4.13.19:
-    resolution: {integrity: sha512-KmXvQAXwcAHV+muzbIwoJ23niEB5nMoDVr9WcRkU8mvjUECm/1+7v4Jgp7P7a+H6MLFrh+vXrGonGrGS+RQfkA==}
+  hono@4.13.20:
+    resolution: {integrity: sha512-xo6gecEJQ+CjTtOUUbcLHE8CdRKMeF4qITe+DT+OhFnSUmZR/ZBa9XavAfiGh4HlukmlaHFdaK4dz5tkTYFNmA==}
     engines: {node: '>=16.9.0'}
 
   html-to-text@10.0.1:
@@ -2541,8 +2541,8 @@ packages:
   peberminta@0.10.0:
     resolution: {integrity: sha512-80B2AsU+I4Qdb0ZAPSfe9UwvGzwkM37IKIFEvdS3D/3Ndgv2bsuJ0bfG1+iEYO+l7Gfd4EUJmuRyq7efLgRMzQ==}
 
-  pg-boss@12.38.2:
-    resolution: {integrity: sha512-nvB9hB2cDJGSPUwYjN/Mth+EE3zvxffkp7uKXIiYloMAaxSoEiutmZi9mpSW85hNCcPChf3yicNXdwhIWkv2nA==}
+  pg-boss@12.39.0:
+    resolution: {integrity: sha512-4KE+T1JVr5tmMa9Blg9ILBli4ZdfleA55PiVthGuQu7neHgnr0JD/VJseCET/Sms3HscghDPVo6z5dhPpB2e7g==}
     engines: {node: '>=22.12.0'}
     hasBin: true
     peerDependencies:
@@ -2752,8 +2752,8 @@ packages:
   rou3@0.9.2:
     resolution: {integrity: sha512-3SOzvaAg8rkHrXtRjpCvCvbyO5to9oOO27Z/XqHEYXfMRVSw/qMIVdmaOk9W2lcRLtR6dlqTjo9hDeJk70QBYQ==}
 
-  rrule-temporal@2.2.8:
-    resolution: {integrity: sha512-+wWUe0J02oMh1UWKIt1RTu2H0Cz+gP11O/iweK0MN2UP6JLGeepTUkbSBa90Hxq0W+ywSxM9IlJNouIUdMOwhg==}
+  rrule-temporal@2.3.0:
+    resolution: {integrity: sha512-5V5n6ZtD/0eRbMdOeiOqJ3GlIEy/qSWVq0d0zxjgZoD1HcujPT1TMeklwxsPokBnHdxTSlfgWYf7lefrwNKlaA==}
 
   run-applescript@7.1.0:
     resolution: {integrity: sha512-DPe5pVFaAsinSaV6QjQ6gdiedWDcRCbUuiQfQa2wmWV7+xC9bGulGI8+TdRmoFkAPaBXk8CrAbnlY2ISniJ47Q==}
@@ -3450,9 +3450,9 @@ snapshots:
 
   '@fontsource/ibm-plex-mono@5.3.0': {}
 
-  '@hono/node-server@2.1.11(hono@4.13.19)':
+  '@hono/node-server@2.1.11(hono@4.13.20)':
     dependencies:
-      hono: 4.13.19
+      hono: 4.13.20
 
   '@img/colour@1.1.0': {}
 
@@ -4232,7 +4232,7 @@ snapshots:
 
   cookie-es@3.1.1: {}
 
-  cron-parser@5.10.4:
+  cron-parser@5.10.6:
     dependencies:
       luxon: 3.7.2
 
@@ -4443,11 +4443,11 @@ snapshots:
 
   he@1.2.0: {}
 
-  hono-rate-limiter@0.5.4(hono@4.13.19):
+  hono-rate-limiter@0.5.4(hono@4.13.20):
     dependencies:
-      hono: 4.13.19
+      hono: 4.13.20
 
-  hono@4.13.19: {}
+  hono@4.13.20: {}
 
   html-to-text@10.0.1:
     dependencies:
@@ -4719,12 +4719,12 @@ snapshots:
 
   peberminta@0.10.0: {}
 
-  pg-boss@12.38.2(@opentelemetry/api@1.10.0):
+  pg-boss@12.39.0(@opentelemetry/api@1.10.0):
     dependencies:
       '@opentelemetry/api': 1.10.0
-      cron-parser: 5.10.4
+      cron-parser: 5.10.6
       pg: 8.23.1
-      rrule-temporal: 2.2.8
+      rrule-temporal: 2.3.0
       serialize-error: 13.1.0
     transitivePeerDependencies:
       - pg-native
@@ -4950,7 +4950,7 @@ snapshots:
 
   rou3@0.9.2: {}
 
-  rrule-temporal@2.2.8:
+  rrule-temporal@2.3.0:
     dependencies:
       temporal-spec: 1.0.1
 
