@@ -30,34 +30,38 @@ function declarations(text: string): Declaration[] {
     })
 }
 
-const identifier = String.raw`(?:"\w+"\.)?"(\w+)"`
+const identifier = String.raw`(?:"(\w+)"\.)?"(\w+)"`
 
-function tablesReferenced(statement: string): string[] {
-  return [...statement.matchAll(new RegExp(String.raw`REFERENCES\s+${identifier}`, "gi"))].map((m) => m[1] as string)
+function tableOf(match: RegExpExecArray | RegExpMatchArray, at: number): string {
+  return `${match[at] ?? "public"}.${match[at + 1]}`
 }
 
 function expandProblem(sql: string): string | null {
   const statements = sql
     .split(BREAKPOINT)
+    .flatMap((segment) => segment.split(";"))
     .map((statement) => statement.replace(/\s+/g, " ").trim())
     .filter((statement) => statement !== "")
   const created = new Set(
     statements.flatMap((statement) => {
-      const match = new RegExp(`^CREATE TABLE (?:IF NOT EXISTS )?${identifier}`, "i").exec(statement)
-      return match ? [match[1] as string] : []
+      const match = new RegExp(String.raw`^CREATE TABLE ${identifier} \(`, "i").exec(statement)
+      return match ? [tableOf(match, 1)] : []
     }),
   )
   for (const statement of statements) {
-    const outside = tablesReferenced(statement).filter((table) => !created.has(table))
-    if (outside.length > 0) return `references the existing table ${outside[0]}: ${statement}`
-    if (new RegExp(String.raw`^CREATE TABLE (?:IF NOT EXISTS )?${identifier} \(`, "i").test(statement)) continue
-    if (/^CREATE TYPE (?:"\w+"\.)?"\w+" AS ENUM ?\(/i.test(statement)) continue
-    const index = new RegExp(String.raw`^CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?"\w+" ON ${identifier}`, "i").exec(
-      statement,
+    const references = statement.match(/\bREFERENCES\b/gi)?.length ?? 0
+    const targets = [...statement.matchAll(new RegExp(String.raw`\bREFERENCES ${identifier}`, "gi"))].map((m) =>
+      tableOf(m, 1),
     )
-    if (index && created.has(index[1] as string)) continue
+    if (targets.length !== references) return `a reference the check cannot read: ${statement}`
+    const outside = targets.find((table) => !created.has(table))
+    if (outside) return `references the existing table ${outside}: ${statement}`
+    if (new RegExp(String.raw`^CREATE TABLE ${identifier} \(`, "i").test(statement)) continue
+    if (new RegExp(String.raw`^CREATE TYPE ${identifier} AS ENUM ?\(`, "i").test(statement)) continue
+    const index = new RegExp(String.raw`^CREATE (?:UNIQUE )?INDEX "\w+" ON ${identifier}`, "i").exec(statement)
+    if (index && created.has(tableOf(index, 1))) continue
     const constraint = new RegExp(`^ALTER TABLE ${identifier} ADD CONSTRAINT `, "i").exec(statement)
-    if (constraint && created.has(constraint[1] as string)) continue
+    if (constraint && created.has(tableOf(constraint, 1))) continue
     return `not an expand statement: ${statement}`
   }
   return null
@@ -154,7 +158,31 @@ describe("the expand shape check", () => {
           `ALTER TABLE "note" ADD CONSTRAINT "note_ticket_fk" FOREIGN KEY ("ticket_id") REFERENCES "public"."ticket"("id");`,
         ),
       ),
-    ).toMatch(/existing table ticket/)
+    ).toMatch(/existing table public\.ticket/)
     expect(expandProblem(`CREATE TABLE "note" ("ticket_id" uuid REFERENCES "ticket"("id"));`)).toMatch(/ticket/)
+    expect(expandProblem(`CREATE TABLE "note" ("ticket_id" uuid REFERENCES ticket(id));`)).toMatch(/cannot read/)
+  })
+
+  it("refuses a statement on an existing table hidden after a new table in one segment", () => {
+    expect(
+      expandProblem(
+        `CREATE TABLE "note" ("id" uuid PRIMARY KEY NOT NULL);\nALTER TABLE "ticket" ADD COLUMN "note" text;`,
+      ),
+    ).toMatch(/not an expand statement: ALTER TABLE "ticket"/)
+  })
+
+  it("refuses an index on an existing table that shares a new table's name in another schema", () => {
+    expect(
+      expandProblem(
+        sql(
+          `CREATE TABLE "archive"."ticket" ("id" uuid PRIMARY KEY NOT NULL);`,
+          `CREATE INDEX "ticket_subject_idx" ON "public"."ticket" USING btree ("subject");`,
+        ),
+      ),
+    ).not.toBeNull()
+  })
+
+  it("refuses CREATE TABLE IF NOT EXISTS, which may name an existing table", () => {
+    expect(expandProblem(`CREATE TABLE IF NOT EXISTS "ticket" ("id" uuid PRIMARY KEY NOT NULL);`)).not.toBeNull()
   })
 })

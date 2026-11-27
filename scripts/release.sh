@@ -130,22 +130,32 @@ previous_tag() {
   echo "$previous"
 }
 
+file_at() {
+  [ -n "$(git_ ls-tree --name-only "$1" -- "$2")" ] || return 0
+  git_ show "$1:$2" || die "cannot read $2 at $1"
+}
+
 declarations_at() {
-  git_ show "$1:$ROLLOUT_FILE" 2>/dev/null | awk 'NF && $1 !~ /^#/ { print $1 " " $2 }' | LC_ALL=C sort -u
+  local text
+  text="$(file_at "$1" "$ROLLOUT_FILE")"
+  awk 'NF && $1 !~ /^#/ { print $1 " " $2 }' <<<"$text" | LC_ALL=C sort -u
 }
 
 breaking_at() {
-  declarations_at "$1" | awk '$1 == "breaking" { print $2 }'
+  local text
+  text="$(declarations_at "$1")"
+  awk '$1 == "breaking" { print $2 }' <<<"$text"
 }
 
 rollout_from() {
-  local ref="$1" version="$2" pending found tag floor=""
+  local ref="$1" version="$2" pending seen found tag floor=""
   pending="$(breaking_at "$ref")"
   while read -r tag; do
     [ -n "$pending" ] || break
     [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
     version_below "${tag#v}" "$version" || continue
-    found="$(LC_ALL=C comm -12 <(printf '%s\n' "$pending") <(breaking_at "$tag"))"
+    seen="$(breaking_at "$tag")"
+    found="$(LC_ALL=C comm -12 <(printf '%s\n' "$pending") <(printf '%s\n' "$seen"))"
     [ -n "$found" ] || continue
     floor="${tag#v}"
     pending="$(LC_ALL=C comm -23 <(printf '%s\n' "$pending") <(printf '%s\n' "$found"))"
@@ -158,19 +168,24 @@ rollout_from() {
 }
 
 journal_entries() {
-  git_ show "$1:$MIGRATIONS_DIR/meta/_journal.json" 2>/dev/null | jq -c '.entries[]'
+  local text
+  text="$(file_at "$1" "$MIGRATIONS_DIR/meta/_journal.json")"
+  [ -z "$text" ] || jq -c '.entries[]' <<<"$text"
 }
 
 check_declarations() {
-  local ref="$1" previous="$2" removed file count
+  local ref="$1" previous="$2" before after removed file released current
   [ -n "$previous" ] || return 0
-  removed="$(LC_ALL=C comm -23 <(declarations_at "$previous") <(declarations_at "$ref"))"
+  before="$(declarations_at "$previous")"
+  after="$(declarations_at "$ref")"
+  removed="$(LC_ALL=C comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
   [ -z "$removed" ] || die "$ROLLOUT_FILE lost lines that $previous has, which would lower maane.rollout-from: $removed"
   while read -r file; do
     git_ diff --quiet "$previous" "$ref" -- "$file" || die "$file changed after $previous released it"
   done < <(git_ ls-tree --name-only "$previous" "$MIGRATIONS_DIR/" | grep '\.sql$' || true)
-  count="$(journal_entries "$previous" | wc -l)"
-  [ "$(journal_entries "$ref" | head -n "$count")" = "$(journal_entries "$previous")" ] ||
+  released="$(journal_entries "$previous")"
+  current="$(journal_entries "$ref")"
+  [ "$(head -n "$(grep -c . <<<"$released")" <<<"$current")" = "$released" ] ||
     die "the migration journal changed entries that $previous released"
 }
 

@@ -677,7 +677,7 @@ Your `docker-compose.yml` and `.env` stay yours. A rollout needs these in them:
 
 ### How the old server leaves
 
-The image carries the label `docker-rollout.pre-stop-hook`, which docker rollout runs in the old container before it stops it: it creates `/tmp/drain` and waits 45 seconds. While that file exists, the server's health check fails, Docker marks the container unhealthy after three failed checks (about 36 seconds at the shipped interval of 10 seconds), and Traefik, which routes only to healthy containers, stops sending it requests. Only then does docker rollout stop it, and the server finishes the requests it still has. A server removes `/tmp/drain` when it starts. The worker gets the same hook from the shared image: its rollout waits 45 seconds longer, and its own health check ignores the file.
+The image carries the label `docker-rollout.pre-stop-hook`, which docker rollout runs in the old container before it stops it: it creates `/tmp/drain` and waits 45 seconds. While that file exists, the server's health check fails, Docker marks the container unhealthy after three failed checks (about 36 seconds at the shipped interval of 10 seconds), and Traefik, which routes only to healthy containers, stops sending it requests before docker rollout stops it, and the server finishes the requests it still has. docker rollout stops the old container even when the hook could not run (for example when `docker exec` fails); then a request in its last moment can fail. A server removes `/tmp/drain` when it starts. The worker gets the same hook from the shared image: its rollout waits 45 seconds longer, and its own health check ignores the file.
 
 ### The minutes in between
 
@@ -700,27 +700,48 @@ Check every container of the project:
 cd "$HOME/maane" && grep '^VERSION=' .env && docker ps -a --filter label=com.docker.compose.project=maane --format '{{.ID}} {{.Label "com.docker.compose.service"}} {{.Image}} {{.Status}}'
 ```
 
-Each of `server` and `worker` should show exactly one container, `Up` and `(healthy)`, on the `VERSION` in `.env`. When one does not, read why in its logs (`docker logs <id>`) and fix that first. Then, for that service:
+Each of `server` and `worker` should show exactly one container, `Up` and `(healthy)`, on the `VERSION` in `.env`. When one does not, read why in its logs (`docker logs <id>`) and fix that first. The blocks below each take a container's ID and its release from the check; with either left empty, or with an ID that is not that release's Maane container, a block stops at its first check and changes nothing. Then, for that service, in this order:
 
-- **Only its old container runs.** Roll it out again with docker rollout, as the deployment does; it drains the old server the same way.
-- **An old and a new container run, the new one healthy.** Fill in `OLD` with the old container's ID and `OLD_VERSION` with its release, both from the check, then run the block; with either left empty it stops at the check. It checks that the ID is that release's Maane container, drains it as the rollout would, then stops and removes it:
+1. **A stopped container is left over.** Remove it before anything else, because docker rollout would otherwise take it for a finished rollout:
 
-  ```bash
-  OLD=
-  OLD_VERSION=
-  cd "$HOME/maane" &&
-    [ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{.Config.Image}}' "$OLD")" = "maane ghcr.io/shlomiporush/maane:$OLD_VERSION" ] &&
-    docker exec "$OLD" touch /tmp/drain && sleep 45 && docker stop "$OLD" && docker rm "$OLD"
-  ```
+   ```bash
+   ID=
+   RELEASE=
+   [ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{.Config.Image}} {{.State.Status}}' "$ID")" = "maane ghcr.io/shlomiporush/maane:$RELEASE exited" ] &&
+     docker rm "$ID"
+   ```
 
-- **A stopped container is left over.** Remove it with the same check: replace the last line of the block with `docker rm "$OLD"`.
-- **The old server is still up but unhealthy, with a drain left behind** (the new one failed). Set `OLD` and `OLD_VERSION` as above and replace the last line with `docker exec "$OLD" rm -f /tmp/drain`. It turns healthy and serves again; remove the failed new container the same way, by its own ID and release, before you try again.
+2. **The old server is up but unhealthy, with a drain left behind** (the new one failed). Remove the drain; it turns healthy and serves again:
 
-`docker compose up -d --wait server worker` with `.env` on the new release also ends with one healthy container of each service, but it replaces a service at once, so that service is down for a few seconds.
+   ```bash
+   ID=
+   RELEASE=
+   [ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{.Config.Image}}' "$ID")" = "maane ghcr.io/shlomiporush/maane:$RELEASE" ] &&
+     docker exec "$ID" rm -f /tmp/drain
+   ```
+
+3. **An old and a new container run.** Set `OLD` and `OLD_RELEASE` for the old one, `NEW` and `NEW_RELEASE` for the new one. The block drains the old container as the rollout would, and stops and removes it only when the new one is still healthy after the drain; otherwise it removes the drain and leaves the old one serving:
+
+   ```bash
+   OLD=
+   OLD_RELEASE=
+   NEW=
+   NEW_RELEASE=
+   [ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{.Config.Image}}' "$OLD")" = "maane ghcr.io/shlomiporush/maane:$OLD_RELEASE" ] &&
+     [ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{.Config.Image}}' "$NEW")" = "maane ghcr.io/shlomiporush/maane:$NEW_RELEASE" ] &&
+     docker exec "$OLD" touch /tmp/drain && sleep 45 &&
+     if [ "$(docker inspect --format '{{.State.Health.Status}}' "$NEW")" = healthy ]; then
+       docker stop "$OLD" && docker rm "$OLD"
+     else
+       docker exec "$OLD" rm -f /tmp/drain
+     fi
+   ```
+
+4. **Only its old container runs, healthy.** Roll the service out again with docker rollout, as the deployment does; it drains the old server the same way.
 
 ## What was verified
 
-Zero-downtime rollout (2026-11-27): a live run of section 8 in a throwaway Compose project with Traefik v3.6.2 (both routers), PostgreSQL 18.6, Mailpit as the SMTP server with STARTTLS, and two images built from this branch: A, and B with an `expand` migration (a new table) and a changed UI string. docker rollout v0.14 ran as a deployment does, `server` then `worker`, with the drain hook taken from the image's label, while a load driver went through Traefik. 15,371 requests (the health route, the setup status, the UI shell, the signed-in ticket list, and a tracked link on the link domain) had no failure, no timeout and no connection error, and both releases answered. The old server turned unhealthy 29 s after the hook ran, Traefik sent it its last request 1 s later, and it got its stop signal 16 s after that; it received no request after the signal. A 1 MB upload streamed over 20 s on the old server succeeded. 143 replies, 127 sent at once and 16 scheduled across the 60 s when both workers ran, were each accepted once and reached the SMTP server exactly once. All 199 job queue jobs of the run completed, none failed or stayed open, and every scheduled slot had exactly one job. B's migration ran while A still served. A page holding A's HTML got 404 for A's script from B, reloaded once by itself, and showed B's sign-in. Every container, image, network, volume and secret of the run was removed afterwards. Not run: TLS at Traefik, the host's `default@file` middleware, and the `/f/` download route.
+Zero-downtime rollout (2026-11-27): a live run of section 8 in a throwaway Compose project with Traefik v3.6.2 (both routers), PostgreSQL 18.6, Mailpit as the SMTP server with STARTTLS, and two images built from this branch: A, and B with an `expand` migration (a new table) and a changed UI string. docker rollout v0.14 ran as a deployment does, `server` then `worker`, with the drain hook taken from the image's label, while a load driver went through Traefik. 15,371 requests (the health route, the setup status, the UI shell, the signed-in ticket list, and a tracked link on the link domain) had no failure, no timeout and no connection error, and both releases answered. The old server turned unhealthy 29 s after the hook ran, Traefik sent it its last request 1 s later, and it got its stop signal 16 s after that; it received no request after the signal. A 1 MB upload streamed over 20 s on the old server succeeded. 143 replies, 127 sent at once and 16 scheduled (6 of them due in the 60 s when both workers ran), were each accepted once and reached the SMTP server exactly once. All 199 job queue jobs of the run completed, none failed or stayed open, and every scheduled slot had exactly one job. B's migration ran while A still served. A page holding A's HTML got 404 for A's script from B, reloaded once by itself, and showed B's sign-in. Every container, image, network, volume and secret of the run was removed afterwards. Not run: TLS at Traefik, the host's `default@file` middleware, and the `/f/` download route.
 
 Compose values (2026-11-24): `scripts/verify.sh` checked `docker-compose.yml` with `.env` made from `.env.example`, valid and with no variable missing. The `.env` block of section 3 and the two link blocks of [Link tracking](#link-tracking) and [Import from Zendesk](#import-from-zendesk) ran against a stand-in `docker`: `.env` got `LINK_DOMAIN` equal to `DOMAIN`, and each link block replaced a missing or empty folder and its own earlier link, and stopped on a folder with files, a link elsewhere, or a target that does not hold the expected files. In Docker, a bind mount of a link to a folder showed the folder's files. Not run against a real deployment.
 

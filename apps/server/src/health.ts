@@ -1,6 +1,6 @@
 import { access, rm } from "node:fs/promises"
 
-export const DRAIN_FILE = "/tmp/drain"
+const DRAIN_FILE = "/tmp/drain"
 
 export async function serverHealthy(port: number, drainFile = DRAIN_FILE): Promise<boolean> {
   const draining = await access(drainFile).then(
