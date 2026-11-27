@@ -143,7 +143,8 @@ rollout_from() {
   pending="$(breaking_at "$ref")"
   while read -r tag; do
     [ -n "$pending" ] || break
-    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && version_below "${tag#v}" "$version" || continue
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    version_below "${tag#v}" "$version" || continue
     found="$(LC_ALL=C comm -12 <(printf '%s\n' "$pending") <(breaking_at "$tag"))"
     [ -n "$found" ] || continue
     floor="${tag#v}"
