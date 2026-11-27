@@ -30,39 +30,23 @@ function declarations(text: string): Declaration[] {
     })
 }
 
-const identifier = String.raw`(?:"(\w+)"\.)?"(\w+)"(?!\s*\.)`
-
-function tableOf(match: RegExpExecArray | RegExpMatchArray): string {
-  return `${match[1] ?? "public"}.${match[2]}`
-}
+const NEW_TABLE = /^CREATE TABLE "(\w+)" \(\n(?:\t(?:"\w+"|CONSTRAINT "\w+") (?:(?!REFERENCES)[^\n;])*\n)+\);$/
+const INDEX = /^CREATE (?:UNIQUE )?INDEX "\w+" ON "(\w+)" USING \w+ \([^\n;]*\);$/
+const FOREIGN_KEY =
+  /^ALTER TABLE "(\w+)" ADD CONSTRAINT "\w+" FOREIGN KEY \([^\n;]*\) REFERENCES "public"\."(\w+)"\([^\n;]*\)[^\n;]*;$/
 
 function expandProblem(sql: string): string | null {
-  const segments = sql
+  const statements = sql
     .split(BREAKPOINT)
-    .map((segment) => segment.replace(/\s+/g, " ").trim())
+    .map((segment) => segment.trim())
     .filter((segment) => segment !== "")
-  const several = segments.find((segment) => segment.indexOf(";") !== segment.length - 1)
-  if (several !== undefined) return `not exactly one statement ending in ";": ${several}`
-  const statements = segments.map((segment) => segment.slice(0, -1).trim())
-  const created = new Set(
-    statements.flatMap((statement) => {
-      const match = new RegExp(String.raw`^CREATE TABLE ${identifier} \(`, "i").exec(statement)
-      return match ? [tableOf(match)] : []
-    }),
-  )
+  const created = new Set(statements.flatMap((statement) => NEW_TABLE.exec(statement)?.[1] ?? []))
   for (const statement of statements) {
-    if (/\b(?:INHERITS|PARTITION|LIKE)\b/i.test(statement)) return `a table built on another table: ${statement}`
-    const references = statement.match(/\bREFERENCES\b/gi)?.length ?? 0
-    const targets = [...statement.matchAll(new RegExp(String.raw`\bREFERENCES ${identifier}`, "gi"))].map(tableOf)
-    if (targets.length !== references) return `a reference the check cannot read: ${statement}`
-    const outside = targets.find((table) => !created.has(table))
-    if (outside) return `references the existing table ${outside}: ${statement}`
-    if (new RegExp(String.raw`^CREATE TABLE ${identifier} \(`, "i").test(statement)) continue
-    if (new RegExp(String.raw`^CREATE TYPE ${identifier} AS ENUM ?\(`, "i").test(statement)) continue
-    const index = new RegExp(String.raw`^CREATE (?:UNIQUE )?INDEX "\w+" ON ${identifier}`, "i").exec(statement)
-    if (index && created.has(tableOf(index))) continue
-    const constraint = new RegExp(`^ALTER TABLE ${identifier} ADD CONSTRAINT `, "i").exec(statement)
-    if (constraint && created.has(tableOf(constraint))) continue
+    if (NEW_TABLE.test(statement)) continue
+    const index = INDEX.exec(statement)
+    if (index && created.has(index[1] as string)) continue
+    const key = FOREIGN_KEY.exec(statement)
+    if (key && created.has(key[1] as string) && created.has(key[2] as string)) continue
     return `not an expand statement: ${statement}`
   }
   return null
@@ -124,17 +108,18 @@ describe("the rollout declarations", () => {
 })
 
 describe("the expand shape check", () => {
-  const sql = (...statements: string[]) => statements.join(`\n${BREAKPOINT}\n`)
+  const sql = (...statements: string[]) => statements.join(`${BREAKPOINT}\n`)
+  const note = `CREATE TABLE "note" (\n\t"id" uuid PRIMARY KEY NOT NULL,\n\t"parent" uuid,\n\tCONSTRAINT "note_form" CHECK ("note"."id" is not null)\n);`
+  const noteTag = `CREATE TABLE "note_tag" (\n\t"note_id" uuid NOT NULL\n);`
 
-  it("passes a new table with its index, its constraint, and a new type", () => {
+  it("passes new tables with their indexes and a foreign key between them, as drizzle-kit writes them", () => {
     expect(
       expandProblem(
         sql(
-          `CREATE TYPE "public"."level" AS ENUM('low', 'high');`,
-          `CREATE TABLE "note" (\n\t"id" uuid PRIMARY KEY NOT NULL,\n\t"parent" uuid\n);`,
-          `CREATE TABLE "note_tag" ("note_id" uuid NOT NULL);`,
-          `ALTER TABLE "note_tag" ADD CONSTRAINT "note_tag_note_fk" FOREIGN KEY ("note_id") REFERENCES "public"."note"("id");`,
-          `CREATE INDEX "note_parent_idx" ON "note" USING btree ("parent");`,
+          note,
+          noteTag,
+          `ALTER TABLE "note_tag" ADD CONSTRAINT "note_tag_note_id_note_id_fk" FOREIGN KEY ("note_id") REFERENCES "public"."note"("id") ON DELETE cascade ON UPDATE no action;`,
+          `CREATE UNIQUE INDEX "note_parent_idx" ON "note" USING btree ("parent");`,
         ),
       ),
     ).toBeNull()
@@ -144,72 +129,17 @@ describe("the expand shape check", () => {
     ["a dropped column", `ALTER TABLE "ticket" DROP COLUMN "subject";`],
     ["a column added to an existing table", `ALTER TABLE "ticket" ADD COLUMN "note" text;`],
     ["an index on an existing table", `CREATE INDEX "ticket_note_idx" ON "ticket" USING btree ("subject");`],
-    ["a dropped table", `DROP TABLE "ticket";`],
+    [
+      "a foreign key to an existing table",
+      `ALTER TABLE "note" ADD CONSTRAINT "note_ticket_fk" FOREIGN KEY ("id") REFERENCES "public"."ticket"("id");`,
+    ],
+    ["a reference inside a new table", `CREATE TABLE "x" (\n\t"ticket_id" uuid REFERENCES "ticket"("id")\n);`],
+    ["a table built on another table", `CREATE TABLE "x" (\n\t"id" uuid\n) INHERITS ("ticket");`],
+    ["a second statement in one segment", `${noteTag}\nALTER TABLE "ticket" ADD COLUMN "note" text;`],
+    ["a statement written by hand in another layout", `CREATE TABLE "x" ("id" uuid);`],
+    ["a new type", `CREATE TYPE "public"."level" AS ENUM('low', 'high');`],
     ["a data change", `UPDATE "ticket" SET "subject" = '';`],
-    ["a value added to a type", `ALTER TYPE "public"."status" ADD VALUE 'held';`],
   ])("refuses %s", (_, statement) => {
-    expect(expandProblem(statement)).not.toBeNull()
-  })
-
-  it("refuses a new table with a foreign key to an existing table", () => {
-    expect(
-      expandProblem(
-        sql(
-          `CREATE TABLE "note" ("ticket_id" uuid NOT NULL);`,
-          `ALTER TABLE "note" ADD CONSTRAINT "note_ticket_fk" FOREIGN KEY ("ticket_id") REFERENCES "public"."ticket"("id");`,
-        ),
-      ),
-    ).toMatch(/existing table public\.ticket/)
-    expect(expandProblem(`CREATE TABLE "note" ("ticket_id" uuid REFERENCES "ticket"("id"));`)).toMatch(/ticket/)
-    expect(expandProblem(`CREATE TABLE "note" ("ticket_id" uuid REFERENCES ticket(id));`)).toMatch(/cannot read/)
-  })
-
-  it("refuses a statement on an existing table hidden after a new table in one segment", () => {
-    expect(
-      expandProblem(
-        `CREATE TABLE "note" ("id" uuid PRIMARY KEY NOT NULL);\nALTER TABLE "ticket" ADD COLUMN "note" text;`,
-      ),
-    ).toMatch(/not exactly one statement/)
-  })
-
-  it("refuses an index on an existing table that shares a new table's name in another schema", () => {
-    expect(
-      expandProblem(
-        sql(
-          `CREATE TABLE "archive"."ticket" ("id" uuid PRIMARY KEY NOT NULL);`,
-          `CREATE INDEX "ticket_subject_idx" ON "public"."ticket" USING btree ("subject");`,
-        ),
-      ),
-    ).not.toBeNull()
-  })
-
-  it("refuses a reference spelled with spaces around the schema's dot, even beside a table named like the schema", () => {
-    expect(
-      expandProblem(
-        sql(
-          `CREATE TABLE "public" ("id" uuid PRIMARY KEY NOT NULL);`,
-          `CREATE TABLE "note" ("ticket_id" uuid REFERENCES "public" . "ticket"("id"));`,
-        ),
-      ),
-    ).toMatch(/cannot read/)
-  })
-
-  it("refuses a new table built on an existing one", () => {
-    expect(expandProblem(`CREATE TABLE "note" ("id" uuid) INHERITS ("ticket");`)).toMatch(/built on another table/)
-  })
-
-  it("refuses a segment whose text holds a second statement, also inside a quoted value", () => {
-    expect(
-      expandProblem(
-        sql(
-          `CREATE TYPE "public"."level" AS ENUM('a;CREATE TABLE "ticket" (', 'b');`,
-          `CREATE INDEX "ticket_subject_idx" ON "ticket" USING btree ("subject");`,
-        ),
-      ),
-    ).not.toBeNull()
-  })
-
-  it("refuses CREATE TABLE IF NOT EXISTS, which may name an existing table", () => {
-    expect(expandProblem(`CREATE TABLE IF NOT EXISTS "ticket" ("id" uuid PRIMARY KEY NOT NULL);`)).not.toBeNull()
+    expect(expandProblem(sql(note, statement))).toMatch(/not an expand statement/)
   })
 })

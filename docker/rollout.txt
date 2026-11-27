@@ -2,8 +2,8 @@
 # contract). One line each, "<kind> <name>", kind expand or breaking, added by the change that brings it. Only add
 # lines; a name never repeats.
 #
-# - Every migration under apps/server/drizzle has exactly one line with its tag. expand: it creates only new tables,
-#   their indexes and constraints, and new types, with no foreign key to an existing table, so it locks nothing the
+# - Every migration under apps/server/drizzle has exactly one line with its tag. expand: every statement is one of a
+#   few exact shapes (new tables in drizzle-kit's layout, indexes on them, foreign keys between them), so it locks nothing the
 #   running release uses (apps/server/src/rollout.test.ts checks the statements). Anything that touches an existing
 #   table is breaking, adding a column included; a new side table rolls out instead.
 # - "breaking pg-boss-schema-<N>" for each pg-boss schema number; the check fails until the installed one has its line.

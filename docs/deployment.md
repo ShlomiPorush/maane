@@ -652,7 +652,7 @@ Each release's image carries two labels that tell whether it may roll out over t
 
 `docker/rollout.txt` declares every change a release brings that matters for a rollout, one line each, `expand` or `breaking`:
 
-- every migration under `apps/server/drizzle/`. `expand` is only a migration that creates new tables, their indexes and constraints, and new types, with no foreign key to an existing table: it locks nothing the running release uses. Anything that touches an existing table is `breaking`, adding a column included. To ship a change that should roll out, put the new data in a new table beside the existing one;
+- every migration under `apps/server/drizzle/`. `expand` is only a migration whose every statement is one of a few exact shapes: a new table in drizzle-kit's own layout, an index on a new table, or a foreign key between new tables. It locks nothing the running release uses. Anything else, a statement the check does not recognise included, is `breaking`. Anything that touches an existing table is `breaking`, adding a column included. To ship a change that should roll out, put the new data in a new table beside the existing one;
 - each pg-boss schema number (`pg-boss-schema-<N>`), always `breaking`: pg-boss migrates its own schema when the new server starts, and its documentation does not promise that an older release keeps working on the migrated schema. A pg-boss update that keeps the schema number needs nothing;
 - any other change a release since `maane.rollout-from` cannot run beside, such as a job an older worker reads wrongly or a step the host needs by hand.
 
