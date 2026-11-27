@@ -177,15 +177,16 @@ journal_entries() {
 }
 
 check_declarations() {
-  local ref="$1" previous="$2" before after removed file released current
+  local ref="$1" previous="$2" before after removed listed file released current
   [ -n "$previous" ] || return 0
   before="$(declarations_at "$previous")"
   after="$(declarations_at "$ref")"
   removed="$(LC_ALL=C comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
   [ -z "$removed" ] || die "$ROLLOUT_FILE lost lines that $previous has, which would lower maane.rollout-from: $removed"
+  listed="$(git_ ls-tree --name-only "$previous" "$MIGRATIONS_DIR/")"
   while read -r file; do
     git_ diff --quiet "$previous" "$ref" -- "$file" || die "$file changed after $previous released it"
-  done < <(git_ ls-tree --name-only "$previous" "$MIGRATIONS_DIR/" | grep '\.sql$' || true)
+  done < <(grep '\.sql$' <<<"$listed" || true)
   released="$(journal_entries "$previous")"
   current="$(journal_entries "$ref")"
   [ -z "$released" ] || [ "$(head -n "$(wc -l <<<"$released")" <<<"$current")" = "$released" ] ||

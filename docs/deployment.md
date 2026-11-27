@@ -729,12 +729,12 @@ Each of `server` and `worker` should show exactly one container, `Up` and `(heal
    NEW=
    NEW_RELEASE=
    identity() { docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{index .Config.Labels "com.docker.compose.service"}} {{.Config.Image}}' "$1"; }
-   [ -n "$OLD" ] && [ "$OLD" != "$NEW" ] &&
+   [ -n "$OLD" ] && [ "$(docker inspect --format '{{.Id}}' "$OLD")" != "$(docker inspect --format '{{.Id}}' "$NEW")" ] &&
      [ "$(identity "$OLD")" = "maane $SERVICE ghcr.io/shlomiporush/maane:$OLD_RELEASE" ] &&
      [ "$(identity "$NEW")" = "maane $SERVICE ghcr.io/shlomiporush/maane:$NEW_RELEASE" ] &&
-     [ "$(docker inspect --format '{{.State.Health.Status}}' "$NEW")" = healthy ] &&
+     [ "$(docker inspect --format '{{.State.Running}} {{.State.Health.Status}}' "$NEW")" = "true healthy" ] &&
      docker exec "$OLD" touch /tmp/drain && sleep 45 &&
-     if [ "$(docker inspect --format '{{.State.Health.Status}}' "$NEW")" = healthy ]; then
+     if [ "$(docker inspect --format '{{.State.Running}} {{.State.Health.Status}}' "$NEW")" = "true healthy" ]; then
        docker stop "$OLD" && docker rm "$OLD"
      else
        docker exec "$OLD" rm -f /tmp/drain
