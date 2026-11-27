@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+shopt -s inherit_errexit
 
 # shellcheck source=scripts/lib/common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
@@ -16,6 +17,8 @@ SKIP_VERIFY=0
 DRY_RUN=0
 RESUME=0
 LOCK_REF="refs/maane/release-lock"
+ROLLOUT_FILE="docker/rollout.txt"
+MIGRATIONS_DIR="apps/server/drizzle"
 LOCK_COMMIT=""
 SRC_DIR=""
 VERSION=""
@@ -35,6 +38,10 @@ Usage: scripts/release.sh --target ghcr --bump <patch|minor|major> [--skip-verif
 Steps: preflight (clean main in sync with origin, release notes present, version unused), full
 scripts/verify.sh, version and changelog update, release commit and tag pushed together, the image
 built from the tag and pushed, then :latest, then the GitHub Release from the CHANGELOG section.
+The image carries maane.compose-sha256 (the tag's docker-compose.yml) and maane.rollout-from: the
+oldest release that already had the image's newest breaking line in docker/rollout.txt, or this
+version when a breaking line is new (docs/deployment.md, section 8). Preflight refuses a line an
+earlier release has that is gone, and a released migration that changed.
 When the newest tag has no GitHub Release yet, an earlier run stopped halfway: this run finishes that
 version instead of starting a new one, reusing what is already published and refusing anything that
 was not built from the tag. Needs docker with buildx, git and gh (logged in to GitHub and GHCR).
@@ -112,6 +119,84 @@ newest_tag() {
   git_ tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1
 }
 
+version_below() {
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]
+}
+
+previous_tag() {
+  local version="$1" tag previous=""
+  while read -r tag; do
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && version_below "${tag#v}" "$version" && previous="$tag"
+  done < <(git_ tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=v:refname)
+  echo "$previous"
+}
+
+file_at() {
+  local listed
+  listed="$(git_ ls-tree --name-only "$1" -- "$2")" || die "cannot read the tree of $1"
+  [ -n "$listed" ] || return 0
+  git_ show "$1:$2" || die "cannot read $2 at $1"
+}
+
+declarations_at() {
+  local text
+  text="$(file_at "$1" "$ROLLOUT_FILE")"
+  awk 'NF && $1 !~ /^#/ { print $1 " " $2 }' <<<"$text" | LC_ALL=C sort -u
+}
+
+breaking_at() {
+  local text
+  text="$(declarations_at "$1")"
+  awk '$1 == "breaking" { print $2 }' <<<"$text"
+}
+
+rollout_from() {
+  local ref="$1" version="$2" pending seen found tag floor=""
+  pending="$(breaking_at "$ref")"
+  while read -r tag; do
+    [ -n "$pending" ] || break
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    version_below "${tag#v}" "$version" || continue
+    seen="$(breaking_at "$tag")"
+    found="$(LC_ALL=C comm -12 <(printf '%s\n' "$pending") <(printf '%s\n' "$seen"))"
+    [ -n "$found" ] || continue
+    floor="${tag#v}"
+    pending="$(LC_ALL=C comm -23 <(printf '%s\n' "$pending") <(printf '%s\n' "$found"))"
+  done < <(git_ tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=v:refname)
+  if [ -n "$pending" ] || [ -z "$floor" ]; then
+    echo "$version"
+  else
+    echo "$floor"
+  fi
+}
+
+journal_entries() {
+  local text
+  text="$(file_at "$1" "$MIGRATIONS_DIR/meta/_journal.json")"
+  [ -z "$text" ] || jq -c '.entries[]' <<<"$text"
+}
+
+check_declarations() {
+  local ref="$1" previous="$2" before after removed listed file released current
+  [ -n "$previous" ] || return 0
+  before="$(declarations_at "$previous")"
+  after="$(declarations_at "$ref")"
+  removed="$(LC_ALL=C comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
+  [ -z "$removed" ] || die "$ROLLOUT_FILE lost lines that $previous has, which would lower maane.rollout-from: $removed"
+  listed="$(git_ ls-tree --name-only "$previous" "$MIGRATIONS_DIR/")"
+  while read -r file; do
+    git_ diff --quiet "$previous" "$ref" -- "$file" || die "$file changed after $previous released it"
+  done < <(grep '\.sql$' <<<"$listed" || true)
+  released="$(journal_entries "$previous")"
+  current="$(journal_entries "$ref")"
+  [ -z "$released" ] || [ "$(head -n "$(wc -l <<<"$released")" <<<"$current")" = "$released" ] ||
+    die "the migration journal changed entries that $previous released"
+}
+
+compose_sha256() {
+  git_ show "$1:docker-compose.yml" | sha256sum | cut -d ' ' -f 1
+}
+
 preflight() {
   info "Preflight"
   require_docker
@@ -134,6 +219,7 @@ preflight() {
       RESUME=1 TAG="$newest" VERSION="${newest#v}"
       git_ merge-base --is-ancestor "$TAG" HEAD || die "$TAG is not on main"
       [ "$(git_ show "$TAG:package.json" | version_in)" = "$VERSION" ] || die "package.json at $TAG is not $VERSION"
+      check_declarations "$TAG" "$(previous_tag "$VERSION")"
       echo "    $TAG was not finished: this run finishes it and ignores --bump $BUMP. Run again for the next version."
       return
     fi
@@ -148,6 +234,7 @@ preflight() {
   git_ rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "tag $TAG already exists"
   state="$(image_state "$(image_ref "$VERSION")" none)"
   [ "$state" = missing ] || die "$(image_ref "$VERSION") is already published"
+  check_declarations HEAD "$newest"
   echo "    $current -> $VERSION ($TAG)"
 }
 
@@ -193,9 +280,11 @@ cleanup() {
 }
 
 publish_image() {
-  local revision src ref state
+  local revision src ref state compose rollout
   revision="$(git_ rev-parse "$TAG^{commit}")"
   ref="$(image_ref "$VERSION")"
+  compose="$(compose_sha256 "$TAG")"
+  rollout="$(rollout_from "$TAG" "$VERSION")"
   src="$(mktemp -d)"
   SRC_DIR="$src"
   git_ archive "$TAG" | tar -x -C "$src"
@@ -210,6 +299,8 @@ publish_image() {
         --label "org.opencontainers.image.revision=$revision" \
         --label "org.opencontainers.image.source=$SOURCE_URL" \
         --label "org.opencontainers.image.version=$VERSION" \
+        --label "maane.compose-sha256=$compose" \
+        --label "maane.rollout-from=$rollout" \
         -t "$ref" "$src" || die "building or pushing $ref failed. Run the release again to finish $TAG."
       ;;
   esac
@@ -271,6 +362,10 @@ main() {
   [ $DRY_RUN -eq 1 ] || take_lock
   preflight
   if [ $DRY_RUN -eq 1 ]; then
+    local source=HEAD compose rollout
+    [ $RESUME -eq 0 ] || source="$TAG"
+    compose="$(compose_sha256 "$source")"
+    rollout="$(rollout_from "$source" "$VERSION")"
     if [ $RESUME -eq 1 ]; then
       info "Dry run. Would finish $TAG: the image if missing, :latest and the GitHub Release."
     else
@@ -279,6 +374,7 @@ main() {
       info "Would commit package.json and CHANGELOG.md, push them with $TAG, then publish:"
     fi
     echo "    $(image_ref "$VERSION") and :latest"
+    echo "    labelled maane.compose-sha256=$compose maane.rollout-from=$rollout"
     return 0
   fi
 

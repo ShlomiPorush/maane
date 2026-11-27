@@ -1,0 +1,53 @@
+# Declarations for zero-downtime rollouts (docs/deployment.md, section 8; docs/project-foundation.md, Migration
+# contract). One line each, "<kind> <name>", kind expand or breaking, added by the change that brings it. Only add
+# lines; a name never repeats.
+#
+# - Every migration under apps/server/drizzle has exactly one line with its tag. expand: every statement is one of a
+#   few exact shapes (new tables in drizzle-kit's layout, indexes on them, foreign keys between them), so it locks nothing the
+#   running release uses (apps/server/src/rollout.test.ts checks the statements). Anything that touches an existing
+#   table is breaking, adding a column included; a new side table rolls out instead.
+# - "breaking pg-boss-schema-<N>" for each pg-boss schema number; the check fails until the installed one has its line.
+# - "breaking <name>" for any other change a release since maane.rollout-from cannot run beside: a job the older
+#   worker reads wrongly, stored data whose meaning changes, a new required variable in app.env, a changed file under
+#   docker/clamav/. Write a host step in CHANGELOG.md too: the release notes come from it.
+#
+# scripts/release.sh labels each image maane.rollout-from with the oldest release that already had the newest breaking
+# line of the image, or with the image's own version when a breaking line is new.
+#
+# The migrations up to 0034 predate the first release, which is a fresh install.
+breaking 0000_initial
+breaking 0001_organizations
+breaking 0002_intake_mode_row
+breaking 0003_file_store
+breaking 0004_intake
+breaking 0005_intake_review
+breaking 0006_intake_review_2
+breaking 0007_intake_review_3
+breaking 0008_replies
+breaking 0009_outbox_attempt
+breaking 0010_delivery
+breaking 0011_delivery_review
+breaking 0012_delivery_backfill
+breaking 0013_delivery_unmatched
+breaking 0014_delivery_unmatched_event
+breaking 0015_links
+breaking 0016_first_delivered
+breaking 0017_first_delivered_backfill
+breaking 0018_workflow
+breaking 0019_push_subscriptions
+breaking 0020_pg_trgm
+breaking 0021_search
+breaking 0022_scheduled
+breaking 0023_reminders
+breaking 0024_import
+breaking 0025_import_row
+breaking 0026_import_failure
+breaking 0027_import_files
+breaking 0028_live_columns
+breaking 0029_remove_listening
+breaking 0030_drop_listening_columns
+breaking 0031_drop_listening_tables
+breaking 0032_drop_snooze_version
+breaking 0033_drop_unread_columns
+breaking 0034_drop_message_headers
+breaking pg-boss-schema-46

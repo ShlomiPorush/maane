@@ -43,9 +43,12 @@ export const HEARTBEAT_FILE = process.env.MAANE_HEARTBEAT_FILE || "/tmp/maane-wo
 
 export const HEARTBEAT_MAX_AGE_MS = 3 * 60_000
 
+const HEARTBEAT_INTERVAL_MS = 10_000
+
+const HEARTBEAT = "heartbeat"
+
 export interface JobOptions {
   heartbeatFile?: string
-  now?: () => number
   files?: FileService
   intake?: IntakeJobs
   send?: SendJobs
@@ -84,15 +87,26 @@ export async function graphTest(settings: Settings, graph: GraphGateway): Promis
   return graph.test(config)
 }
 
-export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Promise<void> {
-  const heartbeatFile = options.heartbeatFile ?? HEARTBEAT_FILE
-  const now = options.now ?? Date.now
-  await boss.createQueue("heartbeat")
-  await boss.schedule("heartbeat", "* * * * *")
-  await boss.work("heartbeat", async () => {
-    await writeFile(heartbeatFile, String(now()))
-  })
+async function keepHeartbeat(boss: PgBoss, file: string): Promise<void> {
+  await boss.createQueue(HEARTBEAT)
+  await boss.work(HEARTBEAT, async () => {})
+  const write = async () => {
+    const fetched = boss.getWipData().find((worker) => worker.name === HEARTBEAT)?.lastFetchedOn
+    if (fetched) await writeFile(file, String(fetched))
+  }
+  const timer = setInterval(() => {
+    write().catch((error) => log.warn("could not write the heartbeat file", errorFacts(error)))
+  }, HEARTBEAT_INTERVAL_MS)
+  timer.unref()
+  boss.once("stopped", () => clearInterval(timer))
+}
 
+export async function registerJobs(boss: PgBoss, options: JobOptions = {}): Promise<void> {
+  await registerWork(boss, options)
+  await keepHeartbeat(boss, options.heartbeatFile ?? HEARTBEAT_FILE)
+}
+
+async function registerWork(boss: PgBoss, options: JobOptions): Promise<void> {
   const files = options.files
   if (!files) return
   await boss.createQueue(SCANNER_SELF_TEST)

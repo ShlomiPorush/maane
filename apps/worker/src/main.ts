@@ -84,7 +84,7 @@ export async function startWorker(options: WorkerOptions = {}): Promise<{ stop()
   log.info("worker started", { version: config.version })
   return {
     async stop() {
-      await boss.stop({ graceful: true, timeout: 20_000 })
+      await boss.stop({ graceful: true, timeout: 50_000 })
       await database.close()
       await sending.close()
     },

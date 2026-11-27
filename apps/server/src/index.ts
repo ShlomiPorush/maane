@@ -3,6 +3,7 @@ import { type Auth, createAuth } from "./auth/auth.ts"
 import { SetupWindow } from "./auth/setup-window.ts"
 import { loadConfig } from "./config.ts"
 import { migrateDatabase, openDatabase } from "./db/client.ts"
+import { stopDraining } from "./health.ts"
 import { createApp } from "./http/app.ts"
 import { openJobQueue } from "./jobs/queue.ts"
 import { errorFacts, log } from "./log.ts"
@@ -11,6 +12,7 @@ import { Settings } from "./settings/service.ts"
 
 async function main(): Promise<void> {
   const config = loadConfig()
+  await stopDraining()
   const setup = new SetupWindow()
   const database = openDatabase(config.databaseUrl)
   const auditDatabase = openDatabase(config.databaseUrl, 2)

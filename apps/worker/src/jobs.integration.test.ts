@@ -38,13 +38,23 @@ afterAll(async () => {
 })
 
 describe("worker jobs", () => {
-  it("schedules the heartbeat and writes the heartbeat file when it runs", async () => {
-    const file = join(dir, "heartbeat")
-    await registerJobs(boss, { heartbeatFile: file, now: () => 1234 })
-    expect((await boss.getSchedules()).map((s) => s.name)).toContain("heartbeat")
-    await boss.send("heartbeat")
-    await expect.poll(() => readFile(file, "utf8").catch(() => ""), { timeout: 15_000 }).toBe("1234")
-  })
+  it("gives each of two workers on one database its own heartbeat from its own fetches, with no heartbeat job", async () => {
+    const other = new PgBoss({ connectionString: database.url, schema: "pgboss" })
+    await other.start()
+    try {
+      const files = [join(dir, "heartbeat-one"), join(dir, "heartbeat-two")]
+      const started = Date.now()
+      await registerJobs(boss, { heartbeatFile: files[0] })
+      await registerJobs(other, { heartbeatFile: files[1] })
+      for (const file of files)
+        await expect
+          .poll(async () => Number(await readFile(file, "utf8").catch(() => "0")), { timeout: 20_000 })
+          .toBeGreaterThanOrEqual(started)
+      expect((await boss.getSchedules()).map((s) => s.name)).not.toContain("heartbeat")
+    } finally {
+      await other.stop({ graceful: false })
+    }
+  }, 60_000)
 
   it("runs the scanner self-test at start and for a test the server queues, with its result as the output", async () => {
     const settings = new Settings(database.db, createSettingsCipher([{ version: 1, value: testKey() }]), {})
