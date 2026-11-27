@@ -5,6 +5,7 @@ import { type Actor, writeAudit } from "../audit.ts"
 import type { Db } from "../db/client.ts"
 import { setting } from "../db/schema.ts"
 import { makeSourceCurrent } from "../intake/source.ts"
+import { lockIntakeConfig } from "../organizations/intake.ts"
 import type { SettingsCipher } from "./crypto.ts"
 
 export class SettingsError extends Error {
@@ -63,6 +64,8 @@ export class Settings {
       )
     }
     await this.db.transaction(async (tx) => {
+      const graph = rows.some((row) => row.key === "graph.tenantId" || row.key === "graph.mailbox")
+      if (graph) await lockIntakeConfig(tx)
       for (const row of rows) {
         await tx
           .insert(setting)
@@ -79,7 +82,7 @@ export class Settings {
           ipAddress,
         })
       }
-      if (rows.some((row) => row.key === "graph.tenantId" || row.key === "graph.mailbox")) {
+      if (graph) {
         const values = await this.#effective(["graph.tenantId", "graph.mailbox"], tx)
         await makeSourceCurrent(
           tx,

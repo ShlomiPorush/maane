@@ -1,12 +1,16 @@
 import type { Db } from "@maane/server/db/client"
 import { makeSourceCurrent } from "@maane/server/intake/source"
+import { lockIntakeConfig } from "@maane/server/organizations/intake"
 import type { Settings } from "@maane/server/settings/service"
 
 export async function reconcileIntakeSource(db: Db, settings: Settings): Promise<{ id: string } | null> {
-  const tenantId = await settings.get("graph.tenantId")
-  const mailbox = await settings.get("graph.mailbox")
-  const current = await db.transaction((tx) => makeSourceCurrent(tx, tenantId, mailbox))
-  return current ? { id: current.id } : null
+  return db.transaction(async (tx) => {
+    await lockIntakeConfig(tx)
+    const tenantId = await settings.get("graph.tenantId")
+    const mailbox = await settings.get("graph.mailbox")
+    const current = await makeSourceCurrent(tx, tenantId, mailbox)
+    return current ? { id: current.id } : null
+  })
 }
 
 export interface LockPool {

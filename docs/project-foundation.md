@@ -185,6 +185,18 @@ Docker is part of the runtime, development, and verification architecture. Every
 
 The owner may point Maane at an existing clamd instead of running `clamav`. The clamd address is a setting in the admin UI.
 
+### Migration contract
+
+A release rolls out beside the releases since its `maane.rollout-from` label: for minutes, the old `server` and `worker` keep reading and writing the database the new server migrates when it starts. `docker/rollout.txt` declares each migration, one line, `expand` or `breaking`, and `apps/server/src/rollout.test.ts` checks the declarations.
+
+- `expand`: the migration creates only new tables, their indexes and constraints, and new types, and has no foreign key to an existing table. It locks nothing the running release uses, so it cannot block, deadlock with, or change what the old release does. Drizzle runs every pending migration in one transaction; with only such statements, no lock wait reaches the old release, so no lock timeout is needed. The test checks each statement's kind; it cannot check meaning, so the author still checks that the older code ignores the new table.
+- `breaking`: everything else, including any statement on an existing table (a column added, an index, a constraint, a foreign key to it, a type value added, drops, renames, data changes). Such a release sets `maane.rollout-from` to itself and is deployed by hand (`docs/deployment.md`, section 7). A change meant to roll out keeps its new data in a new table.
+- pg-boss migrates its own schema when the new server starts. Its documentation does not promise that an older release keeps working on the migrated schema, and an update can skip schema numbers, so each schema number has its own `breaking pg-boss-schema-<N>` line; an update that keeps the number needs none. The test reads the number from the pg-boss that `apps/server` and `apps/worker` resolve: both must match, and it must be the highest one declared.
+- Other changes a release since `maane.rollout-from` cannot run beside get `breaking <new name>`.
+- Lines are only added, and a released migration is never edited: `scripts/release.sh` refuses a line an earlier release had that is gone, a released migration file that changed, and a released journal entry that changed. The journal keeps its order with strictly increasing `when` (an entry that is not after the last applied one is skipped on an upgrade but runs on a fresh install).
+
+`maane.rollout-from` is the oldest release that already had the release's newest `breaking` line, or the release itself when that line is new. Migrations up to `0034` predate the first release, a fresh install, and are declared `breaking`.
+
 ## Foundation implementation plan
 
 Each row is one pull request or a coherent set of pull requests, each green in CI before merge. The owner merges.

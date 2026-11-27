@@ -639,6 +639,8 @@ To go back to an earlier version, restore the dump the block took (section 6, in
 
 Maane can also be updated with a zero-downtime rollout through [docker rollout](https://github.com/wowu/docker-rollout): each service gets a new container beside the old one, and the old one stops once the new one is healthy. `server` rolls out first, then `worker`, both from the same image. `postgres` and `clamav` are not part of it: they do not use `VERSION`, and you update them yourself. Release notes still apply: read them first, as in section 7.
 
+The first release is a fresh install (sections 2 to 4). Every later release whose `maane.rollout-from` is not newer than the release you run rolls out; any other release is deployed with section 7.
+
 ### What the image says
 
 Each release's image carries two labels that tell whether it may roll out over the release you run:
@@ -648,13 +650,15 @@ Each release's image carries two labels that tell whether it may roll out over t
 | `maane.compose-sha256` | The sha256 of `docker-compose.yml` at the release's tag. It differs from the running image's when the release changed that file: compare your copy with the tag's file and deploy that release with section 7. |
 | `maane.rollout-from` | The oldest running release this image may run beside. |
 
-`maane.rollout-from` is the previous release, or the release itself when one of these changed since the previous release:
+`docker/rollout.txt` declares every change a release brings that matters for a rollout, one line each, `expand` or `breaking`:
 
-- any file under `apps/server/drizzle/`: the server migrates when it starts, while the old release still serves, and every migration locks tables;
-- the version of pg-boss, which upgrades its own schema when the new server starts;
-- `docker/rollout.txt`, where a change marks that the previous release cannot run beside it, or that the host needs a step by hand.
+- every migration under `apps/server/drizzle/`. `expand` is only a migration that creates new tables, their indexes and constraints, and new types, with no foreign key to an existing table: it locks nothing the running release uses. Anything that touches an existing table is `breaking`, adding a column included. To ship a change that should roll out, put the new data in a new table beside the existing one;
+- each pg-boss schema number (`pg-boss-schema-<N>`), always `breaking`: pg-boss migrates its own schema when the new server starts, and its documentation does not promise that an older release keeps working on the migrated schema. A pg-boss update that keeps the schema number needs nothing;
+- any other change a release since `maane.rollout-from` cannot run beside, such as a job an older worker reads wrongly or a step the host needs by hand.
 
-Deploy with section 7 a release whose `maane.rollout-from` is newer than the release you run. That covers every release with a migration, and skipping a release. Read the labels of a pulled image with:
+`maane.rollout-from` is the oldest release that already had the release's newest `breaking` line, or the release itself when that line is new. So it stays on the same release until a breaking change raises it, and a release that adds only `expand` changes may skip releases back to it. A unit test fails on a migration without its line, on an `expand` migration whose statements are not of the allowed kinds, and on a pg-boss schema without its line; the release refuses a line that an earlier release had and that is gone, and a released migration that changed.
+
+Read the labels of a pulled image with:
 
 ```bash
 docker image inspect --format '{{index .Config.Labels "maane.rollout-from"}} {{index .Config.Labels "maane.compose-sha256"}}' ghcr.io/shlomiporush/maane:0.2.0
@@ -668,33 +672,51 @@ Your `docker-compose.yml` and `.env` stay yours. A rollout needs these in them:
 - `server` and `worker` with `image: ghcr.io/shlomiporush/maane:${VERSION}`, and exactly one `VERSION=X.Y.Z` line in `.env`. A rollout changes only that line.
 - On `server` and `worker`: no `container_name`, no published port, no `network_mode: host`, no `build`, and one replica, because a rollout runs two containers of a service for a moment. Requests reach `server` through Traefik's labels.
 - `worker` keeps its own `healthcheck:` (`node dist/worker/healthcheck.js`): the health check in the image is the server's.
-- `worker` has `stop_grace_period: 60s`, so a reply that is being sent when the old worker stops has up to 50 seconds to finish. Docker fixes a container's stop timeout when it creates the container: add the line, then apply it once with `env -u VERSION docker compose up -d --no-deps worker`. The shipped `docker-compose.yml` does not set it.
+- `stop_grace_period: 60s` on `server` and on `worker`, so a request in flight has a minute to finish and a reply being sent has up to 50 seconds. Docker fixes a container's stop timeout when it creates the container: add the lines, then apply them once with `env -u VERSION docker compose up -d --no-deps server worker`. The shipped `docker-compose.yml` does not set them.
 - No `pull_policy: always` on `server` or `worker`.
+
+### How the old server leaves
+
+The image carries the label `docker-rollout.pre-stop-hook`, which docker rollout runs in the old container before it stops it: it creates `/tmp/drain` and waits 45 seconds. While that file exists, the server's health check fails, Docker marks the container unhealthy after three failed checks (about 36 seconds at the shipped interval of 10 seconds), and Traefik, which routes only to healthy containers, stops sending it requests. Only then does docker rollout stop it, and the server finishes the requests it still has. A server removes `/tmp/drain` when it starts. The worker gets the same hook from the shared image: its rollout waits 45 seconds longer, and its own health check ignores the file.
 
 ### The minutes in between
 
 While the old and the new containers of a service run together:
 
 - Each job goes to one worker, and Maane's jobs lock what they change, so two workers never do the same work twice. Each worker reports healthy from its own reads from the job queue.
-- Traefik sends requests to both servers for a few seconds. A page loaded in those seconds can mix the files of the two releases and fail; reload it. Reload the tabs left open from before the rollout too. A request still running on the old server when it stops, such as a slow upload, can be cut; send it again.
+- A worker that starts takes the same lock as a save of the Graph settings, so a mailbox saved during a rollout is never undone.
+- A page whose script or stylesheet is gone after the switch (its hashed file belongs to the other release) reloads once by itself; so does an open tab whose lazily loaded part, such as the PDF viewer, is gone. A missing file answers 404 that no cache keeps. A page that hits the other release again in the same seconds stays as it is until you reload it.
+- A request still running on the old server a minute after its stop signal is cut, such as a very slow upload; send it again.
+- A reply still being sent when the old worker has waited 50 seconds is cut and shows as unknown on its ticket: use Send again or Mark as sent, as after any interruption; it is never sent twice. A browser notification still going out to several devices then misses the remaining ones.
 - A change of the session length in Settings reaches only the server that saved it, until the other one restarts. Change it outside a rollout, or restart `server` after the rollout.
 - The rate limits of the link routes count on each server apart.
+- If two servers ever start together with the same migration waiting, one of them fails its start and restarts; a rollout starts one new server, so this does not happen in one.
 
 ### A rollout that stopped half way
 
-When `server` rolled out and `worker` did not, `.env` holds the new release while `worker` still runs the old one. Check each service:
+Check every container of the project:
 
 ```bash
-cd "$HOME/maane" && grep '^VERSION=' .env && env -u VERSION docker compose ps --all server worker
+cd "$HOME/maane" && grep '^VERSION=' .env && docker ps -a --filter label=com.docker.compose.project=maane --format '{{.ID}} {{.Label "com.docker.compose.service"}} {{.Image}} {{.Status}}'
 ```
 
-Each service should show exactly one container, running and healthy, on the `VERSION` in `.env`; a stopped one left over counts as a rollout that stopped half way. When one does not, read why in its logs (`docker compose logs worker`) and fix that. Then bring both to the release in `.env`:
+Each of `server` and `worker` should show exactly one container, `Up` and `(healthy)`, on the `VERSION` in `.env`. When one does not, read why in its logs (`docker logs <id>`) and fix that first. Then, for that service:
 
-```bash
-cd "$HOME/maane" && grep -qxE 'VERSION=[0-9]+\.[0-9]+\.[0-9]+' .env && env -u VERSION docker compose up -d --wait server worker && env -u VERSION docker compose ps --all server worker
-```
+- **Only its old container runs.** Roll it out again with docker rollout, as the deployment does; it drains the old server the same way.
+- **An old and a new container run, the new one healthy.** Fill in `OLD` with the old container's ID and `OLD_VERSION` with its release, both from the check, then run the block; with either left empty it stops at the check. It checks that the ID is that release's Maane container, drains it as the rollout would, then stops and removes it:
 
-It leaves one healthy container of each service on that release. A service it replaces is down for a few seconds.
+  ```bash
+  OLD=
+  OLD_VERSION=
+  cd "$HOME/maane" &&
+    [ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}} {{.Config.Image}}' "$OLD")" = "maane ghcr.io/shlomiporush/maane:$OLD_VERSION" ] &&
+    docker exec "$OLD" touch /tmp/drain && sleep 45 && docker stop "$OLD" && docker rm "$OLD"
+  ```
+
+- **A stopped container is left over.** Remove it with the same check: replace the last line of the block with `docker rm "$OLD"`.
+- **The old server is still up but unhealthy, with a drain left behind** (the new one failed). Set `OLD` and `OLD_VERSION` as above and replace the last line with `docker exec "$OLD" rm -f /tmp/drain`. It turns healthy and serves again; remove the failed new container the same way, by its own ID and release, before you try again.
+
+`docker compose up -d --wait server worker` with `.env` on the new release also ends with one healthy container of each service, but it replaces a service at once, so that service is down for a few seconds.
 
 ## What was verified
 

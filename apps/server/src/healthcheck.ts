@@ -1,9 +1,3 @@
-export {}
+import { serverHealthy } from "./health.ts"
 
-const port = Number(process.env.PORT ?? 8080)
-try {
-  const response = await fetch(`http://127.0.0.1:${port}/healthz/ready`, { signal: AbortSignal.timeout(4000) })
-  process.exit(response.ok ? 0 : 1)
-} catch {
-  process.exit(1)
-}
+process.exit((await serverHealthy(Number(process.env.PORT ?? 8080))) ? 0 : 1)

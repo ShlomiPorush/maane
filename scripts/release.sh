@@ -16,6 +16,8 @@ SKIP_VERIFY=0
 DRY_RUN=0
 RESUME=0
 LOCK_REF="refs/maane/release-lock"
+ROLLOUT_FILE="docker/rollout.txt"
+MIGRATIONS_DIR="apps/server/drizzle"
 LOCK_COMMIT=""
 SRC_DIR=""
 VERSION=""
@@ -36,8 +38,9 @@ Steps: preflight (clean main in sync with origin, release notes present, version
 scripts/verify.sh, version and changelog update, release commit and tag pushed together, the image
 built from the tag and pushed, then :latest, then the GitHub Release from the CHANGELOG section.
 The image carries maane.compose-sha256 (the tag's docker-compose.yml) and maane.rollout-from: the
-previous release's version, or this version when apps/server/drizzle, docker/rollout.txt, or the
-pg-boss version in pnpm-lock.yaml changed since the previous release (docs/deployment.md, section 8).
+oldest release that already had the image's newest breaking line in docker/rollout.txt, or this
+version when a breaking line is new (docs/deployment.md, section 8). Preflight refuses a line an
+earlier release has that is gone, and a released migration that changed.
 When the newest tag has no GitHub Release yet, an earlier run stopped halfway: this run finishes that
 version instead of starting a new one, reusing what is already published and refusing anything that
 was not built from the tag. Needs docker with buildx, git and gh (logged in to GitHub and GHCR).
@@ -127,20 +130,47 @@ previous_tag() {
   echo "$previous"
 }
 
-pg_boss_versions() {
-  git_ show "$1:pnpm-lock.yaml" 2>/dev/null | sed -nE 's/^  pg-boss@([^:(]+).*/\1/p' | sort -u
+declarations_at() {
+  git_ show "$1:$ROLLOUT_FILE" 2>/dev/null | awk 'NF && $1 !~ /^#/ { print $1 " " $2 }' | LC_ALL=C sort -u
+}
+
+breaking_at() {
+  declarations_at "$1" | awk '$1 == "breaking" { print $2 }'
 }
 
 rollout_from() {
-  local ref="$1" version="$2" previous
-  previous="$(previous_tag "$version")"
-  if [ -z "$previous" ] ||
-    ! git_ diff --quiet "$previous" "$ref" -- apps/server/drizzle docker/rollout.txt ||
-    [ "$(pg_boss_versions "$previous")" != "$(pg_boss_versions "$ref")" ]; then
+  local ref="$1" version="$2" pending found tag floor=""
+  pending="$(breaking_at "$ref")"
+  while read -r tag; do
+    [ -n "$pending" ] || break
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && version_below "${tag#v}" "$version" || continue
+    found="$(LC_ALL=C comm -12 <(printf '%s\n' "$pending") <(breaking_at "$tag"))"
+    [ -n "$found" ] || continue
+    floor="${tag#v}"
+    pending="$(LC_ALL=C comm -23 <(printf '%s\n' "$pending") <(printf '%s\n' "$found"))"
+  done < <(git_ tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=v:refname)
+  if [ -n "$pending" ] || [ -z "$floor" ]; then
     echo "$version"
   else
-    echo "${previous#v}"
+    echo "$floor"
   fi
+}
+
+journal_entries() {
+  git_ show "$1:$MIGRATIONS_DIR/meta/_journal.json" 2>/dev/null | jq -c '.entries[]'
+}
+
+check_declarations() {
+  local ref="$1" previous="$2" removed file count
+  [ -n "$previous" ] || return 0
+  removed="$(LC_ALL=C comm -23 <(declarations_at "$previous") <(declarations_at "$ref"))"
+  [ -z "$removed" ] || die "$ROLLOUT_FILE lost lines that $previous has, which would lower maane.rollout-from: $removed"
+  while read -r file; do
+    git_ diff --quiet "$previous" "$ref" -- "$file" || die "$file changed after $previous released it"
+  done < <(git_ ls-tree --name-only "$previous" "$MIGRATIONS_DIR/" | grep '\.sql$' || true)
+  count="$(journal_entries "$previous" | wc -l)"
+  [ "$(journal_entries "$ref" | head -n "$count")" = "$(journal_entries "$previous")" ] ||
+    die "the migration journal changed entries that $previous released"
 }
 
 compose_sha256() {
@@ -169,6 +199,7 @@ preflight() {
       RESUME=1 TAG="$newest" VERSION="${newest#v}"
       git_ merge-base --is-ancestor "$TAG" HEAD || die "$TAG is not on main"
       [ "$(git_ show "$TAG:package.json" | version_in)" = "$VERSION" ] || die "package.json at $TAG is not $VERSION"
+      check_declarations "$TAG" "$(previous_tag "$VERSION")"
       echo "    $TAG was not finished: this run finishes it and ignores --bump $BUMP. Run again for the next version."
       return
     fi
@@ -183,6 +214,7 @@ preflight() {
   git_ rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "tag $TAG already exists"
   state="$(image_state "$(image_ref "$VERSION")" none)"
   [ "$state" = missing ] || die "$(image_ref "$VERSION") is already published"
+  check_declarations HEAD "$newest"
   echo "    $current -> $VERSION ($TAG)"
 }
 

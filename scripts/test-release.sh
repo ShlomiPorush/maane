@@ -105,9 +105,10 @@ sandbox() {
   cp "$REPO/scripts/lib/common.sh" "$seed/scripts/lib/"
   : >"$seed/docker/maane.Dockerfile"
   printf 'name: maane\n' >"$seed/docker-compose.yml"
+  mkdir -p "$seed/apps/server/drizzle/meta"
   printf 'CREATE TABLE a (id int);\n' >"$seed/apps/server/drizzle/0000_init.sql"
-  printf 'packages:\n\n  pg-boss@12.0.0:\n    resolution: {}\n' >"$seed/pnpm-lock.yaml"
-  printf '# Changes the previous release cannot run beside.\n' >"$seed/docker/rollout.txt"
+  printf '{"entries":[{"idx":0,"when":1000,"tag":"0000_init"}]}\n' >"$seed/apps/server/drizzle/meta/_journal.json"
+  printf '# Declarations.\nbreaking 0000_init\nbreaking pg-boss-schema-46\n' >"$seed/docker/rollout.txt"
   printf '{\n  "name": "maane",\n  "version": "0.0.0",\n  "private": true\n}\n' >"$seed/package.json"
   printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- The first feature.\n' >"$seed/CHANGELOG.md"
   git -C "$seed" add -A
@@ -156,6 +157,13 @@ push_change() {
   sed -i "s/^## \[Unreleased\]$/## [Unreleased]\n\n### Changed\n\n- $1./" "$dir/CHANGELOG.md"
   git -C "$dir" add -A && git -C "$dir" commit --quiet -m "$1" && git -C "$dir" push --quiet origin main
 }
+add_migration() {
+  local journal=apps/server/drizzle/meta/_journal.json
+  printf '%s\n' "$3" >"apps/server/drizzle/$1.sql"
+  jq -c --arg tag "$1" '.entries += [{idx: (.entries | length), when: (.entries[-1].when + 1), tag: $tag}]' "$journal" >"$journal.next"
+  mv "$journal.next" "$journal"
+  echo "$2 $1" >>docker/rollout.txt
+}
 complete() {
   local rev
   rev="$(tag_rev "v$1")"
@@ -194,29 +202,53 @@ check "a release without breaking changes may run beside the one before" [ "$(la
 
 sandbox
 release
-push_change "A migration" 'printf "ALTER TABLE a ADD b int;\n" >apps/server/drizzle/0001_b.sql'
+push_change "A new table" 'add_migration 0001_b expand "CREATE TABLE b (id int);"'
 release
-check "a new migration: the release runs beside no earlier release" [ "$(label 0.2.0 maane.rollout-from)" = 0.2.0 ]
+check "an expand migration: the release runs beside the releases since the floor" [ "$(label 0.2.0 maane.rollout-from)" = 0.1.0 ]
+push_change "A dropped column" 'add_migration 0002_c breaking "ALTER TABLE a DROP COLUMN id;"'
+release
+check "a breaking migration: the release runs beside no earlier release" [ "$(label 0.3.0 maane.rollout-from)" = 0.3.0 ]
 push_change "A fix" true
 release
-check "  and the release after it may run beside it" [ "$(label 0.3.0 maane.rollout-from)" = 0.2.0 ]
-push_change "A queue update" 'sed -i "s/pg-boss@12.0.0/pg-boss@12.1.0/" pnpm-lock.yaml'
+check "  and the releases after it keep that floor" [ "$(label 0.4.0 maane.rollout-from)" = 0.3.0 ]
+push_change "Another fix" true
 release
-check "another pg-boss version: the release runs beside no earlier release" [ "$(label 0.4.0 maane.rollout-from)" = 0.4.0 ]
-push_change "A new job payload" 'echo "send-reply carries a new field the previous worker refuses" >>docker/rollout.txt'
+check "  also after a skipped release" [ "$(label 0.5.0 maane.rollout-from)" = 0.3.0 ]
+push_change "A new job payload" 'echo "breaking send-reply-payload-2" >>docker/rollout.txt'
 release
-check "a line added to docker/rollout.txt: the release runs beside no earlier release" [ "$(label 0.5.0 maane.rollout-from)" = 0.5.0 ]
+check "a breaking line that is not a migration raises the floor" [ "$(label 0.6.0 maane.rollout-from)" = 0.6.0 ]
 push_change "A Compose change" 'printf "name: maane\nservices: {}\n" >docker-compose.yml'
 release
 check "a changed docker-compose.yml changes the hash" \
-  [ "$(label 0.6.0 maane.compose-sha256)" = "$(printf 'name: maane\nservices: {}\n' | sha256sum | cut -d ' ' -f 1)" ]
-check "  and alone does not stop the release running beside the one before" [ "$(label 0.6.0 maane.rollout-from)" = 0.5.0 ]
+  [ "$(label 0.7.0 maane.compose-sha256)" = "$(printf 'name: maane\nservices: {}\n' | sha256sum | cut -d ' ' -f 1)" ]
+check "  and alone keeps the floor" [ "$(label 0.7.0 maane.rollout-from)" = 0.6.0 ]
+
+sandbox
+release
+push_change "A lost line" 'sed -i "/^breaking 0000_init$/d" docker/rollout.txt'
+release
+check "a declaration that a release has, removed: refused" said "lost lines that v0.1.0 has"
+check "  before the tag" lacks_tag v0.2.0
+
+sandbox
+release
+push_change "An edited migration" 'printf "CREATE TABLE a (id bigint);\n" >apps/server/drizzle/0000_init.sql'
+release
+check "a released migration edited: refused" said "changed after v0.1.0 released it"
+check "  before the tag" lacks_tag v0.2.0
+
+sandbox
+release
+push_change "A moved journal entry" 'sed -i "s/\"when\":1000/\"when\":999/" apps/server/drizzle/meta/_journal.json'
+release
+check "a released journal entry changed: refused" said "the migration journal changed entries that v0.1.0 released"
+check "  before the tag" lacks_tag v0.2.0
 
 sandbox
 release
 push_change "A fix" true
 MOCK_FAIL_BUILD=1 BUMP=patch release
-push_change "A migration" 'printf "ALTER TABLE a ADD b int;\n" >apps/server/drizzle/0001_b.sql'
+push_change "A dropped column" 'add_migration 0001_c breaking "ALTER TABLE a DROP COLUMN id;"'
 DIR="$(checkout)" run_in --target ghcr --bump minor --dry-run
 check "a dry run while 0.1.1 is unfinished prints the labels of its tag, not of main" said "maane.rollout-from=0.1.0"
 release

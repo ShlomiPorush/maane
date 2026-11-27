@@ -37,5 +37,8 @@ RUN node -e "require('sharp')"
 COPY apps/server/drizzle ./drizzle
 USER node
 EXPOSE 8080
+# docker rollout runs this in the old container before it stops it: the server's health check then fails, so Traefik
+# drops it while it still serves (docs/deployment.md, section 8). Three failed checks 10 s apart take about 36 s.
+LABEL docker-rollout.pre-stop-hook="touch /tmp/drain && sleep 45"
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 CMD ["node", "dist/server/healthcheck.js"]
 CMD ["node", "dist/server/index.js"]

@@ -375,6 +375,10 @@ export function createApp(ctx: AppContext) {
   app.all("/api/*", (c) => c.json({ error: "not_found" }, 404))
 
   app.get("*", serveStatic({ root: ctx.webDir }))
+  app.get("/assets/*", (c) => {
+    c.header("Cache-Control", "no-store")
+    return c.text("Not found", 404)
+  })
   app.get("*", async (c) => {
     const html = await readFile(join(ctx.webDir, "index.html"), "utf8").catch(() => null)
     if (html === null) return c.text("The web UI is not built.", 503)

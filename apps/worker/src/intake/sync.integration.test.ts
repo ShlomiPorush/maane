@@ -640,6 +640,39 @@ describe("the intake source", () => {
     expect(changed).toBe(true)
   })
 
+  it("never undoes a mailbox an admin saves while a starting worker reconciles the source", async () => {
+    const h = await start()
+    await h.sync.run()
+    const next = "saved-meanwhile@example.com"
+    let readMailbox: () => void = () => {}
+    const mailboxRead = new Promise<void>((resolve) => {
+      readMailbox = resolve
+    })
+    let resume: () => void = () => {}
+    const resumed = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    const starting = {
+      async get(key: "graph.tenantId" | "graph.mailbox") {
+        const value = await h.settings.get(key)
+        if (key === "graph.mailbox") {
+          readMailbox()
+          await resumed
+        }
+        return value
+      },
+    } as unknown as Settings
+    const reconciling = reconcileIntakeSource(h.database.db, starting)
+    await mailboxRead
+    const saving = h.settings.update({ "graph.mailbox": next }, SYSTEM)
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    resume()
+    await reconciling
+    await saving
+    const [current] = await h.database.db.select().from(intakeSource).where(eq(intakeSource.current, true))
+    expect(current?.mailbox).toBe(next)
+  })
+
   it("makes the environment's mailbox current at restart, keeping the old source and its cursors", async () => {
     const h = await start()
     h.graph.add(mime({ subject: "old mailbox" }))
